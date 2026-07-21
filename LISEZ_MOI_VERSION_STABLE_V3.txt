@@ -1,0 +1,28 @@
+ERP NYSOA CONSTRUCT — VERSION STABLE V3
+
+NOUVEAUTÉS
+- Notification Admin à chaque connexion d’un Gestionnaire ou Technicien.
+- Historique des connexions.
+- État Actif / Passif / Désactivé des utilisateurs.
+- Module Utilisateurs réservé à l’Admin.
+- Ajout de plusieurs techniciens avec identifiants individuels.
+- Activation et désactivation des comptes.
+- Récapitulatif technique dans l’espace TECHNIQUE de l’Admin.
+- Chaque rapport et modification technique conserve le nom du technicien.
+- Pointage par cochage, calcul des jours et du montant à payer.
+- Actions rapides reliées aux bons modules.
+- Légendes des graphiques.
+
+IDENTIFIANTS INITIAUX
+Admin : admin / Ainatia0611@
+Gestionnaire : gestionnaire / gestFelana123
+Technicien : controle / ctrl123
+
+LIMITATION IMPORTANTE
+Cette version utilise localStorage. Les notifications, états Actif/Passif et données communes
+ne sont réellement partagés que dans le même navigateur et sur le même appareil.
+Pour une synchronisation entre plusieurs ordinateurs et téléphones, il faut connecter
+l’ERP au backend PostgreSQL déjà préparé.
+
+MISE À JOUR NETLIFY
+Décompresser puis déposer le dossier complet dans Production deploys.

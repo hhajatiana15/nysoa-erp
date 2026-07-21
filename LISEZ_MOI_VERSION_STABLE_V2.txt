@@ -1,0 +1,27 @@
+ERP NYSOA CONSTRUCT — VERSION STABLE VIDE V2
+
+MODIFICATIONS
+- Actions rapides reliées directement au bon espace et au bon module.
+- Légendes ajoutées aux graphiques du tableau de bord.
+- Pointage par simple cochage :
+  * case cochée = présent ;
+  * case vide = absent.
+- Calcul mensuel automatique par employé :
+  * nombre de jours de présence ;
+  * salaire journalier ;
+  * montant à payer.
+- Le salaire journalier est également ajouté dans le module Employés.
+- Tableau de bord sans chiffres fictifs.
+
+IDENTIFIANTS
+Admin : admin / Ainatia0611@
+Gestionnaire : gestionnaire / gestFelana123
+Technicien : controle / ctrl123
+
+MISE À JOUR NETLIFY
+1. Décompresser le ZIP.
+2. Ouvrir le projet Netlify actuel.
+3. Aller dans Deploys / Production deploys.
+4. Glisser-déposer le dossier décompressé complet.
+5. Attendre Published.
+6. Actualiser avec Cmd + Shift + R.

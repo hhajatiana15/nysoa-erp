@@ -1,0 +1,35 @@
+ERP NYSOA CONSTRUCT — VERSION 4.1
+
+NOUVEAUTÉS
+
+1. MODIFICATION ET SUPPRESSION SÉCURISÉES
+- Gestionnaire et Technicien peuvent modifier leurs propres données.
+- Modification autorisée uniquement avant validation Admin.
+- Suppression logique avec motif.
+- Les données supprimées restent dans la Corbeille Admin.
+
+2. HISTORIQUE ET ANNULATION
+- Historique par enregistrement.
+- Création, modification, suppression, restauration et validation enregistrées.
+- Annulation de la dernière modification avant validation.
+
+3. VALIDATION BIDIRECTIONNELLE
+- Utilisateur vers Admin : MISE_A_JOUR_XXX.nysoa.
+- Admin vers utilisateurs : VALIDATION_ADMIN_XXX.nysoa.
+- Les observations et statuts Admin sont importés automatiquement.
+- Les données validées deviennent verrouillées.
+
+4. CORBEILLE ADMIN
+- Restaurer.
+- Supprimer définitivement.
+
+5. JOURNAL D’AUDIT
+- Date, utilisateur, rôle, action, module, référence et détails.
+- Journal non modifiable depuis l’interface.
+
+UTILISATION
+A. Gestionnaire/Technicien saisit et corrige ses données.
+B. Il télécharge la mise à jour .nysoa.
+C. Admin importe et valide.
+D. Admin télécharge VALIDATION_ADMIN_XXX.nysoa.
+E. L’utilisateur importe la validation Admin.

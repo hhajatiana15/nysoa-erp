@@ -1,0 +1,27 @@
+ERP NYSOA CONSTRUCT — VERSION STABLE VIDE
+
+Corrections appliquées :
+- aucun chiffre fictif sur le tableau de bord ;
+- tous les indicateurs démarrent à 0 ;
+- graphiques vides avec message « Aucune donnée disponible » ;
+- alertes calculées uniquement depuis les données enregistrées ;
+- bénéfice calculé depuis le chiffre d’affaires et les dépenses ;
+- employés actifs calculés depuis le module Employés ;
+- option « Afficher le mot de passe » ajoutée à la connexion ;
+- nouvelle clé de stockage local afin de ne pas reprendre les anciennes données du navigateur.
+
+IDENTIFIANTS
+Admin : admin / Ainatia0611@
+Gestionnaire : gestionnaire / gestFelana123
+Technicien : controle / ctrl123
+
+MISE À JOUR NETLIFY
+1. Décompresser ce ZIP.
+2. Ouvrir le projet Netlify déjà utilisé.
+3. Aller dans Deploys / Production deploys.
+4. Glisser-déposer le dossier décompressé complet.
+5. Attendre le statut Published.
+6. Actualiser avec Cmd + Shift + R sur Mac.
+
+IMPORTANT
+Les données restent stockées séparément dans chaque navigateur.

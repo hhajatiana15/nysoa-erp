@@ -1,0 +1,10 @@
+CORRECTION DU MENU GESTIONNAIRE
+
+Le menu « GESTION DES CHANTIERS » apparaît maintenant dans la barre latérale du Gestionnaire.
+
+Après ouverture :
+- cliquer sur GESTION DES CHANTIERS ;
+- cliquer sur Nouveau chantier ;
+- enregistrer le chantier.
+
+Le Technicien conserve également ce menu.

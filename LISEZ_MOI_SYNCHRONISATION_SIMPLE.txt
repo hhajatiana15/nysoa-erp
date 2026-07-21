@@ -1,0 +1,37 @@
+ERP NYSOA CONSTRUCT — VERSION SIMPLE SYNCHRONISATION
+
+Cette version est conçue pour 3 utilisateurs travaillant sur des appareils et dans des lieux différents, sans serveur cloud.
+
+UTILISATEURS
+- Admin
+- Gestionnaire
+- Technicien contrôle & suivi
+
+FONCTIONNEMENT
+1. Chaque utilisateur travaille normalement sur son propre appareil.
+2. Le Gestionnaire ou le Technicien clique sur « Envoyer mes mises à jour ».
+3. Un fichier JSON est téléchargé.
+4. Ce fichier est envoyé à l’Admin par WhatsApp, e-mail ou Google Drive.
+5. L’Admin clique sur « Actualiser les données ».
+6. L’Admin choisit le fichier reçu.
+7. Les nouvelles données et modifications sont ajoutées à la base de l’Admin.
+
+SAUVEGARDE LONG TERME
+L’Admin clique régulièrement sur « Sauvegarde complète Admin » et conserve le fichier JSON sur Google Drive, clé USB ou disque externe.
+
+LIMITES
+- La synchronisation n’est pas automatique.
+- Le bouton Actualiser ne peut pas lire directement les autres appareils.
+- L’utilisateur doit d’abord envoyer son fichier de mise à jour.
+- En cas de modification simultanée d’une même donnée, la version portant la date de modification la plus récente est conservée.
+
+IDENTIFIANTS INITIAUX
+Admin : admin / Ainatia0611@
+Gestionnaire : gestionnaire / gestFelana123
+Technicien : controle / ctrl123
+
+MISE À JOUR NETLIFY
+1. Décompresser le ZIP.
+2. Déposer le dossier complet dans Production deploys sur Netlify.
+3. Attendre le statut Published.
+4. Actualiser la page avec Cmd + Shift + R sur Mac.

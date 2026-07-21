@@ -1,0 +1,19 @@
+ERP NYSOA CONSTRUCT — VERSION SIMPLE FINALE
+
+MISE À JOUR
+- Gestionnaire/Technicien : « Télécharger la mise à jour ».
+- Le fichier JSON est téléchargé.
+- Une fenêtre propose WhatsApp ou E-mail.
+- L’utilisateur joint le fichier téléchargé.
+- Admin : « Actualiser les données ».
+- La sélection du fichier déclenche immédiatement la fusion et l’actualisation.
+- Un résumé des données ajoutées est affiché.
+
+PRÉSENCE
+- Liste des employés avec une seule case à cocher.
+- Coché = présent.
+- Vide = absent.
+- Salaire journalier sur chaque ligne.
+- Salaire à payer en fin de ligne selon :
+  nombre de jours de présence × salaire journalier.
+- Total mensuel en bas du tableau.

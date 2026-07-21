@@ -1,0 +1,21 @@
+ERP NYSOA CONSTRUCT — VERSION 4.2
+
+IMPORTATION EXCEL POUR TOUS LES UTILISATEURS
+
+1. Ouvrir le module de destination dans l’ERP.
+2. Cliquer sur « Importer Excel / CSV ».
+3. Sélectionner un fichier .xlsx, .xls ou .csv.
+4. La première feuille Excel est importée.
+5. La première ligne doit contenir les titres de colonnes.
+
+DROITS
+- Admin : import dans les modules autorisés, y compris données financières.
+- Gestionnaire : chantiers, dépenses, demandes d’approvisionnement et modules autorisés.
+- Technicien : chantiers, rapports techniques et modules autorisés.
+- Les budgets restent masqués pour les rôles non Admin.
+- Les statuts importés par les utilisateurs restent Brouillon/Soumis jusqu’à validation Admin.
+
+SÉCURITÉ
+- Les identifiants en doublon sont ignorés.
+- Chaque import est inscrit dans l’historique et le journal d’audit.
+- Les données importées peuvent être modifiées ou supprimées avant validation Admin.

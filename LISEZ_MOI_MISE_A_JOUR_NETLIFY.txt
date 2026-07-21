@@ -1,0 +1,18 @@
+NYSOA ERP WEB — VERSION FINALE LOGIN
+
+Identifiants confidentiels :
+- Admin : nom d’utilisateur admin
+- Gestionnaire : nom d’utilisateur gestionnaire
+- Technicien : nom d’utilisateur controle
+
+Les mots de passe ne sont plus affichés sur la page de connexion.
+
+MISE À JOUR SUR NETLIFY
+1. Décompresser ce ZIP.
+2. Dans Netlify, ouvrir le projet déjà créé.
+3. Aller dans Deploys / Production deploys.
+4. Glisser-déposer le dossier décompressé complet.
+5. Attendre que le déploiement soit marqué Published.
+
+Important :
+Le fichier index.html se trouve directement à la racine de ce dossier afin d’éviter l’erreur 404.

@@ -1,0 +1,8 @@
+MODIFICATION — AJOUT DE CHANTIER
+
+- L’Admin peut ajouter un chantier.
+- Le Gestionnaire peut ajouter un chantier.
+- Le Technicien contrôle & suivi peut ajouter un chantier.
+- Chaque chantier conserve le nom de l’utilisateur qui l’a créé ou modifié.
+- Pour les utilisateurs non Admin, le chantier est inclus dans le fichier « Télécharger la mise à jour ».
+- L’Admin l’intègre ensuite avec « Actualiser les données ».

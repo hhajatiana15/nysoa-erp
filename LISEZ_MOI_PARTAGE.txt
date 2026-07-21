@@ -1,0 +1,13 @@
+ERP NYSOA — PARTAGE DES MISES À JOUR
+
+Le bouton s’appelle maintenant « Partager mes mises à jour ».
+
+Fonctionnement :
+- Sur téléphone ou appareil compatible, le menu de partage s’ouvre directement.
+- L’utilisateur peut choisir WhatsApp, Mail, AirDrop, Drive ou une autre application.
+- Le fichier JSON de mise à jour est joint automatiquement lorsque le navigateur autorise le partage de fichiers.
+- Si le navigateur ne le permet pas, le fichier est téléchargé puis l’ERP propose d’ouvrir WhatsApp ou de préparer un e-mail. Il faudra alors joindre manuellement le fichier téléchargé.
+
+Remarque :
+Le partage direct avec pièce jointe dépend des capacités du navigateur et du système utilisé.
+Safari récent sur iPhone/iPad et plusieurs navigateurs mobiles prennent généralement en charge cette fonction.

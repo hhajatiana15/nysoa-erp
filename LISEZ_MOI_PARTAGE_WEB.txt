@@ -1,0 +1,26 @@
+ERP NYSOA CONSTRUCT — VERSION WEB À PARTAGER
+
+OUVERTURE LOCALE
+1. Ouvrir index.html avec Chrome, Edge, Firefox ou Safari.
+
+MISE EN LIGNE RAPIDE AVEC NETLIFY DROP
+1. Aller sur https://app.netlify.com/drop
+2. Glisser-déposer le dossier NYSOA_ERP_WEB_A_PARTAGER ou le fichier ZIP décompressé.
+3. Netlify fournit immédiatement une adresse web partageable.
+4. Copier cette adresse et l'envoyer aux utilisateurs.
+
+AUTRES HÉBERGEMENTS POSSIBLES
+- GitHub Pages
+- Cloudflare Pages
+- Vercel
+- Serveur web de l'entreprise
+
+IMPORTANT
+Cette version utilise le stockage local du navigateur. Chaque ordinateur ou navigateur conserve ses propres données.
+Les utilisateurs peuvent ouvrir la même adresse, mais leurs saisies ne sont pas automatiquement synchronisées entre eux.
+Pour un travail partagé en temps réel avec une base de données commune, il faut déployer la version serveur avec l'API et PostgreSQL.
+
+COORDONNÉES
+Téléphone / WhatsApp : +261 34 99 498 49
+E-mail : hhajatiana15@gmail.com
+Facebook : Entreprise NySoa Antsirabe

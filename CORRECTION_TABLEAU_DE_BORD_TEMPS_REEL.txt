@@ -1,0 +1,10 @@
+CORRECTION — TABLEAU DE BORD EN TEMPS RÉEL
+
+- Toute demande d’approvisionnement enregistrée par le Gestionnaire apparaît immédiatement sur le tableau de bord.
+- Le Gestionnaire est redirigé vers le tableau de bord après l’enregistrement.
+- « Approvisionnements saisis » comprend :
+  • les approvisionnements validés ;
+  • les demandes d’approvisionnement envoyées.
+- Le solde caisse reste exact : il compte uniquement les approvisionnements réellement validés moins les dépenses.
+- Les dépenses enregistrées actualisent immédiatement le tableau de bord.
+- Le nombre de pointages du jour compte désormais les employés réellement cochés présents.

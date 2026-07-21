@@ -1,0 +1,8 @@
+CORRECTION AJOUT DES CHANTIERS
+
+- Admin : peut ajouter, modifier et supprimer tous les chantiers.
+- Gestionnaire : peut ajouter un chantier et modifier les chantiers qu’il a créés.
+- Technicien/Contrôleur : peut ajouter un chantier, modifier ceux qu’il a créés et compléter le suivi technique.
+- Le budget reste visible et modifiable uniquement par l’Admin.
+- Les chantiers créés par les autres utilisateurs sont inclus dans leur fichier de mise à jour numéroté.
+- Après import par l’Admin, les nouveaux chantiers apparaissent automatiquement.

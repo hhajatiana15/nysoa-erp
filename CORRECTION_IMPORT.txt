@@ -1,0 +1,10 @@
+CORRECTION IMPORT SYNCHRONISATION
+
+Cette version accepte maintenant :
+1. les fichiers « NYSOA_MISE_A_JOUR_...json » créés par le bouton « Envoyer mes mises à jour » ;
+2. les sauvegardes complètes JSON de l’ERP.
+
+Pour la méthode normale :
+- Gestionnaire/Technicien : cliquer sur « Envoyer mes mises à jour » ;
+- envoyer le fichier NYSOA_MISE_A_JOUR_...json à l’Admin ;
+- Admin : cliquer sur « Actualiser les données » puis sélectionner ce fichier.

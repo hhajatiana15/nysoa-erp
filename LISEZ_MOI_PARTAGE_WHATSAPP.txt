@@ -1,0 +1,12 @@
+CORRECTION DU PARTAGE WHATSAPP
+
+Important :
+- WhatsApp Web sur ordinateur ne permet pas à une page web de joindre automatiquement un fichier téléchargé.
+- Le lien wa.me peut uniquement ouvrir WhatsApp et préparer un texte.
+- Cette limite vient de la sécurité du navigateur.
+
+Nouveau fonctionnement :
+1. La mise à jour .nysoa est téléchargée.
+2. Le bouton « Partager le fichier » tente d’ouvrir le menu de partage natif avec le fichier joint.
+3. Cette option fonctionne surtout sur téléphone et sur les navigateurs compatibles.
+4. Sur Mac/PC avec WhatsApp Web, cliquer sur « Ouvrir WhatsApp », puis joindre manuellement le fichier depuis le dossier Téléchargements.

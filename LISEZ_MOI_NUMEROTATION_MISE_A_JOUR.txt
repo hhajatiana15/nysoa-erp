@@ -1,0 +1,23 @@
+VERSION WEB NETLIFY — NUMÉROTATION DES MISES À JOUR
+
+Les fichiers sont maintenant nommés automatiquement et ne doivent pas être renommés.
+
+Gestionnaire :
+- MIS_A_JOUR_001_GESTIONNAIRE.json
+- MIS_A_JOUR_003_GESTIONNAIRE.json
+- MIS_A_JOUR_005_GESTIONNAIRE.json
+
+Technicien :
+- MIS_A_JOUR_002_TECHNICIEN.json
+- MIS_A_JOUR_004_TECHNICIEN.json
+- MIS_A_JOUR_006_TECHNICIEN.json
+
+Ainsi, les numéros restent distincts et faciles à identifier.
+
+Côté Admin :
+- un fichier déjà importé est refusé ;
+- une mise à jour plus ancienne que la dernière importée pour le même rôle est refusée ;
+- après sélection du fichier, les données sont actualisées immédiatement.
+
+DÉPLOIEMENT NETLIFY
+Décompressez le ZIP, puis déposez le dossier complet dans Production deploys.

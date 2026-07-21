@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="nysoa-sync-version" content="4.2">
+<title>ERP NYSOA CONSTRUCT</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="login" class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">
+        <img class="login-logo-img" src="assets/logo_nysoa_construct.png" alt="Logo NYSOA CONSTRUCT">
+        <div>
+          <h1>ENTREPRISE NYSOA CONSTRUCT</h1>
+          <p>ERP Web Professionnel BTP</p>
+        </div>
+      </div>
+      <form id="loginForm">
+        <label>Nom d’utilisateur<input id="loginUser" required></label>
+        <label>Mot de passe
+          <input id="loginPass" type="password" required>
+        </label>
+        <label class="show-password-option">
+          <input id="showLoginPass" type="checkbox">
+          Afficher le mot de passe
+        </label>
+        <button class="btn primary full">Connexion</button>
+        <p id="loginMsg" class="error"></p>
+      </form>
+</div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="header">
+      <div class="brand-zone">
+        <img class="brand-logo-img" src="assets/logo_nysoa_construct.png" alt="Logo NYSOA CONSTRUCT">
+        <div class="company">
+          <div class="company-title"><span>ENTREPRISE</span> NYSOA <b>CONSTRUCT</b></div>
+          <div class="company-lines">Construction - Bâtiment - Génie Civil - Travaux Publics</div>
+          <div class="company-lines">Rénovation - Aménagement - Fourniture de matériaux</div>
+          <div class="contacts">☎ / WhatsApp : +261 34 99 498 49 &nbsp;&nbsp; ✉ hhajatiana15@gmail.com &nbsp;&nbsp; Facebook : Entreprise NySoa Antsirabe</div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="user-line">Utilisateur : <b id="currentUserLabel"></b> ⚙ ⏻</div>
+        <div class="header-cards">
+          <div class="mini-card"><span>📅</span><div><small>Date du jour</small><b id="today"></b></div></div>
+          <div class="mini-card"><span>🗂</span><div><small>Exercice</small><b>2026</b></div></div>
+        </div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <nav id="menu"></nav>
+        <div class="sidebar-bottom">
+          <button id="logoutBtn">Déconnexion</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div id="adminWorkspaceBar" class="workspace-bar hidden">
+          <button class="workspace-tab active" data-workspace="GENERAL">Vue générale</button>
+          <button class="workspace-tab finance-tab" data-workspace="FINANCE">FINANCE</button>
+          <button class="workspace-tab technique-tab" data-workspace="TECHNIQUE">TECHNIQUE</button>
+        </div>
+        <div class="data-toolbar no-print">
+          <button class="btn secondary" onclick="printCurrentView()">🖨 Impression directe</button>
+          <button class="btn secondary" onclick="exportCurrentModuleCSV()">⬇ Exporter CSV</button>
+          <button class="btn primary" onclick="openImportDialog()">⬆ Importer Excel / CSV</button>
+          <button id="sendUpdatesBtn" class="btn sync-send" onclick="exportMyUpdates()">⬇ Télécharger la mise à jour</button>
+          <button id="refreshAdminBtn" class="btn sync-refresh" onclick="openSyncImport()">🔄 Actualiser les données</button>
+          <button id="publishValidationBtn" class="btn primary" onclick="go('adminValidations')">✅ Publier les validations</button>
+          <button id="importValidationBtn" class="btn primary" onclick="openValidationImport()">⬆ Importer validation Admin</button>
+          <button class="btn secondary" onclick="exportBackup()">💾 Sauvegarde complète Admin</button>
+          <input id="externalImportFile" type="file" accept=".xlsx,.xls,.csv,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/json" class="hidden" onchange="handleExternalImport(event)">
+          <input id="syncImportFile" type="file" accept=".nysoa,application/octet-stream" class="hidden" onchange="handleSyncImport(event)">
+          <input id="validationImportFile" type="file" accept=".nysoa,application/octet-stream" class="hidden" onchange="handleValidationImport(event)">
+        </div>
+        <section id="content"></section>
+        <div id="printArea" class="hidden"></div>
+      </main>
+    </div>
+
+    <footer class="footer">
+      <span>© 2026 ENTREPRISE NYSOA CONSTRUCT - Tous droits réservés</span>
+      <span>Logiciel de Gestion BTP - Version 4.2</span>
+      <span>Téléphone / WhatsApp : +261 34 99 498 49</span>
+    </footer>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

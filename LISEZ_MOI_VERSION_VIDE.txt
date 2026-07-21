@@ -1,0 +1,34 @@
+ERP NYSOA CONSTRUCT — VERSION VIDE ET NOUVELLE
+
+Cette édition démarre sans données de démonstration :
+- aucun chantier ;
+- aucun devis ;
+- aucune dépense ;
+- aucun approvisionnement ;
+- aucun rapport technique ;
+- aucun enregistrement dans les autres modules.
+
+Identifiants :
+ADMIN
+Nom d'utilisateur : admin
+Mot de passe : Ainatia0611@
+
+GESTIONNAIRE
+Nom d'utilisateur : gestionnaire
+Mot de passe : gestFelana123
+
+TECHNICIEN
+Nom d'utilisateur : controle
+Mot de passe : ctrl123
+
+MISE À JOUR NETLIFY
+1. Décompresser le ZIP.
+2. Ouvrir le projet Netlify déjà fonctionnel.
+3. Aller dans Deploys / Production deploys.
+4. Glisser-déposer le dossier décompressé complet.
+5. Attendre le statut Published.
+6. Actualiser le site avec Cmd + Shift + R sur Mac.
+
+IMPORTANT
+Cette version utilise le stockage local du navigateur. Les données saisies sur un appareil
+ne sont pas automatiquement synchronisées avec les autres appareils.

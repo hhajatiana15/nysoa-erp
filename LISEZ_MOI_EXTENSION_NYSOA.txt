@@ -1,0 +1,19 @@
+ERP NYSOA — FICHIERS DE MISE À JOUR PROFESSIONNELS
+
+Les mises à jour ne portent plus l’extension .json.
+
+Exemples :
+- MISE_A_JOUR_001_GESTIONNAIRE.nysoa
+- MISE_A_JOUR_002_TECHNICIEN.nysoa
+- MISE_A_JOUR_003_GESTIONNAIRE.nysoa
+
+Utilisation :
+1. Le Gestionnaire ou le Technicien clique sur « Télécharger la mise à jour ».
+2. Le fichier .nysoa est téléchargé.
+3. Il est envoyé par WhatsApp ou E-mail.
+4. L’Admin télécharge le fichier reçu.
+5. L’Admin clique sur « Actualiser les données ».
+6. Il sélectionne le fichier .nysoa.
+7. Les données sont fusionnées et actualisées immédiatement.
+
+Les sauvegardes complètes JSON restent acceptées par l’Admin pour compatibilité.

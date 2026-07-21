@@ -1,0 +1,35 @@
+ERP NYSOA CONSTRUCT — SYNCHRONISATION V3
+
+Cette version remplace les anciens imports partiels.
+
+EXPORT UTILISATEUR
+- Le fichier .nysoa contient désormais :
+  • chantiers ;
+  • approvisionnements ;
+  • dépenses ;
+  • demandes ;
+  • rapports ;
+  • données techniques ;
+  • employés ;
+  • pointages ;
+  • paie ;
+  • stock ;
+  • achats ;
+  • factures ;
+  • autres modules.
+
+IMPORT ADMIN
+- fusion par identifiant ;
+- comparaison des dates de modification ;
+- ajout des nouvelles données ;
+- mise à jour des données plus récentes ;
+- refus des doublons ;
+- refus d’une ancienne séquence déjà dépassée ;
+- conservation des données Admin en cas de conflit plus récent ;
+- recalcul automatique ;
+- retour automatique au tableau de bord ;
+- résumé détaillé après import.
+
+IMPORTANT
+Les anciens fichiers de mise à jour V1/V2 ne sont plus compatibles.
+Les utilisateurs doivent générer de nouveaux fichiers avec cette version V3.
