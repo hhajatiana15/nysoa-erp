@@ -1,8 +1,4 @@
-const DEFAULT_USERS=[
- {username:"admin",pass:"Ainatia0611@",role:"ADMIN",label:"Admin principal",active:true},
- {username:"gestionnaire",pass:"gestFelana123",role:"GESTIONNAIRE",label:"Gestionnaire",active:true},
- {username:"controle",pass:"ctrl123",role:"CONTROLE",label:"Technicien contrôle & suivi",active:true}
-];
+const DEFAULT_USERS=[];
 
 function ensureSecurityData(){
  ensureGovernanceData();
@@ -10,6 +6,12 @@ function ensureSecurityData(){
  db.loginEvents=Array.isArray(db.loginEvents)?db.loginEvents:[];
  db.notifications=Array.isArray(db.notifications)?db.notifications:[];
  db.technicalEntries=Array.isArray(db.technicalEntries)?db.technicalEntries:[];
+ db.usageSessions=Array.isArray(db.usageSessions)?db.usageSessions:[];
+ db.importedUsagePackets=Array.isArray(db.importedUsagePackets)?db.importedUsagePackets:[];
+ db.usageExportCounters=db.usageExportCounters||{};
+ db.dailyReports=Array.isArray(db.dailyReports)?db.dailyReports:[];
+ db.importedDailyReportPackets=Array.isArray(db.importedDailyReportPackets)?db.importedDailyReportPackets:[];
+ db.dailyReportSettings=db.dailyReportSettings||{deadline:"17:30",logoutReminder:true};
  save();
 }
 function findUser(username){return (db.users||[]).find(u=>u.username===username);}
@@ -40,6 +42,274 @@ function logTechnicalEntry(action,moduleName,reference,details){
  });
  save();
 }
+
+// ===== FIREBASE CLOUD SYNC — VERSION 4.5 / PHASE 1 =====
+// Phase 1 : Authentication, profils utilisateurs, chantiers et rapports journaliers.
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAZMfBTLbFlJsuzhQR0tEnT4dpfaK7m_SA",
+  authDomain: "erp-nysoa.firebaseapp.com",
+  projectId: "erp-nysoa",
+  storageBucket: "erp-nysoa.firebasestorage.app",
+  messagingSenderId: "273810293592",
+  appId: "1:273810293592:web:15895e9279f2f331ce9b2d"
+};
+
+let fbApp=null, fbAuth=null, fbStore=null;
+let cloudReady=false;
+let cloudListeners=[];
+let cloudCurrentPage="dashboard";
+let cloudApplyingSnapshot=false;
+let cloudState={status:"Initialisation…",lastSync:null,error:null};
+
+function legacyUsernameForRole(role){
+  return role==="ADMIN"?"admin":role==="GESTIONNAIRE"?"gestionnaire":role==="CONTROLE"?"controle":"user";
+}
+function cloudStatusText(text,kind="normal"){
+  cloudState.status=text;
+  const el=document.getElementById("cloudStatus");
+  if(el){
+    el.textContent=text;
+    el.className=kind==="ok"?"cloud-ok":kind==="error"?"cloud-error":kind==="busy"?"cloud-busy":"";
+  }
+  const ls=document.getElementById("cloudLastSync");
+  if(ls)ls.textContent=cloudState.lastSync?`Dernière sync : ${new Date(cloudState.lastSync).toLocaleTimeString("fr-FR")}`:"";
+}
+function cloudMarkSynced(){
+  cloudState.lastSync=new Date().toISOString();
+  cloudStatusText(navigator.onLine?"Connecté":"Hors ligne",navigator.onLine?"ok":"error");
+}
+function cloudSanitize(value){
+  return JSON.parse(JSON.stringify(value,(k,v)=>v===undefined?null:v));
+}
+function cloudProfileLabel(profile){
+  return profile?.displayName||profile?.label||"Utilisateur NYSOA";
+}
+function cloudLocalUserUpsert(){
+  if(!user)return;
+  db.users=Array.isArray(db.users)?db.users:[];
+  let u=db.users.find(x=>x.uid===user.uid)||db.users.find(x=>x.username===user.username);
+  const rec={uid:user.uid,email:user.email,username:user.username,role:user.role,label:user.label,active:true,lastSeen:new Date().toISOString()};
+  if(u)Object.assign(u,rec);else db.users.push(rec);
+  save();
+}
+async function cloudLoadProfile(fbUser){
+  if(!fbStore)throw new Error("Firestore non initialisé.");
+  const snap=await fbStore.collection("users").doc(fbUser.uid).get();
+  if(!snap.exists)throw new Error("Profil Firestore introuvable pour cet utilisateur.");
+  const profile=snap.data()||{};
+  if(profile.active!==true)throw new Error("Ce compte est désactivé.");
+  if(!["ADMIN","GESTIONNAIRE","CONTROLE"].includes(profile.role))throw new Error("Rôle utilisateur non reconnu.");
+  return {
+    uid:fbUser.uid,
+    email:fbUser.email||"",
+    username:legacyUsernameForRole(profile.role),
+    role:profile.role,
+    label:cloudProfileLabel(profile)
+  };
+}
+function cloudStopListeners(){
+  cloudListeners.forEach(unsub=>{try{unsub();}catch(e){}});
+  cloudListeners=[];
+}
+function cloudMergeRemoteCollection(collection,remoteRows){
+  cloudApplyingSnapshot=true;
+  db[collection]=Array.isArray(db[collection])?db[collection]:[];
+  const byId=new Map(db[collection].map(x=>[String(x.id),x]));
+  remoteRows.forEach(remote=>{
+    const local=byId.get(String(remote.id));
+    if(!local){
+      db[collection].push(remote);
+      byId.set(String(remote.id),remote);
+      return;
+    }
+    const remoteTime=Date.parse(remote.updatedAt||remote.cloudSyncedAt||remote.createdAt||0)||0;
+    const localTime=Date.parse(local.updatedAt||local.cloudSyncedAt||local.createdAt||0)||0;
+    if(remoteTime>=localTime)Object.assign(local,remote);
+  });
+  save();
+  cloudApplyingSnapshot=false;
+  cloudMarkSynced();
+  if(["dashboard","projects","dailyReports"].includes(cloudCurrentPage)){
+    clearTimeout(window.__nysoaCloudRefreshTimer);
+    window.__nysoaCloudRefreshTimer=setTimeout(()=>{
+      try{
+        if(cloudCurrentPage==="projects")projects();
+        else if(cloudCurrentPage==="dailyReports")dailyReportsPage();
+        else if(cloudCurrentPage==="dashboard")dashboard();
+      }catch(e){}
+    },250);
+  }
+}
+function cloudAttachPhase1Listeners(){
+  if(!cloudReady||!user)return;
+  cloudStopListeners();
+
+  // Chantiers : tous les utilisateurs actifs peuvent les lire.
+  cloudListeners.push(
+    fbStore.collection("projects").onSnapshot(snap=>{
+      const rows=snap.docs.map(d=>({id:d.id,...d.data()}));
+      cloudMergeRemoteCollection("projects",rows);
+    },err=>{console.error(err);cloudStatusText("Erreur projets","error");})
+  );
+
+  // Rapports : l'Admin voit tout, les autres seulement leurs propres rapports.
+  let q=fbStore.collection("dailyReports");
+  if(user.role!=="ADMIN")q=q.where("ownerUid","==",user.uid);
+  cloudListeners.push(
+    q.onSnapshot(snap=>{
+      const rows=snap.docs.map(d=>({id:d.id,...d.data()}));
+      cloudMergeRemoteCollection("dailyReports",rows);
+    },err=>{console.error(err);cloudStatusText("Erreur rapports","error");})
+  );
+}
+async function cloudUpsert(collection,record){
+  if(!cloudReady||!user||cloudApplyingSnapshot||!record?.id)return false;
+  try{
+    cloudStatusText("Synchronisation…","busy");
+    const payload=cloudSanitize(record);
+    if(collection==="dailyReports"){
+      payload.ownerUid=payload.ownerUid||user.uid;
+      payload.ownerEmail=payload.ownerEmail||user.email;
+    }
+    payload.cloudSyncedAt=new Date().toISOString();
+    await fbStore.collection(collection).doc(String(record.id)).set(payload,{merge:true});
+    record.cloudSyncedAt=payload.cloudSyncedAt;
+    if(collection==="dailyReports"){
+      record.ownerUid=payload.ownerUid;
+      record.ownerEmail=payload.ownerEmail;
+    }
+    save();
+    cloudMarkSynced();
+    return true;
+  }catch(err){
+    console.error("Cloud upsert",collection,err);
+    cloudState.error=err.message;
+    cloudStatusText(navigator.onLine?"Erreur cloud":"Hors ligne","error");
+    return false;
+  }
+}
+async function cloudDelete(collection,id){
+  if(!cloudReady||!user||user.role!=="ADMIN"||!id)return false;
+  try{
+    cloudStatusText("Synchronisation…","busy");
+    await fbStore.collection(collection).doc(String(id)).delete();
+    cloudMarkSynced();
+    return true;
+  }catch(err){
+    console.error(err);cloudStatusText("Erreur cloud","error");return false;
+  }
+}
+function cloudSyncRecord(collection,record){
+  if(!record)return;
+  if(collection==="projects" && !["ADMIN","GESTIONNAIRE"].includes(user?.role||""))return;
+  if(collection==="dailyReports"){
+    record.ownerUid=record.ownerUid||user?.uid||record.ownerUid;
+    record.ownerEmail=record.ownerEmail||user?.email||record.ownerEmail;
+  }
+  cloudUpsert(collection,record);
+}
+async function cloudSyncPendingPhase1(){
+  if(!cloudReady||!user)return;
+  const pendingProjects=(db.projects||[]).filter(r=>{
+    if(!["ADMIN","GESTIONNAIRE"].includes(user.role))return false;
+    const u=Date.parse(r.updatedAt||r.createdAt||0)||0,s=Date.parse(r.cloudSyncedAt||0)||0;
+    return u>s;
+  });
+  const pendingReports=(db.dailyReports||[]).filter(r=>{
+    if(user.role!=="ADMIN" && r.ownerUid && r.ownerUid!==user.uid)return false;
+    if(user.role!=="ADMIN" && !r.ownerUid && r.owner!==user.username)return false;
+    const u=Date.parse(r.updatedAt||r.createdAt||0)||0,s=Date.parse(r.cloudSyncedAt||0)||0;
+    return u>s;
+  });
+  for(const r of pendingProjects)await cloudUpsert("projects",r);
+  for(const r of pendingReports)await cloudUpsert("dailyReports",r);
+}
+async function cloudSyncNow(){
+  if(!cloudReady)return alert("Firebase n’est pas encore connecté.");
+  cloudStatusText("Synchronisation…","busy");
+  await cloudSyncPendingPhase1();
+  cloudAttachPhase1Listeners();
+  cloudMarkSynced();
+  alert("Synchronisation Cloud Phase 1 terminée.");
+}
+async function cloudMigrationPhase1(){
+  if(!cloudReady||user?.role!=="ADMIN")return alert("Migration réservée à l’Admin.");
+  if(!confirm("Migrer les chantiers et rapports journaliers locaux de la V4.4 vers Firebase ?\n\nLes données existantes dans le Cloud seront fusionnées."))return;
+  try{
+    cloudStatusText("Migration V4.4…","busy");
+    const userSnaps=await fbStore.collection("users").get();
+    const uidByRole={};
+    userSnaps.forEach(d=>{const x=d.data()||{};if(x.role)uidByRole[x.role]=d.id;});
+    let count=0;
+    for(const p of (db.projects||[])){
+      await fbStore.collection("projects").doc(String(p.id)).set(cloudSanitize({...p,cloudSyncedAt:new Date().toISOString()}),{merge:true});
+      p.cloudSyncedAt=new Date().toISOString();count++;
+    }
+    for(const r of (db.dailyReports||[])){
+      const ownerUid=r.ownerUid||uidByRole[r.role]||null;
+      const payload={...r,ownerUid,cloudSyncedAt:new Date().toISOString()};
+      await fbStore.collection("dailyReports").doc(String(r.id)).set(cloudSanitize(payload),{merge:true});
+      Object.assign(r,{ownerUid,cloudSyncedAt:payload.cloudSyncedAt});count++;
+    }
+    save();cloudMarkSynced();cloudAttachPhase1Listeners();
+    alert(`Migration terminée : ${count} enregistrement(s) traités.`);
+  }catch(err){
+    console.error(err);cloudStatusText("Erreur migration","error");alert("Migration impossible : "+err.message);
+  }
+}
+async function firebaseEmailLogin(email,password){
+  if(!fbAuth)throw new Error("Firebase Authentication n’est pas disponible.");
+  await fbAuth.signInWithEmailAndPassword(email,password);
+}
+async function firebaseLogout(){
+  cloudStopListeners();
+  try{if(fbAuth)await fbAuth.signOut();}catch(e){}
+}
+function initFirebaseCloud(){
+  try{
+    if(typeof firebase==="undefined")throw new Error("SDK Firebase non chargé.");
+    fbApp=firebase.apps.length?firebase.app():firebase.initializeApp(FIREBASE_CONFIG);
+    fbAuth=firebase.auth();
+    fbStore=firebase.firestore();
+    cloudReady=true;
+    fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
+    cloudStatusText(navigator.onLine?"Connexion…":"Hors ligne",navigator.onLine?"busy":"error");
+
+    fbAuth.onAuthStateChanged(async fbUser=>{
+      if(!fbUser){
+        cloudStopListeners();
+        user=null;
+        sessionStorage.removeItem("nysoa_v2_user");
+        document.getElementById("app")?.classList.add("hidden");
+        document.getElementById("login")?.classList.remove("hidden");
+        cloudStatusText(navigator.onLine?"Prêt":"Hors ligne",navigator.onLine?"normal":"error");
+        return;
+      }
+      try{
+        const profile=await cloudLoadProfile(fbUser);
+        user=profile;
+        sessionStorage.setItem("nysoa_v2_user",JSON.stringify(user));
+        cloudLocalUserUpsert();
+        boot();
+        cloudAttachPhase1Listeners();
+        await cloudSyncPendingPhase1();
+      }catch(err){
+        console.error(err);
+        document.getElementById("loginMsg").textContent=err.message;
+        await fbAuth.signOut();
+      }
+    });
+  }catch(err){
+    console.error(err);
+    cloudReady=false;
+    cloudStatusText("Firebase indisponible","error");
+    const msg=document.getElementById("loginMsg");
+    if(msg)msg.textContent="Connexion Firebase indisponible. Vérifiez Internet puis actualisez la page.";
+  }
+}
+window.addEventListener("online",()=>{cloudStatusText("Reconnexion…","busy");if(user&&cloudReady){cloudSyncPendingPhase1();cloudAttachPhase1Listeners();}});
+window.addEventListener("offline",()=>cloudStatusText("Hors ligne","error"));
+
 const INIT={
  projects:[],
  appro:[],
@@ -51,7 +321,13 @@ const INIT={
  users:JSON.parse(JSON.stringify(DEFAULT_USERS)),
  loginEvents:[],
  notifications:[],
- technicalEntries:[]
+ technicalEntries:[],
+ usageSessions:[],
+ importedUsagePackets:[],
+ usageExportCounters:{},
+ dailyReports:[],
+ importedDailyReportPackets:[],
+ dailyReportSettings:{deadline:"17:30",logoutReminder:true}
 };
 let db=JSON.parse(localStorage.getItem("nysoa_stable_vide_db_v1")||"null")||structuredClone(INIT);
 let user=JSON.parse(sessionStorage.getItem("nysoa_v2_user")||"null");
@@ -116,6 +392,7 @@ function softDeleteRecord(collection,moduleName,id){
  pushHistory(record,"Suppression logique",before,record.deleteReason);
  audit("Suppression logique",moduleName,record.id,record.deleteReason,before,record);
  save();
+ if(collection==="projects"||collection==="dailyReports")cloudSyncRecord(collection,record);
  refreshModule(moduleName);
 }
 function restoreRecord(collection,moduleName,id){
@@ -131,6 +408,7 @@ function restoreRecord(collection,moduleName,id){
  pushHistory(record,"Restauration",before);
  audit("Restauration",moduleName,record.id,"Donnée restaurée",before,record);
  save();
+ if(collection==="projects"||collection==="dailyReports")cloudSyncRecord(collection,record);
  trashPage();
 }
 function permanentDelete(collection,moduleName,id){
@@ -140,7 +418,7 @@ function permanentDelete(collection,moduleName,id){
  const record=rows.find(x=>String(x.id)===String(id));
  db[collection]=rows.filter(x=>String(x.id)!==String(id));
  audit("Suppression définitive",moduleName,id,"Suppression définitive",record,null);
- save();trashPage();
+ save();if(collection==="projects"||collection==="dailyReports")cloudDelete(collection,id);trashPage();
 }
 function showRecordHistory(collection,id){
  const record=(db[collection]||[]).find(x=>String(x.id)===String(id));
@@ -216,28 +494,25 @@ const ADMIN_TECH_MENU=[
 ];
 
 const menus={
- ADMIN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["situations","📊","SITUATION DE TRAVAUX"],["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],["fuel","⛽","CARBURANT"],["employees","👥","EMPLOYÉS"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],["treasury","💵","TRÉSORERIE"],["reports","◔","RAPPORTS"],["adminValidations","✅","VALIDATIONS À PUBLIER"],["trash","🗑","CORBEILLE"],["audit","📜","JOURNAL D’AUDIT"],["settings","⚙","PARAMÈTRES"]],
- GESTIONNAIRE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["employees","👥","EMPLOYÉS"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","DEMANDE D'APPRO."],["reports","◔","RAPPORTS FINANCIERS"]],
- CONTROLE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["situations","📊","SITUATION DE TRAVAUX"],["reports","◔","RAPPORTS TECHNIQUES"]]
+ ADMIN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["situations","📊","SITUATION DE TRAVAUX"],["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],["fuel","⛽","CARBURANT"],["employees","👥","EMPLOYÉS"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],["treasury","💵","TRÉSORERIE"],["dailyReports","📝","RAPPORTS JOURNALIERS"],["reports","◔","RAPPORTS"],["adminValidations","✅","VALIDATIONS À PUBLIER"],["usageTime","⏱","TEMPS D’UTILISATION"],["trash","🗑","CORBEILLE"],["audit","📜","JOURNAL D’AUDIT"],["settings","⚙","PARAMÈTRES"]],
+ GESTIONNAIRE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["employees","👥","EMPLOYÉS"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","DEMANDE D'APPRO."],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS FINANCIERS"]],
+ CONTROLE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["situations","📊","SITUATION DE TRAVAUX"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
 };
 function projectMetrics(id){let p=db.projects.find(x=>x.id===id)||{};let app=sum(db.appro.filter(x=>x.project===id&&x.status==="Validée").map(x=>x.amount));let dep=sum(db.expenses.filter(x=>x.project===id).map(x=>x.amount));return{budget:p.budget||0,app,dep,cash:app-dep,remaining:(p.budget||0)-dep}}
-function login(u,p){
- ensureSecurityData();
- const account=findUser(u);
- if(!account||!account.active||account.pass!==p)return false;
- user={username:account.username,role:account.role,label:account.label};
- account.lastLogin=new Date().toISOString();
- account.lastSeen=account.lastLogin;
- db.loginEvents.unshift({
-  id:"LOG-"+Date.now(),username:account.username,label:account.label,
-  role:account.role,loginAt:account.lastLogin
- });
- save();
- sessionStorage.setItem("nysoa_v2_user",JSON.stringify(user));
- boot();
- return true;
+async function login(u,p){
+  try{
+    $("#loginMsg").textContent="Connexion à Firebase…";
+    await firebaseEmailLogin(u,p);
+    return true;
+  }catch(err){
+    console.error(err);
+    $("#loginMsg").textContent=err?.code==="auth/invalid-credential"||err?.code==="auth/wrong-password"||err?.code==="auth/user-not-found"
+      ?"Adresse e-mail ou mot de passe incorrect."
+      :(err?.message||"Connexion impossible.");
+    return false;
+  }
 }
-function boot(){ensureSecurityData();touchCurrentUser();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");$("#currentUserLabel").textContent=user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");renderMenu();
+function boot(){ensureSecurityData();touchCurrentUser();if(user.role!=="ADMIN")startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");$("#currentUserLabel").textContent=user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");renderMenu();
 const sendBtn=document.getElementById("sendUpdatesBtn");
 const refreshBtn=document.getElementById("refreshAdminBtn");
 if(sendBtn)sendBtn.style.display=user.role==="ADMIN"?"none":"inline-flex";
@@ -246,6 +521,19 @@ const publishBtn=document.getElementById("publishValidationBtn");
 const importValidationBtn=document.getElementById("importValidationBtn");
 if(publishBtn)publishBtn.style.display=user.role==="ADMIN"?"inline-flex":"none";
 if(importValidationBtn)importValidationBtn.style.display=user.role==="ADMIN"?"none":"inline-flex";
+const exportUsageBtn=document.getElementById("exportUsageBtn");
+const importUsageBtn=document.getElementById("importUsageBtn");
+if(exportUsageBtn)exportUsageBtn.style.display=user.role==="ADMIN"?"none":"inline-flex";
+if(importUsageBtn)importUsageBtn.style.display=user.role==="ADMIN"?"inline-flex":"none";
+const exportDailyReportsBtn=document.getElementById("exportDailyReportsBtn");
+const importDailyReportsBtn=document.getElementById("importDailyReportsBtn");
+if(exportDailyReportsBtn)exportDailyReportsBtn.style.display=user.role==="ADMIN"?"none":"inline-flex";
+if(importDailyReportsBtn)importDailyReportsBtn.style.display=user.role==="ADMIN"?"inline-flex":"none";
+const cloudMigrateBtn=document.getElementById("cloudMigrateBtn");
+const cloudSyncBtn=document.getElementById("cloudSyncBtn");
+if(cloudMigrateBtn)cloudMigrateBtn.style.display=user.role==="ADMIN"?"inline-flex":"none";
+if(cloudSyncBtn)cloudSyncBtn.style.display="inline-flex";
+cloudStatusText(navigator.onLine?"Connecté":"Hors ligne",navigator.onLine?"ok":"error");
 if(user.role==="ADMIN"&&adminWorkspace==="FINANCE")go("dashboardFinance");else if(user.role==="ADMIN"&&adminWorkspace==="TECHNIQUE")go("dashboardTechnique");else go("dashboard")}
 function renderMenu(){
  let list=menus[user.role];
@@ -270,7 +558,7 @@ function switchWorkspace(workspace){
  else if(workspace==="TECHNIQUE")go("dashboardTechnique");
  else go("dashboard");
 }
-function go(page){document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,projects:projects,expenses:expenses,appro:appro,reports:reports,cash:cash,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,trash:trashPage,audit:auditPage}[page]||generic)(page)}
+function go(page){cloudCurrentPage=page;document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,projects:projects,expenses:expenses,appro:appro,reports:reports,cash:cash,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,trash:trashPage,audit:auditPage}[page]||generic)(page)}
 function kpi(icon,color,title,value,note=""){return `<div class="kpi"><div class="circle ${color}">${icon}</div><div><small>${title}</small><strong>${value}</strong><span style="font-size:10px;color:#6b7885">${note}</span></div></div>`}
 
 function workspaceBanner(type,title,subtitle){
@@ -360,9 +648,10 @@ function dashboard(){
  if(overdueProjects)alertItems.push(`${overdueProjects} chantier(s) en retard`);
  let pendingRequests=db.requests.filter(x=>x.status==="En attente").length;
  if(pendingRequests)alertItems.push(`${pendingRequests} demande(s) d’approvisionnement en attente`);
+ const dailyReminder=user.role!=="ADMIN"?dailyReportReminderHtml():"";
 
  if(user.role==="GESTIONNAIRE"){
-  $("#content").innerHTML=workspaceBanner("general","VUE GÉNÉRALE GESTIONNAIRE","Synthèse des opérations autorisées.")+
+  $("#content").innerHTML=dailyReminder+workspaceBanner("general","VUE GÉNÉRALE GESTIONNAIRE","Synthèse des opérations autorisées.")+
   `<div class="kpis">
     ${kpi("💵","green","APPROVISIONNEMENTS SAISIS",money(totalAppDisplayed))}
     ${kpi("👛","blue","DÉPENSES TOTALES",money(totalDep))}
@@ -430,9 +719,9 @@ function projects(){
  <div class="panel">
    <h3>GESTION DES CHANTIERS</h3>
    <div class="panel-body">
-     <button class="btn primary" onclick="projectForm()">Nouveau chantier</button>
+     ${["ADMIN","GESTIONNAIRE"].includes(user.role)?'<button class="btn primary" onclick="projectForm()">Nouveau chantier</button>':""}
      <div class="notice" style="margin-top:10px">
-       L’Admin, le Gestionnaire et le Technicien peuvent ajouter un chantier.
+       L’Admin et le Gestionnaire créent les chantiers. Le Technicien les consulte et assure le suivi technique.
      </div>
    </div>
    <div class="table-wrap">
@@ -479,6 +768,7 @@ function projects(){
  </div>`;
 }
 function projectForm(id=""){
+ if(user.role==="CONTROLE"){alert("La création/modification principale d’un chantier est réservée à l’Admin et au Gestionnaire. Utilisez le suivi technique.");return projects();}
  let p=id?db.projects.find(x=>x.id===id):null;
  if(p && !canUserChange(p)){
    alert("Vous pouvez modifier uniquement les chantiers que vous avez créés.");
@@ -536,6 +826,7 @@ function projectForm(id=""){
    if(p){pushHistory(p,"Modification",before);Object.assign(p,obj);audit("Modification","projects",p.id,"Chantier modifié",before,p)}
    else{obj.history=[];pushHistory(obj,"Création");db.projects.push(obj);audit("Création","projects",obj.id,"Chantier créé",null,obj)}
    save();
+   cloudSyncRecord("projects",p||obj);
    alert(p?"Chantier modifié avec succès.":"Chantier ajouté avec succès.");
    projects();
  };
@@ -770,7 +1061,118 @@ function saveAttendance(){
  attendance();
 }
 
-const GENERIC_FIELDS={clients:["Nom / raison sociale","Téléphone","Adresse"],suppliers:["Fournisseur","Téléphone","Spécialité"],purchases:["Référence","Fournisseur","Montant"],stock:["Article","Quantité","Unité"],employees:["Matricule","Nom complet","Fonction"],payroll:["Employé","Mois","Net à payer"],bank:["Référence","Libellé","Montant"],accounting:["Journal","Libellé","Montant"],treasury:["Libellé","Échéance","Montant"],planning:["Activité","Début","Fin"],situations:["Situation","Période","Avancement"],technicalFollowup:["Chantier","Travaux du jour","Observation"],quality:["Contrôle","Résultat","Observation"],nonConformities:["Référence","Description","Action corrective"],equipment:["Matériel / engin","État","Affectation"],vehicles:["Véhicule","Immatriculation","État"],fuel:["Véhicule / engin","Quantité (L)","Montant"],invoices:["N° facture","Client","Montant"]};
+
+const PURCHASE_STATUSES=["Demandé","Approuvé","Effectué","Livré","Refusé","Annulé"];
+function purchaseBadge(status){
+ const cls=status==="Livré"?"b-green":status==="Approuvé"||status==="Effectué"?"b-blue":status==="Refusé"||status==="Annulé"?"b-orange":"b-blue";
+ return `<span class="badge ${cls}">${esc(status||"Demandé")}</span>`;
+}
+function purchaseCanEdit(record){
+ return user.role==="GESTIONNAIRE" && record.owner===user.username && !record.deleted;
+}
+function purchasesPage(){
+ db.modules.purchases=Array.isArray(db.modules.purchases)?db.modules.purchases:[];
+ const rows=db.modules.purchases.filter(x=>!x.deleted);
+ $("#content").innerHTML=`<div class="panel"><h3>ACHATS</h3>
+ <div class="panel-body">
+ ${user.role==="GESTIONNAIRE"?`<button class="btn primary" onclick="purchaseForm()">+ Nouvel achat</button>`:""}
+ <span class="muted">Workflow : Demandé → Approuvé → Effectué → Livré</span>
+ </div>
+ <div class="table-wrap"><table><thead><tr>
+ <th>Référence</th><th>Date</th><th>Chantier</th><th>Désignation</th><th>Fournisseur</th>
+ <th>Quantité</th><th>Montant</th><th>Situation</th><th>Dernière mise à jour</th>
+ <th>Modifié par</th><th>Observation</th><th>Actions</th>
+ </tr></thead><tbody>
+ ${rows.length?rows.map(r=>`<tr>
+ <td>${esc(r.id)}</td><td>${esc(r.date||"")}</td><td>${esc(r.project||"")}</td>
+ <td>${esc(r.designation||"")}</td><td>${esc(r.supplier||"")}</td>
+ <td>${esc(r.quantity||"")} ${esc(r.unit||"")}</td><td>${money(r.amount)}</td>
+ <td>${purchaseBadge(r.status)}</td>
+ <td>${r.updatedAt?new Date(r.updatedAt).toLocaleString("fr-FR"):""}</td>
+ <td>${esc(r.updatedBy||r.owner||"")}</td><td>${esc(r.observation||"")}</td>
+ <td><div class="edit-actions">
+ ${purchaseCanEdit(r)?`<button class="btn-xs btn-edit" onclick="purchaseForm('${r.id}')">Modifier / situation</button>
+ <button class="btn-xs btn-delete" onclick="softDeletePurchase('${r.id}')">Supprimer</button>`:""}
+ <button class="btn-xs" onclick="purchaseHistory('${r.id}')">Historique</button>
+ </div></td></tr>`).join(""):`<tr><td colspan="12">Aucun achat enregistré.</td></tr>`}
+ </tbody></table></div></div>`;
+}
+function purchaseForm(id=""){
+ if(user.role!=="GESTIONNAIRE")return alert("La saisie des achats est réservée au Gestionnaire.");
+ db.modules.purchases=Array.isArray(db.modules.purchases)?db.modules.purchases:[];
+ const r=id?db.modules.purchases.find(x=>String(x.id)===String(id)):null;
+ if(r&&!purchaseCanEdit(r))return alert("Cet achat ne vous appartient pas.");
+ const projectOptions=db.projects.filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${r?.project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name||"")}</option>`).join("");
+ $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER L’ACHAT":"NOUVEL ACHAT"}</h3>
+ <form id="purchaseForm" class="form-grid">
+ <label>Référence<input name="reference" value="${esc(r?.id||"")}" placeholder="Automatique si vide"></label>
+ <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
+ <label>Chantier<select name="project"><option value="">Non précisé</option>${projectOptions}</select></label>
+ <label>Désignation<input name="designation" value="${esc(r?.designation||"")}" required></label>
+ <label>Fournisseur<input name="supplier" value="${esc(r?.supplier||"")}" required></label>
+ <label>Quantité<input name="quantity" type="number" step="0.01" value="${esc(r?.quantity||"")}" required></label>
+ <label>Unité<input name="unit" value="${esc(r?.unit||"Unité")}" required></label>
+ <label>Montant total<input name="amount" type="number" step="0.01" value="${esc(r?.amount||"")}" required></label>
+ <label>Situation<select name="status">${PURCHASE_STATUSES.map(s=>`<option ${r?.status===s?"selected":""}>${s}</option>`).join("")}</select></label>
+ <label class="full">Observation<input name="observation" value="${esc(r?.observation||"")}" placeholder="Ex. Validation téléphonique Admin"></label>
+ <div id="approvalFields" class="approval-fields full">
+ <label>Approuvé par<input name="approvedBy" value="${esc(r?.approvedBy||"Admin / Direction")}"></label>
+ <label>Date d’autorisation<input name="approvedAt" type="datetime-local" value="${r?.approvedAt?new Date(r.approvedAt).toISOString().slice(0,16):""}"></label>
+ <label>Mode d’autorisation<select name="approvalMode"><option>Téléphone</option><option>WhatsApp</option><option>E-mail</option><option>En personne</option></select></label>
+ </div>
+ <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="purchasesPage()">Annuler</button></div>
+ </form></div>`;
+ const statusSelect=document.querySelector('[name="status"]');
+ const toggleApproval=()=>document.getElementById("approvalFields").style.display=statusSelect.value==="Approuvé"||r?.approvedAt?"grid":"none";
+ statusSelect.onchange=toggleApproval;toggleApproval();
+ $("#purchaseForm").onsubmit=e=>{
+  e.preventDefault();
+  const f=new FormData(e.target);
+  const now=new Date().toISOString();
+  const newStatus=f.get("status");
+  const oldStatus=r?.status||null;
+  const obj={
+   id:(f.get("reference")||"").trim()||r?.id||"ACH-"+String(db.modules.purchases.length+1).padStart(4,"0"),
+   date:f.get("date"),project:f.get("project"),designation:f.get("designation"),
+   supplier:f.get("supplier"),quantity:+f.get("quantity"),unit:f.get("unit"),
+   amount:+f.get("amount"),status:newStatus,workflow:newStatus,
+   observation:f.get("observation"),owner:r?.owner||user.username,
+   updatedBy:user.username,updatedAt:now,
+   approvedBy:newStatus==="Approuvé"?(f.get("approvedBy")||"Admin / Direction"):r?.approvedBy||"",
+   approvedAt:newStatus==="Approuvé"?(f.get("approvedAt")?new Date(f.get("approvedAt")).toISOString():now):r?.approvedAt||"",
+   approvalMode:newStatus==="Approuvé"?(f.get("approvalMode")||"Téléphone"):r?.approvalMode||""
+  };
+  if(!r&&db.modules.purchases.some(x=>String(x.id)===String(obj.id)))return alert("Cette référence existe déjà.");
+  if(r){
+   const before=cloneRecord(r);
+   Object.assign(r,obj);
+   pushHistory(r,oldStatus!==newStatus?"Changement de situation":"Modification",before,oldStatus!==newStatus?`${oldStatus} → ${newStatus}`:"Achat modifié");
+   audit(oldStatus!==newStatus?"Changement situation achat":"Modification","purchases",r.id,oldStatus!==newStatus?`${oldStatus} → ${newStatus}`:"Achat modifié",before,r);
+  }else{
+   obj.createdAt=now;obj.history=[];pushHistory(obj,"Création",null,`Situation initiale : ${newStatus}`);
+   db.modules.purchases.push(obj);audit("Création","purchases",obj.id,`Achat créé — ${newStatus}`,null,obj);
+  }
+  save();purchasesPage();
+ };
+}
+function softDeletePurchase(id){
+ const r=(db.modules.purchases||[]).find(x=>String(x.id)===String(id));
+ if(!r||!purchaseCanEdit(r))return;
+ const reason=prompt("Motif de suppression :");if(reason===null)return;
+ const before=cloneRecord(r);r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=user.username;r.deleteReason=reason||"Erreur de saisie";
+ pushHistory(r,"Suppression logique",before,r.deleteReason);audit("Suppression logique","purchases",id,r.deleteReason,before,r);save();purchasesPage();
+}
+function purchaseHistory(id){
+ const r=(db.modules.purchases||[]).find(x=>String(x.id)===String(id));if(!r)return;
+ const rows=r.history||[];
+ $("#content").innerHTML=`<div class="panel"><h3>HISTORIQUE ACHAT — ${esc(id)}</h3>
+ <div class="panel-body"><button class="btn secondary" onclick="purchasesPage()">Retour</button></div>
+ <div class="table-wrap"><table><thead><tr><th>Date et heure</th><th>Utilisateur</th><th>Action</th><th>Détails</th></tr></thead><tbody>
+ ${rows.length?rows.map(h=>`<tr><td>${new Date(h.date).toLocaleString("fr-FR")}</td><td>${esc(h.user)} (${esc(h.role)})</td><td>${esc(h.action)}</td><td>${esc(h.details||"")}</td></tr>`).join(""):`<tr><td colspan="4">Aucun historique.</td></tr>`}
+ </tbody></table></div></div>`;
+}
+
+const GENERIC_FIELDS={clients:["Nom / raison sociale","Téléphone","Adresse"],suppliers:["Fournisseur","Téléphone","Spécialité"],stock:["Article","Quantité","Unité"],employees:["Matricule","Nom complet","Fonction"],payroll:["Employé","Mois","Net à payer"],bank:["Référence","Libellé","Montant"],accounting:["Journal","Libellé","Montant"],treasury:["Libellé","Échéance","Montant"],planning:["Activité","Début","Fin"],situations:["Situation","Période","Avancement"],technicalFollowup:["Chantier","Travaux du jour","Observation"],quality:["Contrôle","Résultat","Observation"],nonConformities:["Référence","Description","Action corrective"],equipment:["Matériel / engin","État","Affectation"],vehicles:["Véhicule","Immatriculation","État"],fuel:["Véhicule / engin","Quantité (L)","Montant"],invoices:["N° facture","Client","Montant"]};
 function generic(page){let label=(menus[user.role].find(x=>x[0]===page)||ADMIN_FINANCE_MENU.concat(ADMIN_TECH_MENU).find(x=>x[0]===page)||[])[2]||page,fields=GENERIC_FIELDS[page]||["Référence","Désignation","Observation"],rows=(db.modules[page]||[]).filter(r=>!r.deleted);$("#content").innerHTML=`<div class="panel"><h3>${label}</h3><div class="panel-body"><button class="btn primary" onclick="genericForm('${page}')">+ Nouvelle entrée</button><button class="btn secondary" onclick="exportBackup()">Sauvegarder les données</button></div><div class="table-wrap"><table><thead><tr>${fields.map(x=>`<th>${x}</th>`).join("")}<th>Statut</th><th>Actions</th></tr></thead><tbody>${rows.map(r=>`<tr>${fields.map((_,j)=>`<td>${esc(r.values[j]||"")}</td>`).join("")}<td>${workflowBadge(r.workflow)}</td><td><div class="edit-actions">${canUserChange(r)?`<button class="btn-xs btn-edit" onclick="genericFormById('${page}','${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteGeneric('${page}','${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showGenericHistory('${page}','${r.id}')">Historique</button></div></td></tr>`).join("")}</tbody></table></div></div>`}
 function genericForm(page,index=-1){let fields=GENERIC_FIELDS[page]||["Référence","Désignation","Observation"],r=index>=0?(db.modules[page]||[])[index]:null;if(r&&!canEditRecord(r))return alert("Cette entrée validée ne peut plus être modifiée.");$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} ENTRÉE</h3><form id="fGeneric" class="form-grid">${fields.map((f,i)=>`<label>${f}<input name="v${i}" value="${esc(r?.values?.[i]||"")}" required></label>`).join("")}<label>Statut<select name="workflow">${["Brouillon","Soumis","À corriger","Validé"].filter(x=>user.role==="ADMIN"||x!=="Validé").map(x=>`<option ${r?.workflow===x?"selected":""}>${x}</option>`).join("")}</select></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="generic('${page}')">Annuler</button></div></form></div>`;$("#fGeneric").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target),obj={id:r?.id||"GEN-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),values:fields.map((_,i)=>f.get("v"+i)),workflow:f.get("workflow"),owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};db.modules[page]=db.modules[page]||[];const before=r?cloneRecord(r):null;if(r){pushHistory(r,"Modification",before);Object.assign(r,obj);audit("Modification","modules."+page,r.id,"Entrée modifiée",before,r)}else{obj.createdAt=new Date().toISOString();obj.history=[];pushHistory(obj,"Création");db.modules[page].push(obj);audit("Création","modules."+page,obj.id,"Entrée créée",null,obj)}save();generic(page)}}
 function genericDelete(page,index){if(user.role!=="ADMIN")return;if(confirm("Supprimer cette entrée ?")){db.modules[page].splice(index,1);save();generic(page)}}
@@ -778,9 +1180,15 @@ function exportBackup(){let blob=new Blob([JSON.stringify(db,null,2)],{type:"app
 $("#showLoginPass").onchange=e=>{
   $("#loginPass").type=e.target.checked?"text":"password";
 };
-$("#loginForm").onsubmit=e=>{e.preventDefault();$("#loginMsg").textContent=login($("#loginUser").value.trim(),$("#loginPass").value)?"":"Identifiants incorrects"}
-$("#logoutBtn").onclick=()=>{sessionStorage.removeItem("nysoa_v2_user");location.reload()}
-if(user)boot();
+$("#loginForm").onsubmit=async e=>{e.preventDefault();const btn=e.target.querySelector("button");if(btn)btn.disabled=true;await login($("#loginUser").value.trim(),$("#loginPass").value);if(btn)btn.disabled=false;}
+$("#logoutBtn").onclick=async()=>{
+ if(shouldWarnDailyReportLogout()){
+  const fill=confirm("⚠ Votre rapport journalier d’aujourd’hui n’est pas encore envoyé à l’Admin.\n\nOK : ouvrir le rapport\nAnnuler : quitter quand même");
+  if(fill){go("dailyReports");return;}
+ }
+ closeUsageSession("Déconnexion");sessionStorage.removeItem("nysoa_v2_user");await firebaseLogout();location.reload();
+}
+initFirebaseCloud();
 
 
 // ===== MODULE DEVIS ADMIN PROFESSIONNEL =====
@@ -901,7 +1309,33 @@ function exportCurrentModuleCSV(){
   const page=currentPageForData;
   const date=new Date().toISOString().slice(0,10);
   let headers=[],rows=[];
-  if(page==="projects"){
+  if(page==="purchases"){
+    if(user.role!=="GESTIONNAIRE")throw new Error("L’importation des achats est réservée au Gestionnaire.");
+    db.modules.purchases=Array.isArray(db.modules.purchases)?db.modules.purchases:[];
+    const normalized=headers.map(h=>h.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,""));
+    const col=(...names)=>normalized.findIndex(h=>names.some(n=>h.includes(n)));
+    const idx={
+      ref:col("reference","référence","numero","n°"),
+      date:col("date"),
+      project:col("chantier","projet"),
+      designation:col("designation","article","produit","libelle"),
+      supplier:col("fournisseur"),
+      quantity:col("quantite","qte"),
+      unit:col("unite"),
+      amount:col("montant","total"),
+      status:col("statut","situation"),
+      observation:col("observation","remarque")
+    };
+    dataRows.forEach((r,i)=>{
+      const get=(key,fallback="")=>idx[key]>=0?r[idx[key]]:fallback;
+      const id=text(get("ref"))||uniqueId("ACH",i);
+      if(db.modules.purchases.some(x=>String(x.id)===id)){skipped++;return;}
+      let status=text(get("status"))||"Demandé";
+      if(!PURCHASE_STATUSES.includes(status))status="Demandé";
+      const obj={id,date:text(get("date"))||today,project:text(get("project")),designation:text(get("designation")),supplier:text(get("supplier")),quantity:number(get("quantity")),unit:text(get("unit"))||"Unité",amount:number(get("amount")),status,workflow:status,observation:text(get("observation")),owner,updatedBy:owner,createdAt:now,updatedAt:now,history:[]};
+      pushHistory(obj,"Importation Excel",null,sourceFile);db.modules.purchases.push(obj);addAudit("purchases",id);imported++;
+    });
+  }else if(page==="projects"){
     headers=["ID","Nom","Client","Budget","Début","Fin","Avancement","Statut"];
     rows=db.projects.map(x=>[x.id,x.name,x.client,x.budget,x.start,x.end,x.progress,x.status]);
   }else if(page==="expenses"){
@@ -1033,6 +1467,312 @@ window.addEventListener("storage",e=>{
 });
 
 
+
+const USAGE_IDLE_LIMIT_MS=15*60*1000;
+let lastUsageActivity=Date.now();
+function currentUsageSession(){
+ const id=sessionStorage.getItem("nysoa_usage_session_id");
+ return id?(db.usageSessions||[]).find(x=>x.id===id):null;
+}
+function startUsageSession(){
+ if(!user||user.role==="ADMIN")return;
+ db.usageSessions=Array.isArray(db.usageSessions)?db.usageSessions:[];
+ let s=currentUsageSession();
+ if(s&&!s.closedAt)return;
+ const now=new Date().toISOString();
+ s={
+  id:"UTI-"+user.username+"-"+Date.now(),
+  username:user.username,label:user.label,role:user.role,
+  loginAt:now,lastSeenAt:now,logoutAt:null,
+  activeSeconds:0,idleSeconds:0,closedAt:null,
+  device:navigator.userAgent,exported:false
+ };
+ db.usageSessions.unshift(s);
+ sessionStorage.setItem("nysoa_usage_session_id",s.id);
+ lastUsageActivity=Date.now();save();
+}
+function recordUsageTick(){
+ if(!user||user.role==="ADMIN")return;
+ let s=currentUsageSession();if(!s){startUsageSession();s=currentUsageSession();}if(!s)return;
+ const now=Date.now();
+ if(now-lastUsageActivity<=USAGE_IDLE_LIMIT_MS)s.activeSeconds=(s.activeSeconds||0)+60;
+ else s.idleSeconds=(s.idleSeconds||0)+60;
+ s.lastSeenAt=new Date().toISOString();save();
+}
+function closeUsageSession(reason="Fermeture"){
+ if(!user||user.role==="ADMIN")return;
+ const s=currentUsageSession();if(!s||s.closedAt)return;
+ s.logoutAt=new Date().toISOString();s.closedAt=s.logoutAt;s.closeReason=reason;save();
+ sessionStorage.removeItem("nysoa_usage_session_id");
+}
+["click","keydown","input","mousemove","touchstart","scroll"].forEach(evt=>document.addEventListener(evt,()=>{lastUsageActivity=Date.now();},{passive:true}));
+window.addEventListener("beforeunload",()=>{if(user&&user.role!=="ADMIN"){const s=currentUsageSession();if(s){s.lastSeenAt=new Date().toISOString();save();}}});
+setInterval(recordUsageTick,60000);
+
+function secondsToDuration(value){
+ const total=Math.max(0,Number(value)||0),h=Math.floor(total/3600),m=Math.floor((total%3600)/60);
+ return `${h} h ${String(m).padStart(2,"0")} min`;
+}
+function exportUsageTime(){
+ if(!user||user.role==="ADMIN")return alert("Réservé au Gestionnaire et au Technicien.");
+ recordUsageTick();
+ const sessions=(db.usageSessions||[]).filter(s=>s.username===user.username&&!s.exported);
+ if(!sessions.length)return alert("Aucun nouveau temps d’utilisation à exporter.");
+ db.usageExportCounters=db.usageExportCounters||{};
+ db.usageExportCounters[user.username]=(db.usageExportCounters[user.username]||0)+1;
+ const seq=db.usageExportCounters[user.username];
+ const packet={
+  format:"NYSOA_USAGE_TIME_V1",version:1,
+  packetId:`TEMPS-${user.username}-${Date.now()}`,
+  sequence:seq,source:{username:user.username,label:user.label,role:user.role},
+  exportedAt:new Date().toISOString(),
+  sessions:sessions.map(cloneRecord)
+ };
+ sessions.forEach(s=>{s.exported=true;s.exportedAt=packet.exportedAt;});
+ save();
+ downloadJSON(packet,`TEMPS_UTILISATION_${user.role}_${String(seq).padStart(3,"0")}.nysoa`);
+ alert(`${sessions.length} session(s) exportée(s). Aucune donnée métier n’est incluse.`);
+}
+function openUsageImport(){document.getElementById("usageImportFile")?.click();}
+async function handleUsageImport(event){
+ const file=event.target.files?.[0];event.target.value="";if(!file)return;
+ if(user.role!=="ADMIN")return alert("Import réservé à l’Admin.");
+ try{
+  const packet=JSON.parse(await file.text());
+  if(packet.format!=="NYSOA_USAGE_TIME_V1")throw new Error("Fichier de temps d’utilisation incompatible.");
+  db.importedUsagePackets=Array.isArray(db.importedUsagePackets)?db.importedUsagePackets:[];
+  if(db.importedUsagePackets.includes(packet.packetId))throw new Error("Ce fichier a déjà été importé.");
+  db.usageSessions=Array.isArray(db.usageSessions)?db.usageSessions:[];
+  let added=0,updated=0;
+  (packet.sessions||[]).forEach(incoming=>{
+   const existing=db.usageSessions.find(x=>x.id===incoming.id);
+   if(existing){Object.assign(existing,incoming);updated++;}
+   else{db.usageSessions.push(incoming);added++;}
+  });
+  db.importedUsagePackets.push(packet.packetId);
+  audit("Import temps d’utilisation","usageTime",file.name,`${added} ajout(s), ${updated} mise(s) à jour`);
+  save();alert(`Import terminé.\n${added} session(s) ajoutée(s).\n${updated} session(s) actualisée(s).`);
+  usageTimePage();
+ }catch(err){alert("Import impossible : "+err.message);}
+}
+function usageTimePage(){
+ if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
+ const sessions=(db.usageSessions||[]).slice().sort((a,b)=>String(b.loginAt).localeCompare(String(a.loginAt)));
+ const totals={};
+ sessions.forEach(s=>{
+  const key=s.username||"inconnu";
+  totals[key]=totals[key]||{label:s.label||key,role:s.role,seconds:0,count:0};
+  totals[key].seconds+=Number(s.activeSeconds)||0;totals[key].count++;
+ });
+ $("#content").innerHTML=`<div class="panel"><h3>TEMPS D’UTILISATION</h3>
+ <div class="panel-body"><button class="btn primary" onclick="openUsageImport()">Importer temps d’utilisation</button>
+ <button class="btn secondary" onclick="exportUsageCSV()">Exporter CSV</button>
+ <span class="muted">Le fichier importé contient uniquement les sessions et les durées, sans achats, dépenses, chantiers ni rapports.</span></div>
+ <div class="usage-summary">${Object.values(totals).map(t=>`<div class="usage-card"><b>${esc(t.label)}</b><span>${esc(t.role)}</span><strong>${secondsToDuration(t.seconds)}</strong><small>${t.count} connexion(s)</small></div>`).join("")||"<p>Aucune donnée importée.</p>"}</div>
+ <div class="table-wrap"><table><thead><tr><th>Utilisateur</th><th>Rôle</th><th>Date</th><th>Entrée</th><th>Dernière activité / sortie</th><th>Temps actif</th><th>Temps inactif</th><th>Appareil</th></tr></thead><tbody>
+ ${sessions.length?sessions.map(s=>`<tr><td>${esc(s.label||s.username)}</td><td>${esc(s.role)}</td><td>${new Date(s.loginAt).toLocaleDateString("fr-FR")}</td><td>${new Date(s.loginAt).toLocaleTimeString("fr-FR")}</td><td>${new Date(s.logoutAt||s.lastSeenAt||s.loginAt).toLocaleTimeString("fr-FR")}</td><td><b>${secondsToDuration(s.activeSeconds)}</b></td><td>${secondsToDuration(s.idleSeconds)}</td><td class="device-cell">${esc(s.device||"")}</td></tr>`).join(""):`<tr><td colspan="8">Aucune session disponible.</td></tr>`}
+ </tbody></table></div></div>`;
+}
+function exportUsageCSV(){
+ if(user.role!=="ADMIN")return;
+ const rows=[["Utilisateur","Rôle","Date","Entrée","Sortie / dernière activité","Secondes actives","Durée active","Secondes inactives"]];
+ (db.usageSessions||[]).forEach(s=>rows.push([s.label||s.username,s.role,s.loginAt,s.loginAt,s.logoutAt||s.lastSeenAt||"",s.activeSeconds||0,secondsToDuration(s.activeSeconds),s.idleSeconds||0]));
+ const csv=rows.map(r=>r.map(csvEscape).join(";")).join("\n");
+ downloadText(`NYSOA_TEMPS_UTILISATION_${new Date().toISOString().slice(0,10)}.csv`,csv,"text/csv;charset=utf-8");
+}
+
+
+
+// ===== RAPPORT JOURNALIER V4.4 =====
+const DAILY_REPORT_STATUSES=["Brouillon","Complété","Prêt à envoyer","Exporté vers Admin","Reçu par Admin","Consulté","Archivé"];
+function localDateKey(d=new Date()){
+ const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0");
+ return `${y}-${m}-${day}`;
+}
+function dailyReportIsLate(r){
+ const deadline=db.dailyReportSettings?.deadline||"17:30";
+ const now=new Date();
+ if(r.reportDate<localDateKey())return !["Reçu par Admin","Consulté","Archivé"].includes(r.status);
+ if(r.reportDate>localDateKey())return false;
+ const [h,m]=deadline.split(":").map(Number);
+ const limit=new Date();limit.setHours(h,m,0,0);
+ return now>limit&&!["Exporté vers Admin","Reçu par Admin","Consulté","Archivé"].includes(r.status);
+}
+function reportStatusBadge(r){
+ const late=dailyReportIsLate(r);
+ const cls=late?"b-orange":["Reçu par Admin","Consulté","Archivé"].includes(r.status)?"b-green":r.status==="Exporté vers Admin"?"b-blue":"b-orange";
+ return `<span class="badge ${cls}">${late?"En retard — ":""}${esc(r.status||"Brouillon")}</span>${r.cloudSyncedAt?` <span class="badge b-green">☁ Synchronisé</span>`:""}`;
+}
+function myTodayReport(){
+ return (db.dailyReports||[]).find(r=>(r.ownerUid? r.ownerUid===user.uid : r.owner===user.username)&&r.reportDate===localDateKey()&&!r.deleted);
+}
+function missingDailyReportMessage(){
+ if(!user||user.role==="ADMIN")return "";
+ const r=myTodayReport();
+ if(!r)return `⚠ Rapport journalier du ${new Date().toLocaleDateString("fr-FR")} non rempli.`;
+ if(r.cloudSyncedAt)return "";
+ if(r.status==="Brouillon"||r.status==="Complété"||r.status==="Prêt à envoyer")
+   return `⚠ Le rapport du ${new Date(r.reportDate+"T12:00:00").toLocaleDateString("fr-FR")} n’est pas encore envoyé à l’Admin.`;
+ if(r.status==="Exporté vers Admin")return "Rapport exporté. En attente de réception par l’Admin.";
+ return "";
+}
+function dailyReportReminderHtml(){
+ const msg=missingDailyReportMessage();
+ if(!msg)return "";
+ const r=myTodayReport();
+ return `<div class="daily-reminder ${r?.status==="Exporté vers Admin"?"sent":"warning"}">
+ <div><b>RAPPEL RAPPORT JOURNALIER</b><p>${esc(msg)}</p></div>
+ <button class="btn primary" onclick="go('dailyReports')">${r?"Ouvrir le rapport":"Créer le rapport"}</button>
+ </div>`;
+}
+function dailyReportsPage(){
+ db.dailyReports=Array.isArray(db.dailyReports)?db.dailyReports:[];
+ const rows=(user.role==="ADMIN"?db.dailyReports:db.dailyReports.filter(r=>r.ownerUid? r.ownerUid===user.uid : r.owner===user.username)).filter(r=>!r.deleted)
+  .sort((a,b)=>String(b.reportDate+b.createdAt).localeCompare(String(a.reportDate+a.createdAt)));
+ const today=myTodayReport();
+ $("#content").innerHTML=`${user.role!=="ADMIN"?dailyReportReminderHtml():""}
+ <div class="panel"><h3>${user.role==="ADMIN"?"RAPPORTS JOURNALIERS REÇUS":"MES RAPPORTS JOURNALIERS"}</h3>
+ <div class="panel-body">
+ ${user.role!=="ADMIN"?`<button class="btn primary" onclick="dailyReportForm('${today?.id||""}')">${today?"Ouvrir le rapport d’aujourd’hui":"+ Créer le rapport d’aujourd’hui"}</button>
+ <button class="btn secondary" onclick="exportDailyReports()">Envoyer les rapports prêts</button>`:
+ `<button class="btn primary" onclick="openDailyReportImport()">Importer les rapports</button>
+ <label class="inline-setting">Heure limite <input type="time" value="${esc(db.dailyReportSettings?.deadline||"17:30")}" onchange="setDailyReportDeadline(this.value)"></label>`}
+ </div>
+ <div class="table-wrap"><table><thead><tr><th>Date</th><th>Utilisateur</th><th>Rôle</th><th>Chantier</th><th>Résumé</th><th>Statut</th><th>Créé / modifié</th><th>Actions</th></tr></thead><tbody>
+ ${rows.length?rows.map(r=>`<tr><td><b>${new Date(r.reportDate+"T12:00:00").toLocaleDateString("fr-FR")}</b></td>
+ <td>${esc(r.ownerLabel||r.owner)}</td><td>${esc(r.role)}</td><td>${esc(r.project||"Non précisé")}</td>
+ <td>${esc((r.workDone||r.controlledWork||"").slice(0,90))}</td><td>${reportStatusBadge(r)}</td>
+ <td>${new Date(r.updatedAt||r.createdAt).toLocaleString("fr-FR")}</td>
+ <td><div class="edit-actions">
+ ${user.role!=="ADMIN"&&!["Reçu par Admin","Consulté","Archivé"].includes(r.status)?`<button class="btn-xs btn-edit" onclick="dailyReportForm('${r.id}')">Modifier</button>`:""}
+ <button class="btn-xs" onclick="dailyReportView('${r.id}')">Voir</button>
+ ${user.role==="ADMIN"&&r.status!=="Consulté"?`<button class="btn-xs btn-save" onclick="markDailyReportRead('${r.id}')">Marquer consulté</button>`:""}
+ </div></td></tr>`).join(""):`<tr><td colspan="8">Aucun rapport journalier.</td></tr>`}
+ </tbody></table></div></div>`;
+}
+function dailyReportForm(id=""){
+ if(user.role==="ADMIN")return dailyReportsPage();
+ const existing=id?(db.dailyReports||[]).find(r=>r.id===id):null;
+ if(existing&&((existing.ownerUid&&existing.ownerUid!==user.uid)||(!existing.ownerUid&&existing.owner!==user.username)))return alert("Accès refusé.");
+ const roleTech=user.role==="CONTROLE";
+ const r=existing||{};
+ const projectOptions=db.projects.filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${r.project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name||"")}</option>`).join("");
+ $("#content").innerHTML=`<div class="panel"><h3>RAPPORT JOURNALIER — ${roleTech?"TECHNICIEN":"GESTIONNAIRE"}</h3>
+ <form id="dailyReportForm" class="form-grid">
+ <label>Date du rapport<input name="reportDate" type="date" value="${esc(r.reportDate||localDateKey())}" required></label>
+ <label>Chantier<select name="project"><option value="">Non précisé</option>${projectOptions}</select></label>
+ ${roleTech?`
+ <label class="full">Travaux contrôlés<textarea name="controlledWork" required>${esc(r.controlledWork||"")}</textarea></label>
+ <label>Avancement (%)<input name="progress" type="number" min="0" max="100" value="${esc(r.progress??"")}"></label>
+ <label>Effectif présent<input name="workforce" type="number" min="0" value="${esc(r.workforce??"")}"></label>
+ <label class="full">Contrôle qualité<textarea name="qualityControl">${esc(r.qualityControl||"")}</textarea></label>
+ <label class="full">Matériels utilisés<textarea name="equipmentUsed">${esc(r.equipmentUsed||"")}</textarea></label>
+ <label class="full">Non-conformités constatées<textarea name="nonConformities">${esc(r.nonConformities||"")}</textarea></label>
+ <label class="full">Mesures correctives<textarea name="correctiveActions">${esc(r.correctiveActions||"")}</textarea></label>
+ <label class="full">Problèmes techniques<textarea name="problems">${esc(r.problems||"")}</textarea></label>`:`
+ <label class="full">Travaux réalisés<textarea name="workDone" required>${esc(r.workDone||"")}</textarea></label>
+ <label class="full">Achats réalisés ou en attente<textarea name="purchases">${esc(r.purchases||"")}</textarea></label>
+ <label class="full">Dépenses réalisées<textarea name="expenses">${esc(r.expenses||"")}</textarea></label>
+ <label class="full">Livraisons reçues<textarea name="deliveries">${esc(r.deliveries||"")}</textarea></label>
+ <label>Effectif présent<input name="workforce" type="number" min="0" value="${esc(r.workforce??"")}"></label>
+ <label class="full">Problèmes rencontrés<textarea name="problems">${esc(r.problems||"")}</textarea></label>
+ <label class="full">Solutions prises<textarea name="solutions">${esc(r.solutions||"")}</textarea></label>`}
+ <label class="full">Travaux prévus demain<textarea name="tomorrowWork">${esc(r.tomorrowWork||"")}</textarea></label>
+ <label class="full">Observations<textarea name="observations">${esc(r.observations||"")}</textarea></label>
+ <label>Statut<select name="status">
+ ${["Brouillon","Complété","Prêt à envoyer"].map(s=>`<option ${r.status===s?"selected":""}>${s}</option>`).join("")}
+ </select></label>
+ <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="dailyReportsPage()">Annuler</button></div>
+ </form></div>`;
+ $("#dailyReportForm").onsubmit=e=>{
+  e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString();
+  const reportDate=f.get("reportDate");
+  const duplicate=(db.dailyReports||[]).find(x=>x.owner===user.username&&x.reportDate===reportDate&&x.id!==existing?.id&&!x.deleted);
+  if(duplicate)return alert("Vous avez déjà un rapport pour cette date.");
+  const obj={
+   id:existing?.id||`RAPJ-${user.uid||user.username}-${reportDate}`,
+   reportDate,project:f.get("project"),owner:user.username,ownerUid:user.uid||existing?.ownerUid||"",ownerEmail:user.email||existing?.ownerEmail||"",ownerLabel:user.label,role:user.role,
+   controlledWork:f.get("controlledWork")||"",workDone:f.get("workDone")||"",
+   progress:+f.get("progress")||0,workforce:+f.get("workforce")||0,
+   qualityControl:f.get("qualityControl")||"",equipmentUsed:f.get("equipmentUsed")||"",
+   nonConformities:f.get("nonConformities")||"",correctiveActions:f.get("correctiveActions")||"",
+   purchases:f.get("purchases")||"",expenses:f.get("expenses")||"",deliveries:f.get("deliveries")||"",
+   problems:f.get("problems")||"",solutions:f.get("solutions")||"",
+   tomorrowWork:f.get("tomorrowWork")||"",observations:f.get("observations")||"",
+   status:f.get("status"),createdAt:existing?.createdAt||now,updatedAt:now,history:existing?.history||[]
+  };
+  if(existing){
+   const before=cloneRecord(existing);Object.assign(existing,obj);
+   pushHistory(existing,"Modification",before,`Statut : ${obj.status}`);
+   audit("Modification rapport journalier","dailyReports",existing.id,obj.status,before,existing);
+  }else{
+   pushHistory(obj,"Création",null,`Statut : ${obj.status}`);
+   db.dailyReports.push(obj);audit("Création rapport journalier","dailyReports",obj.id,obj.status,null,obj);
+  }
+  save();
+  cloudSyncRecord("dailyReports",existing||obj);
+  dailyReportsPage();
+ };
+}
+function dailyReportView(id){
+ const r=(db.dailyReports||[]).find(x=>x.id===id);if(!r)return;
+ const details=user.role==="CONTROLE"||r.role==="CONTROLE"?
+ [["Travaux contrôlés",r.controlledWork],["Avancement",`${r.progress||0}%`],["Effectif",r.workforce],["Contrôle qualité",r.qualityControl],["Matériels utilisés",r.equipmentUsed],["Non-conformités",r.nonConformities],["Mesures correctives",r.correctiveActions],["Problèmes",r.problems],["Travaux prévus demain",r.tomorrowWork],["Observations",r.observations]]:
+ [["Travaux réalisés",r.workDone],["Achats",r.purchases],["Dépenses",r.expenses],["Livraisons",r.deliveries],["Effectif",r.workforce],["Problèmes",r.problems],["Solutions",r.solutions],["Travaux prévus demain",r.tomorrowWork],["Observations",r.observations]];
+ $("#content").innerHTML=`<div class="panel"><h3>RAPPORT DU ${new Date(r.reportDate+"T12:00:00").toLocaleDateString("fr-FR")}</h3>
+ <div class="panel-body"><button class="btn secondary" onclick="dailyReportsPage()">Retour</button>${user.role==="ADMIN"&&r.status!=="Consulté"?`<button class="btn primary" onclick="markDailyReportRead('${r.id}')">Marquer consulté</button>`:""}</div>
+ <div class="report-sheet"><div class="report-meta"><b>${esc(r.ownerLabel||r.owner)}</b><span>${esc(r.role)}</span><span>Chantier : ${esc(r.project||"Non précisé")}</span>${reportStatusBadge(r)}</div>
+ ${details.map(([k,v])=>`<section><h4>${esc(k)}</h4><p>${esc(String(v??""))||"—"}</p></section>`).join("")}</div></div>`;
+}
+function exportDailyReports(){
+ if(!user||user.role==="ADMIN")return alert("Fonction réservée au Gestionnaire et au Technicien.");
+ const ready=(db.dailyReports||[]).filter(r=>(r.ownerUid? r.ownerUid===user.uid : r.owner===user.username)&&["Complété","Prêt à envoyer"].includes(r.status)&&!r.deleted);
+ if(!ready.length)return alert("Aucun rapport complété ou prêt à envoyer.");
+ const now=new Date().toISOString();
+ const packet={format:"NYSOA_DAILY_REPORT_V1",packetId:`RAPJ-${user.username}-${Date.now()}`,source:{username:user.username,label:user.label,role:user.role},exportedAt:now,reports:ready.map(cloneRecord)};
+ ready.forEach(r=>{const before=cloneRecord(r);r.status="Exporté vers Admin";r.exportedAt=now;r.updatedAt=now;pushHistory(r,"Export vers Admin",before,"Fichier de rapports journaliers créé");});
+ save();
+ const role=user.role==="GESTIONNAIRE"?"GESTIONNAIRE":"TECHNICIEN";
+ downloadJSON(packet,`RAPPORTS_JOURNALIERS_${role}_${localDateKey()}.nysoa`);
+ alert(`${ready.length} rapport(s) exporté(s). Envoyez le fichier à l’Admin.`);
+ dailyReportsPage();
+}
+function openDailyReportImport(){document.getElementById("dailyReportImportFile")?.click();}
+async function handleDailyReportImport(event){
+ const file=event.target.files?.[0];event.target.value="";if(!file)return;
+ if(user.role!=="ADMIN")return alert("Import réservé à l’Admin.");
+ try{
+  const packet=JSON.parse(await file.text());
+  if(packet.format!=="NYSOA_DAILY_REPORT_V1")throw new Error("Fichier incompatible.");
+  db.importedDailyReportPackets=db.importedDailyReportPackets||[];
+  if(db.importedDailyReportPackets.includes(packet.packetId))throw new Error("Ce fichier a déjà été importé.");
+  let added=0,updated=0;const now=new Date().toISOString();
+  (packet.reports||[]).forEach(incoming=>{
+   let r=(db.dailyReports||[]).find(x=>x.id===incoming.id);
+   if(r){Object.assign(r,incoming);updated++;}else{r=cloneRecord(incoming);db.dailyReports.push(r);added++;}
+   const before=cloneRecord(r);r.status="Reçu par Admin";r.receivedAt=now;r.updatedAt=now;
+   r.history=Array.isArray(r.history)?r.history:[];r.history.unshift({id:"HIS-"+Date.now()+Math.random(),date:now,user:user.username,role:user.role,action:"Importé par Admin",details:file.name});
+  });
+  db.importedDailyReportPackets.push(packet.packetId);
+  audit("Import rapports journaliers","dailyReports",file.name,`${added} ajout(s), ${updated} mise(s) à jour`);
+  save();alert(`Import terminé : ${added} ajouté(s), ${updated} actualisé(s).`);dailyReportsPage();
+ }catch(err){alert("Import impossible : "+err.message);}
+}
+function markDailyReportRead(id){
+ const r=(db.dailyReports||[]).find(x=>x.id===id);if(!r||user.role!=="ADMIN")return;
+ const before=cloneRecord(r);r.status="Consulté";r.consultedAt=new Date().toISOString();r.updatedAt=r.consultedAt;
+ pushHistory(r,"Consulté par Admin",before,"Rapport lu");audit("Consultation rapport journalier","dailyReports",id,"Rapport consulté",before,r);save();cloudSyncRecord("dailyReports",r);dailyReportsPage();
+}
+function setDailyReportDeadline(value){
+ db.dailyReportSettings=db.dailyReportSettings||{};db.dailyReportSettings.deadline=value||"17:30";save();dailyReportsPage();
+}
+function shouldWarnDailyReportLogout(){
+ if(!user||user.role==="ADMIN"||db.dailyReportSettings?.logoutReminder===false)return false;
+ const r=myTodayReport();
+ return !r||["Brouillon","Complété","Prêt à envoyer"].includes(r.status);
+}
+
+
 // ===== SYNCHRONISATION SIMPLE PAR FICHIER JSON =====
 // Principe : le Gestionnaire et le Technicien exportent leurs mises à jour.
 // Ils envoient le fichier NYSOA à l'Admin par WhatsApp, e-mail ou Drive.
@@ -1095,7 +1835,7 @@ function buildSyncDatabase(){
  // Collections principales
  [
   "projects","appro","expenses","requests","reports",
-  "technicalEntries","modules"
+  "technicalEntries","dailyReports","modules"
  ].forEach(key=>result[key]=clone(db[key]||([])));
 
  // Données complémentaires utiles à la cohérence

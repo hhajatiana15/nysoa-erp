@@ -1,0 +1,37 @@
+NYSOA ERP — VERSION 4.5 CLOUD SYNC — PHASE 1
+Date : 24/07/2026
+
+FONCTIONS CLOUD ACTIVÉES
+- Firebase Authentication : e-mail + mot de passe
+- Rôles lus depuis Firestore /users/{uid}
+- Cloud Firestore : synchronisation des CHANTIERS et RAPPORTS JOURNALIERS
+- État Cloud dans l’en-tête
+- Synchronisation manuelle "Synchroniser maintenant"
+- Migration Admin V4.4 → Cloud pour les données Phase 1
+- Cache local localStorage conservé comme secours
+- Export .nysoa conservé comme sauvegarde / procédure de secours
+
+RÔLES
+- ADMIN : accès administratif selon les Security Rules publiées
+- GESTIONNAIRE : création/modification des chantiers + rapport journalier
+- CONTROLE : lecture des chantiers + rapport journalier ; le suivi technique détaillé reste local jusqu’à la Phase 3
+
+IMPORTANT
+1. Les comptes utilisent maintenant leurs ADRESSES E-MAIL FIREBASE pour se connecter.
+2. Les anciens mots de passe codés en dur ont été retirés de cette version.
+3. Le domaine GitHub Pages doit être autorisé dans Firebase Authentication si Firebase le demande :
+   hhajatiana15.github.io
+4. La migration V4.4 → Cloud doit être lancée UNE FOIS par l’Admin après vérification.
+5. Les modules Achats, Dépenses, Stock, Fournisseurs, Personnel, etc. restent encore en mode local/fichier .nysoa jusqu’aux phases suivantes.
+
+FIREBASE PROJECT
+- Project ID : erp-nysoa
+- Firestore : (default)
+- Région : africa-south1 (Johannesburg)
+- Plan : Spark
+
+TEST CONSEILLÉ
+A. Admin : connexion → Cloud "Connecté" → ouvrir Chantiers / Rapports.
+B. Gestionnaire : créer un chantier et un rapport → vérifier qu’ils apparaissent chez Admin.
+C. Technicien : créer un rapport → vérifier qu’il apparaît chez Admin.
+D. Couper Internet → saisir localement → rétablir Internet → Synchroniser maintenant.

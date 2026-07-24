@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="nysoa-sync-version" content="4.2">
+  <meta name="nysoa-sync-version" content="4.5">
 <title>ERP NYSOA CONSTRUCT</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -18,7 +18,7 @@
         </div>
       </div>
       <form id="loginForm">
-        <label>Nom d’utilisateur<input id="loginUser" required></label>
+        <label>Adresse e-mail Firebase<input id="loginUser" type="email" autocomplete="username" required></label>
         <label>Mot de passe
           <input id="loginPass" type="password" required>
         </label>
@@ -48,6 +48,7 @@
         <div class="header-cards">
           <div class="mini-card"><span>📅</span><div><small>Date du jour</small><b id="today"></b></div></div>
           <div class="mini-card"><span>🗂</span><div><small>Exercice</small><b>2026</b></div></div>
+          <div class="mini-card cloud-mini"><span>☁</span><div><small>Cloud</small><b id="cloudStatus">Initialisation…</b><span id="cloudLastSync" class="cloud-last-sync"></span></div></div>
         </div>
       </div>
     </header>
@@ -74,10 +75,18 @@
           <button id="refreshAdminBtn" class="btn sync-refresh" onclick="openSyncImport()">🔄 Actualiser les données</button>
           <button id="publishValidationBtn" class="btn primary" onclick="go('adminValidations')">✅ Publier les validations</button>
           <button id="importValidationBtn" class="btn primary" onclick="openValidationImport()">⬆ Importer validation Admin</button>
+          <button id="exportUsageBtn" class="btn primary" onclick="exportUsageTime()">⏱ Exporter temps d’utilisation</button>
+          <button id="importUsageBtn" class="btn primary" onclick="openUsageImport()">⏱ Importer temps d’utilisation</button>
+          <button id="exportDailyReportsBtn" class="btn primary" onclick="exportDailyReports()">📝 Envoyer rapports</button>
+          <button id="importDailyReportsBtn" class="btn primary" onclick="openDailyReportImport()">📝 Importer rapports</button>
+          <button id="cloudSyncBtn" class="btn cloud-sync-btn" onclick="cloudSyncNow()">☁ Synchroniser maintenant</button>
+          <button id="cloudMigrateBtn" class="btn cloud-migrate-btn" onclick="cloudMigrationPhase1()">☁ Migrer V4.4 → Cloud</button>
           <button class="btn secondary" onclick="exportBackup()">💾 Sauvegarde complète Admin</button>
           <input id="externalImportFile" type="file" accept=".xlsx,.xls,.csv,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/json" class="hidden" onchange="handleExternalImport(event)">
           <input id="syncImportFile" type="file" accept=".nysoa,application/octet-stream" class="hidden" onchange="handleSyncImport(event)">
           <input id="validationImportFile" type="file" accept=".nysoa,application/octet-stream" class="hidden" onchange="handleValidationImport(event)">
+          <input id="usageImportFile" type="file" accept=".nysoa,application/octet-stream" class="hidden" onchange="handleUsageImport(event)">
+          <input id="dailyReportImportFile" type="file" accept=".nysoa,application/octet-stream" class="hidden" onchange="handleDailyReportImport(event)">
         </div>
         <section id="content"></section>
         <div id="printArea" class="hidden"></div>
@@ -86,12 +95,15 @@
 
     <footer class="footer">
       <span>© 2026 ENTREPRISE NYSOA CONSTRUCT - Tous droits réservés</span>
-      <span>Logiciel de Gestion BTP - Version 4.2</span>
+      <span>Logiciel de Gestion BTP - Version 4.5 Cloud Sync</span>
       <span>Téléphone / WhatsApp : +261 34 99 498 49</span>
     </footer>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

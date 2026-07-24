@@ -231,3 +231,33 @@ textarea{min-height:90px}.btn{border:0;border-radius:8px;padding:10px 14px;font-
 .btn-xs{margin:2px}
 
 .data-toolbar .btn{white-space:nowrap}
+
+.approval-fields{display:grid;grid-template-columns:repeat(3,minmax(180px,1fr));gap:12px;padding:14px;border:1px solid #d8dee8;border-radius:10px;background:#f8fafc}
+.usage-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;padding:16px}
+.usage-card{border:1px solid #d8dee8;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:5px;background:#fff}
+.usage-card strong{font-size:1.35rem}
+.usage-card span,.usage-card small,.muted{color:#667085}
+.device-cell{max-width:280px;white-space:normal;font-size:.8rem}
+@media(max-width:800px){.approval-fields{grid-template-columns:1fr}}
+
+.daily-reminder{margin:0 0 14px;padding:16px 18px;border-radius:12px;display:flex;justify-content:space-between;align-items:center;gap:16px;border:1px solid #f2c46d;background:#fff8e8}
+.daily-reminder.sent{border-color:#8ec5e8;background:#eef8ff}
+.daily-reminder p{margin:5px 0 0}
+.report-sheet{padding:20px;display:grid;gap:12px}
+.report-meta{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:14px;border-radius:10px;background:#f5f7fa}
+.report-sheet section{border:1px solid #e3e7ed;border-radius:10px;padding:13px}
+.report-sheet h4{margin:0 0 7px;font-size:.9rem}
+.report-sheet p{white-space:pre-wrap;margin:0;line-height:1.5}
+.inline-setting{display:inline-flex;align-items:center;gap:8px;margin-left:12px}
+.inline-setting input{width:120px;margin:0}
+@media(max-width:720px){.daily-reminder{align-items:flex-start;flex-direction:column}.inline-setting{margin:10px 0 0;display:flex}}
+
+/* ===== VERSION 4.5 CLOUD SYNC ===== */
+.cloud-mini{min-width:190px}
+.cloud-last-sync{display:block;font-size:9px;color:#6b7885;margin-top:2px}
+.cloud-ok{color:#16834a}
+.cloud-error{color:#b42318}
+.cloud-busy{color:#9a6700}
+.cloud-sync-btn{background:#eaf4ff;border:1px solid #8fbce8;color:#174a78}
+.cloud-migrate-btn{background:#fff4df;border:1px solid #e6b45e;color:#754d08}
+.cloud-sync-note{padding:10px 12px;border-radius:9px;background:#eef8ff;border:1px solid #b7d8f0;margin:8px 0}

@@ -1,0 +1,47 @@
+NYSOA ERP — VERSION 4.3
+ACHATS ET TEMPS D’UTILISATION
+
+1. WORKFLOW ACHATS
+Le Gestionnaire choisit :
+- Demandé
+- Approuvé
+- Effectué
+- Livré
+- Refusé
+- Annulé
+
+« Approuvé » signifie que le Gestionnaire a reçu l’autorisation de l’Admin ou de la Direction,
+par exemple par téléphone. L’Admin consulte la situation et l’historique sans devoir cliquer.
+
+Chaque changement mémorise :
+- date et heure ;
+- ancien et nouveau statut ;
+- utilisateur ;
+- observation ;
+- mode et date d’autorisation lorsque le statut est Approuvé.
+
+2. TEMPS D’UTILISATION
+Le Gestionnaire et le Technicien disposent de :
+- Exporter temps d’utilisation.
+
+Le fichier généré est indépendant des données métier :
+TEMPS_UTILISATION_GESTIONNAIRE_001.nysoa
+TEMPS_UTILISATION_CONTROLE_001.nysoa
+
+L’Admin dispose de :
+- Importer temps d’utilisation ;
+- onglet TEMPS D’UTILISATION ;
+- total des heures actives ;
+- nombre de connexions ;
+- détail entrée, sortie ou dernière activité ;
+- export CSV.
+
+Une inactivité supérieure à 15 minutes est comptée comme temps inactif.
+
+3. IMPORT EXCEL ACHATS
+Dans le module ACHATS, le Gestionnaire peut importer en bloc une feuille Excel/CSV.
+Colonnes reconnues automatiquement :
+Référence, Date, Chantier/Projet, Désignation/Article/Produit, Fournisseur,
+Quantité/Qte, Unité, Montant/Total, Statut/Situation, Observation/Remarque.
+
+Les doublons de référence sont ignorés.

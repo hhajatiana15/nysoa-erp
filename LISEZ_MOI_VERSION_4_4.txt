@@ -1,0 +1,26 @@
+NYSOA ERP — VERSION 4.4
+MODULE RAPPORT JOURNALIER ET RAPPELS
+
+Utilisateurs concernés :
+- Gestionnaire
+- Technicien Contrôle & Suivi
+- Admin pour la réception et la consultation
+
+Fonctions principales :
+1. Un seul rapport journalier par utilisateur et par date.
+2. Formulaire adapté au rôle.
+3. Statuts : Brouillon, Complété, Prêt à envoyer, Exporté vers Admin, Reçu par Admin, Consulté, Archivé.
+4. Rappel automatique sur le tableau de bord.
+5. Avertissement à la déconnexion si le rapport n’est pas envoyé.
+6. Heure limite configurable par l’Admin, par défaut 17 h 30.
+7. Export en fichier .nysoa par le Gestionnaire ou le Technicien.
+8. Import par l’Admin avec détection des fichiers déjà importés.
+9. Historique des créations, modifications, exports, réceptions et consultations.
+
+Fichiers produits :
+RAPPORTS_JOURNALIERS_GESTIONNAIRE_YYYY-MM-DD.nysoa
+RAPPORTS_JOURNALIERS_TECHNICIEN_YYYY-MM-DD.nysoa
+
+Important :
+L’application reste une application web statique utilisant localStorage.
+Le transfert vers l’Admin se fait donc par export/import de fichier .nysoa.
