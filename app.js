@@ -12,6 +12,10 @@ function ensureSecurityData(){
  db.dailyReports=Array.isArray(db.dailyReports)?db.dailyReports:[];
  db.importedDailyReportPackets=Array.isArray(db.importedDailyReportPackets)?db.importedDailyReportPackets:[];
  db.dailyReportSettings=db.dailyReportSettings||{deadline:"17:30",logoutReminder:true};
+ db.siteControls=Array.isArray(db.siteControls)?db.siteControls:[];
+ db.modules=db.modules||{};
+ db.modules.attendanceWeekly=Array.isArray(db.modules.attendanceWeekly)?db.modules.attendanceWeekly:[];
+
  save();
 }
 function findUser(username){return (db.users||[]).find(u=>u.username===username);}
@@ -486,7 +490,7 @@ const ADMIN_FINANCE_MENU=[
 ];
 const ADMIN_TECH_MENU=[
  ["dashboardTechnique","◉","TABLEAU DE BORD TECHNIQUE"],
- ["projects","🏗","CHANTIERS"],["planning","📅","PLANNING"],
+ ["projects","🏗","CHANTIERS"],["siteControls","📷","CONTRÔLE CHANTIER"],["planning","📅","PLANNING"],
  ["situations","📊","SITUATION DE TRAVAUX"],["technicalFollowup","🧰","SUIVI JOURNALIER"],
  ["quality","✅","CONTRÔLE QUALITÉ"],["nonConformities","⚠","NON-CONFORMITÉS"],
  ["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],
@@ -496,7 +500,7 @@ const ADMIN_TECH_MENU=[
 const menus={
  ADMIN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["situations","📊","SITUATION DE TRAVAUX"],["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],["fuel","⛽","CARBURANT"],["employees","👥","EMPLOYÉS"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],["treasury","💵","TRÉSORERIE"],["dailyReports","📝","RAPPORTS JOURNALIERS"],["reports","◔","RAPPORTS"],["adminValidations","✅","VALIDATIONS À PUBLIER"],["usageTime","⏱","TEMPS D’UTILISATION"],["trash","🗑","CORBEILLE"],["audit","📜","JOURNAL D’AUDIT"],["settings","⚙","PARAMÈTRES"]],
  GESTIONNAIRE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["employees","👥","EMPLOYÉS"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","DEMANDE D'APPRO."],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS FINANCIERS"]],
- CONTROLE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["situations","📊","SITUATION DE TRAVAUX"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
+ CONTROLE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["siteControls","📷","CONTRÔLE CHANTIER"],["attendance","◷","PRÉSENCE CHANTIER"],["situations","📊","SITUATION DE TRAVAUX"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
 };
 function projectMetrics(id){let p=db.projects.find(x=>x.id===id)||{};let app=sum(db.appro.filter(x=>x.project===id&&x.status==="Validée").map(x=>x.amount));let dep=sum(db.expenses.filter(x=>x.project===id).map(x=>x.amount));return{budget:p.budget||0,app,dep,cash:app-dep,remaining:(p.budget||0)-dep}}
 async function login(u,p){
@@ -558,8 +562,19 @@ function switchWorkspace(workspace){
  else if(workspace==="TECHNIQUE")go("dashboardTechnique");
  else go("dashboard");
 }
-function go(page){cloudCurrentPage=page;document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,projects:projects,expenses:expenses,appro:appro,reports:reports,cash:cash,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,trash:trashPage,audit:auditPage}[page]||generic)(page)}
-function kpi(icon,color,title,value,note=""){return `<div class="kpi"><div class="circle ${color}">${icon}</div><div><small>${title}</small><strong>${value}</strong><span style="font-size:10px;color:#6b7885">${note}</span></div></div>`}
+function go(page){cloudCurrentPage=page;document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,projects:projects,siteControls:siteControlsPage,expenses:expenses,appro:appro,reports:reports,cash:cash,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,trash:trashPage,audit:auditPage}[page]||generic)(page)}
+function kpi(icon,color,title,value,note="",page=""){
+ const routes={
+  "CHANTIERS EN COURS":"projects","NOMBRE DE CHANTIERS":"projects",
+  "RAPPORTS TECHNIQUES":"reports","RAPPORTS VALIDÉS":"reports","NON-CONFORMITÉS":"reports",
+  "TECHNICIENS ACTIFS":"siteControls","EMPLOYÉS ACTIFS":"employees","POINTAGES DU JOUR":"attendance",
+  "DÉPENSES TOTALES":"expenses","APPROVISIONNEMENTS SAISIS":"appro","DEMANDES EN ATTENTE":"appro",
+  "CHIFFRE D’AFFAIRES (TTC)":"invoices"
+ };
+ const target=page||routes[title]||"";
+ return `<div class="kpi ${target?"kpi-link":""}" ${target?`role="button" tabindex="0" onclick="go('${target}')" onkeydown="if(event.key==='Enter')go('${target}')"`:""}>
+ <div class="circle ${color}">${icon}</div><div><small>${title}</small><strong>${value}</strong><span style="font-size:10px;color:#6b7885">${note}</span></div></div>`;
+}
 
 function workspaceBanner(type,title,subtitle){
  return `<div class="workspace-banner ${type}"><div><h2>${title}</h2><p>${subtitle}</p></div><b>${type==="finance"?"💰":"🏗"}</b></div>`;
@@ -637,9 +652,8 @@ function dashboard(){
  let netProfit=totalRevenue-totalDep;
  let activeEmployees=employees.length;
  let todayKey=new Date().toISOString().slice(0,10);
- let attendanceToday=(db.modules.attendance||[])
-   .filter(r=>(r.date||r.values?.[0])===todayKey)
-   .reduce((n,r)=>n+(r.entries||[]).filter(e=>e.present===true).length,0);
+ let attendanceToday=(db.modules.attendanceWeekly||[])
+   .reduce((n,r)=>n+(r.entries||[]).filter(e=>e.states?.[todayKey]==="P").length,0);
  let chartEmpty=`<div class="empty-state">Aucune donnée disponible pour le moment.</div>`;
  let alertItems=[];
  if(stock.length){
@@ -833,40 +847,122 @@ function projectForm(id=""){
    projects();
  };
 }
-function projectTechnicalForm(id){let p=db.projects.find(x=>x.id===id);if(!p)return;$("#content").innerHTML=`<div class="panel"><h3>MODIFIER LE SUIVI TECHNIQUE</h3><form id="fTechProject" class="form-grid"><label>Chantier<input value="${p.id} - ${p.name}" readonly></label><label>Avancement (%)<input name="progress" type="number" min="0" max="100" value="${p.progress||0}" required></label><label>Statut<select name="status">${["Prévu","Non démarré","En cours","Suspendu","Terminé"].map(x=>`<option ${p.status===x?"selected":""}>${x}</option>`).join("")}</select></label><label class="full">Observation technique<textarea name="technicalNote">${p.technicalNote||""}</textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="projects()">Annuler</button></div></form></div>`;$("#fTechProject").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);p.progress=+f.get("progress");p.status=f.get("status");p.technicalNote=f.get("technicalNote");p.lastTechnicalEditor=user.username;p.lastTechnicalEdit=new Date().toISOString();logTechnicalEntry("Modification","Suivi chantier",p.id,`Avancement ${p.progress}%, statut ${p.status}, observation: ${p.technicalNote||""}`);save();projects()}}
-function deleteProject(id){if(!confirm("Supprimer ce chantier et toutes ses données liées ?"))return;db.projects=db.projects.filter(x=>x.id!==id);db.appro=db.appro.filter(x=>x.project!==id);db.expenses=db.expenses.filter(x=>x.project!==id);db.requests=db.requests.filter(x=>x.project!==id);db.reports=db.reports.filter(x=>x.project!==id);save();projects()}
-function expenses(){$("#content").innerHTML=`<div class="panel"><h3>DÉPENSES (JOURNAL)</h3><div class="panel-body"><button class="btn primary" onclick="expenseForm()">Nouvelle dépense</button></div>${expenseTable()}</div>`}
-function expenseTable(){return `<div class="table-wrap"><table><thead><tr><th>N°</th><th>Date</th><th>Chantier</th><th>Catégorie</th><th>Fournisseur</th><th>Montant</th><th>Observation</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${db.expenses.filter(d=>!d.deleted).map(d=>{d.owner=d.owner||"gestionnaire";d.workflow=d.workflow||"Brouillon";return `<tr><td>${d.id}</td><td>${d.date}</td><td>${d.project}</td><td>${d.cat}</td><td>${d.supplier}</td><td>${money(d.amount)}</td><td>${d.note}</td><td>${workflowBadge(d.workflow)}</td><td><div class="edit-actions">${canUserChange(d)?`<button class="btn-xs btn-edit" onclick="expenseForm('${d.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteRecord('expenses','expenses','${d.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showRecordHistory('expenses','${d.id}')">Historique</button></div></td></tr>`}).join("")}</tbody></table></div>`}
-function expenseForm(id=""){let d=id?db.expenses.find(x=>x.id===id):null;if(d&&!canEditRecord(d))return alert("Cette donnée validée ne peut plus être modifiée.");let opts=db.projects.map(p=>`<option value="${p.id}" ${d?.project===p.id?"selected":""}>${p.id} - ${p.name}</option>`).join("");$("#content").innerHTML=`<div class="panel"><h3>${d?"MODIFIER":"NOUVELLE"} DÉPENSE</h3><form id="fExpense" class="form-grid"><label>Date<input name="date" type="date" value="${d?.date||""}" required></label><label>Chantier<select name="project">${opts}</select></label><label>Catégorie<select name="cat">${["Matériaux","Transport","Carburant","Main-d’œuvre","Location matériel","Autre"].map(c=>`<option ${d?.cat===c?"selected":""}>${c}</option>`).join("")}</select></label><label>Fournisseur<input name="supplier" value="${d?.supplier||""}" required></label><label>Montant<input name="amount" type="number" value="${d?.amount||""}" required></label><label>Observation<input name="note" value="${d?.note||""}" required></label><label>Statut<select name="workflow">${["Brouillon","Soumis","À corriger","Validé"].filter(x=>user.role==="ADMIN"||x!=="Validé").map(x=>`<option ${d?.workflow===x?"selected":""}>${x}</option>`).join("")}</select></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="expenses()">Annuler</button></div></form></div>`;$("#fExpense").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target),project=f.get("project"),amount=+f.get("amount"),m=projectMetrics(project);if(user.role==="GESTIONNAIRE"&&amount>m.cash+(d?.amount||0)){alert("Solde caisse insuffisant. Faites une demande d’approvisionnement.");return}let obj={id:d?.id||"DEP-"+String(db.expenses.length+1).padStart(3,"0"),date:f.get("date"),project,cat:f.get("cat"),supplier:f.get("supplier"),amount,note:f.get("note"),owner:d?.owner||user.username,workflow:f.get("workflow"),updatedBy:user.username,updatedAt:new Date().toISOString()};const before=d?cloneRecord(d):null;if(d){pushHistory(d,"Modification",before);Object.assign(d,obj);audit("Modification","expenses",d.id,"Dépense modifiée",before,d)}else{obj.createdAt=new Date().toISOString();obj.history=[];pushHistory(obj,"Création");db.expenses.push(obj);audit("Création","expenses",obj.id,"Dépense créée",null,obj)}save();alert("Dépense enregistrée. Le tableau de bord est actualisé.");dashboard()}}
-function deleteExpense(id){if(user.role!=="ADMIN")return;if(confirm("Supprimer cette dépense ?")){db.expenses=db.expenses.filter(x=>x.id!==id);save();expenses()}}
-function appro(){if(user.role==="GESTIONNAIRE"){requestPage();return}$("#content").innerHTML=`<div class="panel"><h3>APPROVISIONNEMENTS CAISSE</h3><div class="panel-body"><button class="btn primary" onclick="approForm()">Nouvel approvisionnement</button></div><div class="table-wrap"><table><thead><tr><th>N°</th><th>Date</th><th>Chantier</th><th>Montant</th><th>Motif</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${db.appro.map(a=>`<tr><td>${a.id}</td><td>${a.date}</td><td>${a.project}</td><td>${money(a.amount)}</td><td>${a.note}</td><td><span class="badge b-green">${a.status}</span></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="approForm('${a.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="deleteAppro('${a.id}')">Supprimer</button></div></td></tr>`).join("")}</tbody></table></div></div>`}
-function approForm(id=""){let a=id?db.appro.find(x=>x.id===id):null;let opts=db.projects.map(p=>`<option value="${p.id}">${p.id} - ${p.name}</option>`).join("");$("#content").innerHTML=`<div class="panel"><h3>${a?"MODIFIER":"NOUVEL"} APPROVISIONNEMENT</h3><form id="fAppro" class="form-grid"><label>Date<input name="date" type="date" value="${a?.date||""}" required></label><label>Chantier<select name="project">${db.projects.map(p=>`<option value="${p.id}" ${a?.project===p.id?"selected":""}>${p.id} - ${p.name}</option>`).join("")}</select></label><label>Montant<input name="amount" type="number" value="${a?.amount||""}" required></label><label>Motif<input name="note" value="${a?.note||""}" required></label><div class="form-actions full"><button class="btn primary">Valider</button></div></form></div>`;$("#fAppro").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);let obj={id:a?.id||"APP-"+String(db.appro.length+1).padStart(3,"0"),date:f.get("date"),project:f.get("project"),amount:+f.get("amount"),note:f.get("note"),status:"Validée",owner:a?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};if(a)Object.assign(a,obj);else db.appro.push(obj);save();dashboard()}}
-function deleteAppro(id){if(confirm("Supprimer cet approvisionnement ?")){db.appro=db.appro.filter(x=>x.id!==id);save();appro()}}
-function requestPage(){$("#content").innerHTML=`<div class="panel"><h3>DEMANDES D’APPROVISIONNEMENT</h3><div class="panel-body"><button class="btn primary" onclick="requestForm()">Nouvelle demande</button></div><div class="table-wrap"><table><thead><tr><th>N°</th><th>Date</th><th>Chantier</th><th>Montant</th><th>Motif</th><th>Statut</th><th>Observation Admin</th><th>Actions</th></tr></thead><tbody>${db.requests.filter(r=>!r.deleted).map(r=>{r.owner=r.owner||"gestionnaire";r.workflow=r.workflow||r.status||"Brouillon";return `<tr><td>${r.id}</td><td>${r.date}</td><td>${r.project}</td><td>${money(r.amount)}</td><td>${r.reason}</td><td>${workflowBadge(r.workflow)}</td><td>${esc(r.adminObservation||"")}</td><td><div class="edit-actions">${canUserChange(r)?`<button class="btn-xs btn-edit" onclick="requestForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteRecord('requests','requests','${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showRecordHistory('requests','${r.id}')">Historique</button></div></td></tr>`}).join("")}</tbody></table></div></div>`}
-function requestForm(id=""){let r=id?db.requests.find(x=>x.id===id):null;if(r&&!canEditRecord(r))return alert("Cette demande est verrouillée.");let opts=db.projects.map(p=>`<option value="${p.id}">${p.id} - ${p.name}</option>`).join("");$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} DEMANDE D’APPROVISIONNEMENT</h3><form id="fReq" class="form-grid"><label>Date<input name="date" type="date" value="${r?.date||""}" required></label><label>Chantier<select name="project">${opts}</select></label><label>Montant<input name="amount" type="number" required></label><label>Urgence<select name="urgency"><option>Normale</option><option>Urgente</option><option>Critique</option></select></label><label class="full">Motif<textarea name="reason" required></textarea></label><button class="btn primary">Envoyer</button></form></div>`;$("#fReq").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);let obj={id:r?.id||"DEM-"+String(db.requests.length+1).padStart(3,"0"),date:f.get("date"),project:f.get("project"),amount:+f.get("amount"),reason:f.get("reason"),urgency:f.get("urgency"),status:"En attente",workflow:r?.workflow||"Soumis",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};const before=r?cloneRecord(r):null;if(r){pushHistory(r,"Modification",before);Object.assign(r,obj);audit("Modification","requests",r.id,"Demande modifiée",before,r)}else{obj.createdAt=new Date().toISOString();obj.history=[];pushHistory(obj,"Création");db.requests.push(obj);audit("Création","requests",obj.id,"Demande créée",null,obj)}save();alert("Demande enregistrée. Le tableau de bord est actualisé.");dashboard()}}
-function cash(){$("#content").innerHTML=cashTable()}
-function cashTable(){let rows=[...db.appro.filter(a=>a.status==="Validée").map(a=>({date:a.date,ref:a.id,project:a.project,type:"Entrée",amount:a.amount,label:a.note})),...db.expenses.map(d=>({date:d.date,ref:d.id,project:d.project,type:"Sortie",amount:d.amount,label:d.note}))].sort((a,b)=>a.date.localeCompare(b.date)),bal=0;return `<div class="panel"><h3>JOURNAL DE CAISSE</h3><div class="table-wrap"><table><thead><tr><th>Date</th><th>Référence</th><th>Chantier</th><th>Libellé</th><th>Entrée</th><th>Sortie</th><th>Solde</th></tr></thead><tbody>${rows.map(r=>{bal+=r.type==="Entrée"?r.amount:-r.amount;return `<tr><td>${r.date}</td><td>${r.ref}</td><td>${r.project}</td><td>${r.label}</td><td>${r.type==="Entrée"?money(r.amount):""}</td><td>${r.type==="Sortie"?money(r.amount):""}</td><td><b>${money(bal)}</b></td></tr>`}).join("")}</tbody></table></div></div>`}
 
-function usersManagement(){
- if(!user)return dashboard();
+function readImageCompressed(file,maxWidth=1280,quality=.72){
+ return new Promise((resolve,reject)=>{
+  if(!file)return resolve("");
+  if(!file.type.startsWith("image/"))return reject(new Error("Le fichier sélectionné n’est pas une image."));
+  const reader=new FileReader();
+  reader.onerror=()=>reject(new Error("Lecture de l’image impossible."));
+  reader.onload=()=>{
+   const img=new Image();
+   img.onerror=()=>reject(new Error("Image invalide."));
+   img.onload=()=>{
+    const scale=Math.min(1,maxWidth/img.width);
+    const canvas=document.createElement("canvas");
+    canvas.width=Math.max(1,Math.round(img.width*scale));
+    canvas.height=Math.max(1,Math.round(img.height*scale));
+    canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
+    resolve(canvas.toDataURL("image/jpeg",quality));
+   };
+   img.src=reader.result;
+  };
+  reader.readAsDataURL(file);
+ });
+}
+function canChangeSiteControl(r){
+ return user.role==="ADMIN" || (user.role==="CONTROLE" && r.owner===user.username && r.workflow!=="Validé");
+}
+function siteControlsPage(){
  ensureSecurityData();
- $("#content").innerHTML=`<div class="panel">
-  <h3>GESTION DES UTILISATEURS</h3>
-  <div class="panel-body"><button class="btn primary" onclick="userForm()">Ajouter un utilisateur</button></div>
-  <div class="table-wrap"><table>
-   <thead><tr><th>Utilisateur</th><th>Nom affiché</th><th>Rôle</th><th>État du compte</th><th>Présence</th><th>Dernière connexion</th><th>Actions</th></tr></thead>
-   <tbody>${db.users.map(u=>`<tr>
-    <td><b>${esc(u.username)}</b></td><td>${esc(u.label)}</td><td>${esc(u.role)}</td>
-    <td>${u.active?"Autorisé":"Désactivé"}</td>
-    <td><span class="status-pill ${userStatus(u)==="Actif"?"status-active":"status-passive"}">${userStatus(u)}</span></td>
-    <td>${u.lastLogin?new Date(u.lastLogin).toLocaleString("fr-FR"):"Jamais"}</td>
-    <td><div class="edit-actions">
-      <button class="btn-xs btn-edit" onclick="userForm('${esc(u.username)}')">Modifier</button>
-      ${u.username!=="admin"?`<button class="btn-xs ${u.active?"btn-delete":"btn-edit"}" onclick="toggleUser('${esc(u.username)}')">${u.active?"Désactiver":"Activer"}</button>`:""}
-    </div></td>
-   </tr>`).join("")}</tbody>
-  </table></div>
- </div>`;
+ const rows=(db.siteControls||[]).filter(r=>!r.deleted);
+ $("#content").innerHTML=`<div class="panel"><h3>CONTRÔLE CHANTIER AVEC PHOTO</h3>
+ <div class="panel-body">
+  ${["ADMIN","CONTROLE"].includes(user.role)?'<button class="btn primary" onclick="siteControlForm()">+ Nouveau contrôle</button>':""}
+  <div class="notice">Le Technicien enregistre le contrôle, l’effectif présent et une photo. L’Admin peut consulter, modifier, valider ou supprimer.</div>
+ </div>
+ <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Ouvriers</th><th>Manœuvres</th><th>Total</th><th>Observation</th><th>Photo</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
+ ${rows.length?rows.map(r=>`<tr>
+ <td>${esc(r.date)}</td><td>${esc(r.project)}</td><td>${r.workers||0}</td><td>${r.labourers||0}</td><td><b>${(+r.workers||0)+(+r.labourers||0)}</b></td>
+ <td>${esc(r.note||"")}</td>
+ <td>${r.photo?`<img class="site-photo-thumb" src="${r.photo}" onclick="openSitePhoto('${r.id}')" alt="Photo contrôle">`:"Aucune"}</td>
+ <td>${workflowBadge(r.workflow||"Soumis")}</td>
+ <td><div class="edit-actions">
+ ${canChangeSiteControl(r)?`<button class="btn-xs btn-edit" onclick="siteControlForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="deleteSiteControl('${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}
+ ${user.role==="ADMIN"&&r.workflow!=="Validé"?`<button class="btn-xs" onclick="validateSiteControl('${r.id}')">Valider</button>`:""}
+ </div></td></tr>`).join(""):`<tr><td colspan="9"><div class="empty-state">Aucun contrôle chantier enregistré.</div></td></tr>`}
+ </tbody></table></div></div>`;
+}
+function siteControlForm(id=""){
+ ensureSecurityData();
+ const r=id?db.siteControls.find(x=>x.id===id):null;
+ if(r&&!canChangeSiteControl(r))return alert("Ce contrôle est verrouillé.");
+ $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEAU"} CONTRÔLE CHANTIER</h3>
+ <form id="fSiteControl" class="form-grid">
+ <label>Date<input name="date" type="date" value="${r?.date||new Date().toISOString().slice(0,10)}" required></label>
+ <label>Chantier<select name="project" required>${db.projects.filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${r?.project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label>
+ <label>Nombre d’ouvriers<input name="workers" type="number" min="0" value="${r?.workers??0}" required></label>
+ <label>Nombre de manœuvres<input name="labourers" type="number" min="0" value="${r?.labourers??0}" required></label>
+ <label class="full">Travaux contrôlés / Observation<textarea name="note" required>${esc(r?.note||"")}</textarea></label>
+ <label class="full">Photo chantier<input name="photo" type="file" accept="image/*" capture="environment"></label>
+ ${r?.photo?`<div class="full"><img class="site-photo-preview" src="${r.photo}" alt="Photo actuelle"></div>`:""}
+ <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="siteControlsPage()">Annuler</button></div>
+ </form></div>`;
+ $("#fSiteControl").onsubmit=async e=>{
+  e.preventDefault();
+  const btn=e.target.querySelector("button");if(btn)btn.disabled=true;
+  try{
+   const f=new FormData(e.target),file=e.target.elements.photo.files?.[0];
+   const photo=file?await readImageCompressed(file):r?.photo||"";
+   const obj={
+    id:r?.id||"CTL-"+Date.now(),date:f.get("date"),project:f.get("project"),
+    workers:+f.get("workers")||0,labourers:+f.get("labourers")||0,note:f.get("note"),photo,
+    owner:r?.owner||user.username,workflow:r?.workflow||"Soumis",
+    updatedBy:user.username,updatedAt:new Date().toISOString()
+   };
+   if(r)Object.assign(r,obj);else{obj.createdAt=new Date().toISOString();db.siteControls.push(obj);}
+   audit(r?"Modification":"Création","siteControls",obj.id,`Contrôle ${obj.project}: ${obj.workers} ouvriers, ${obj.labourers} manœuvres`);
+   save();siteControlsPage();
+  }catch(err){alert(err.message||"Enregistrement impossible.");}
+  finally{if(btn)btn.disabled=false;}
+ };
+}
+function deleteSiteControl(id){
+ const r=db.siteControls.find(x=>x.id===id);if(!r||!canChangeSiteControl(r))return;
+ if(!confirm("Supprimer ce contrôle chantier ?"))return;
+ r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=user.username;save();siteControlsPage();
+}
+function validateSiteControl(id){
+ if(user.role!=="ADMIN")return;
+ const r=db.siteControls.find(x=>x.id===id);if(!r)return;
+ r.workflow="Validé";r.validatedBy=user.username;r.validatedAt=new Date().toISOString();save();siteControlsPage();
+}
+function openSitePhoto(id){
+ const r=db.siteControls.find(x=>x.id===id);if(!r?.photo)return;
+ const w=window.open("","_blank");w.document.write(`<title>Photo ${esc(r.project)}</title><img src="${r.photo}" style="max-width:100%;height:auto">`);
+}
+
+function projectTechnicalForm(id){
+ let p=db.projects.find(x=>x.id===id);if(!p)return;
+ $("#content").innerHTML=`<div class="panel"><h3>MODIFIER LE SUIVI TECHNIQUE</h3>
+ <form id="fTechProject" class="form-grid">
+ <label>Chantier<input value="${esc(p.id)} - ${esc(p.name)}" readonly></label>
+ <label>Avancement (%)<input name="progress" type="number" min="0" max="100" value="${p.progress||0}" required></label>
+ <label>Statut<select name="status">${["Prévu","Non démarré","En cours","Suspendu","Terminé"].map(x=>`<option ${p.status===x?"selected":""}>${x}</option>`).join("")}</select></label>
+ <label>Ouvriers présents<input name="workers" type="number" min="0" value="${p.workersPresent||0}"></label>
+ <label>Manœuvres présents<input name="labourers" type="number" min="0" value="${p.labourersPresent||0}"></label>
+ <label class="full">Observation technique<textarea name="technicalNote">${esc(p.technicalNote||"")}</textarea></label>
+ <div class="form-actions full"><button class="btn primary">Enregistrer</button>
+ <button type="button" class="btn secondary" onclick="siteControlForm('${p.id}')">Contrôle avec photo</button>
+ <button type="button" class="btn secondary" onclick="projects()">Annuler</button></div></form></div>`;
+ $("#fTechProject").onsubmit=e=>{
+  e.preventDefault();let f=new FormData(e.target);
+  p.progress=+f.get("progress");p.status=f.get("status");p.technicalNote=f.get("technicalNote");
+  p.workersPresent=+f.get("workers")||0;p.labourersPresent=+f.get("labourers")||0;
+  p.lastTechnicalEditor=user.username;p.lastTechnicalEdit=new Date().toISOString();
+  logTechnicalEntry("Modification","Suivi chantier",p.id,`Avancement ${p.progress}%, statut ${p.status}, ouvriers ${p.workersPresent}, manœuvres ${p.labourersPresent}`);
+  save();projects();
+ };
 }
 function userForm(username=""){
  const existing=username?findUser(username):null;
@@ -933,134 +1029,80 @@ function reports(){$("#content").innerHTML=`<div class="panel"><h3>${user.role==
 function reportsTable(){return `<div class="table-wrap"><table><thead><tr><th>N°</th><th>Date</th><th>Chantier</th><th>Avancement</th><th>Travaux contrôlés</th><th>Conformité</th><th>Incident</th><th>Action</th><th>Statut</th><th>Observation Admin</th><th>Actions</th></tr></thead><tbody>${db.reports.filter(r=>!r.deleted).map(r=>`<tr><td>${r.id}</td><td>${r.date}</td><td>${r.project}</td><td>${r.progress}%</td><td>${r.work}</td><td>${r.conformity}</td><td>${r.issue}</td><td>${r.action}</td><td>${workflowBadge(r.workflow||r.status)}</td><td>${esc(r.adminObservation||"")}</td><td><div class="edit-actions">${canUserChange(r)?`<button class="btn-xs btn-edit" onclick="reportForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteRecord('reports','reports','${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showRecordHistory('reports','${r.id}')">Historique</button></div></td></tr>`).join("")}</tbody></table></div>`}
 function reportForm(id=""){let r=id?db.reports.find(x=>x.id===id):null;if(r&&!canUserChange(r))return alert("Ce rapport est verrouillé ou ne vous appartient pas.");let opts=db.projects.map(p=>`<option value="${p.id}">${p.id} - ${p.name}</option>`).join("");$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEAU"} RAPPORT CONTRÔLE & SUIVI</h3><form id="fReport" class="form-grid"><label>Date<input name="date" type="date" value="${r?.date||""}" required></label><label>Chantier<select name="project">${db.projects.map(p=>`<option value="${p.id}" ${r?.project===p.id?"selected":""}>${p.id} - ${p.name}</option>`).join("")}</select></label><label>Avancement réel (%)<input name="progress" type="number" min="0" max="100" value="${r?.progress??0}" required></label><label>Conformité<select name="conformity"><option ${r?.conformity==="Conforme"?"selected":""}>Conforme</option><option ${r?.conformity==="Non conforme"?"selected":""}>Non conforme</option></select></label><label class="full">Travaux contrôlés<textarea name="work" required>${r?.work||""}</textarea></label><label>Incident / Blocage<input name="issue" value="${r?.issue||""}"></label><label>Action corrective<input name="action" value="${r?.action||""}" required></label><button class="btn primary">Enregistrer</button></form></div>`;$("#fReport").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);let obj={id:r?.id||"RAP-"+String(db.reports.length+1).padStart(3,"0"),owner:r?.owner||user.username,date:f.get("date"),project:f.get("project"),progress:+f.get("progress"),work:f.get("work"),conformity:f.get("conformity"),issue:f.get("issue")||"Aucun",action:f.get("action"),status:r?.status||"À valider",updatedAt:new Date().toISOString()};const before=r?cloneRecord(r):null;obj.workflow=r?.workflow||"Soumis";obj.updatedBy=user.username;if(r){pushHistory(r,"Modification",before);Object.assign(r,obj);audit("Modification","reports",r.id,"Rapport modifié",before,r)}else{obj.createdAt=new Date().toISOString();obj.history=[];pushHistory(obj,"Création");db.reports.push(obj);audit("Création","reports",obj.id,"Rapport créé",null,obj)}logTechnicalEntry(r?"Modification":"Création","Rapport technique",obj.id,`Chantier ${obj.project}, avancement ${obj.progress}%, ${obj.conformity}`);save();reports()}}
 function deleteReport(id){if(confirm("Supprimer ce rapport ?")){db.reports=db.reports.filter(x=>x.id!==id);save();reports()}}
+function mondayOf(dateStr){
+ const d=new Date(dateStr+"T12:00:00");const day=(d.getDay()+6)%7;d.setDate(d.getDate()-day);
+ return d.toISOString().slice(0,10);
+}
+function addDays(dateStr,n){const d=new Date(dateStr+"T12:00:00");d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);}
 function attendance(){
- const employees=db.modules.employees||[];
- const records=db.modules.attendance||[];
+ ensureSecurityData();
+ const employees=(db.modules.employees||[]).filter(r=>!r.deleted);
  const today=new Date().toISOString().slice(0,10);
  const selectedDate=sessionStorage.getItem("nysoa_attendance_date")||today;
- const selectedProject=sessionStorage.getItem("nysoa_attendance_project")||"";
- const month=selectedDate.slice(0,7);
- const dayRecord=records.find(r=>r.date===selectedDate&&r.project===selectedProject);
-
- const employeeKey=(r,index)=>r.values?.[0]||`EMP-${index+1}`;
- const presentDays=key=>records.filter(r=>r.date?.startsWith(month))
-   .reduce((n,r)=>n+(r.entries||[]).some(e=>e.employeeKey===key&&e.present===true)?1:0,0);
-
- $("#content").innerHTML=`<div class="panel">
-   <h3>LISTE DE PRÉSENCE DES EMPLOYÉS</h3>
-   <div class="panel-body">
-     <div class="form-grid">
-       <label>Date<input id="attendanceDate" type="date" value="${selectedDate}"></label>
-       <label>Chantier
-         <select id="attendanceProject">
-           <option value="">Tous / Siège</option>
-           ${db.projects.map(p=>`<option value="${esc(p.id)}" ${selectedProject===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}
-         </select>
-       </label>
-       <div class="form-actions full">
-         <button class="btn primary" type="button" onclick="saveAttendance()">Enregistrer la présence</button>
-       </div>
-     </div>
-     <div class="attendance-note">Cochez uniquement les employés présents. Une case vide signifie que l’employé est absent.</div>
-   </div>
-
-   <div class="table-wrap">
-     <table class="attendance-table">
-       <thead><tr>
-         <th class="center">Présent</th>
-         <th>Matricule</th>
-         <th>Nom complet</th>
-         <th>Fonction</th>
-         <th class="num">Jours de présence (${month})</th>
-         <th class="num">Salaire journalier</th>
-         <th class="num">Salaire à payer</th>
-       </tr></thead>
-       <tbody>
-       ${employees.length?employees.map((r,i)=>{
-         const key=employeeKey(r,i);
-         const entry=(dayRecord?.entries||[]).find(e=>e.employeeKey===key);
-         const checked=entry?.present===true?"checked":"";
-         const salary=+(entry?.dailySalary ?? r.values?.[3] ?? 0);
-         const days=presentDays(key);
-         return `<tr>
-           <td class="center"><label class="presence-check-label"><input class="attendance-check" type="checkbox" data-key="${esc(key)}" ${checked}></label></td>
-           <td>${esc(r.values?.[0]||"")}</td>
-           <td><b>${esc(r.values?.[1]||"")}</b></td>
-           <td>${esc(r.values?.[2]||"")}</td>
-           <td class="num"><b>${days}</b></td>
-           <td><input class="attendance-salary num" type="number" min="0" step="1" data-key="${esc(key)}" value="${salary}" placeholder="0"></td>
-           <td class="num salary-due" data-key="${esc(key)}"><b>${money(days*salary)}</b></td>
-         </tr>`;
-       }).join(""):`<tr><td colspan="7"><div class="empty-state">Aucun employé enregistré. Ajoutez d’abord les employés dans le module Employés.</div></td></tr>`}
-       </tbody>
-       <tfoot><tr>
-         <th colspan="4">TOTAL DU MOIS</th>
-         <th class="num">${employees.reduce((t,r,i)=>t+presentDays(employeeKey(r,i)),0)} jour(s)</th>
-         <th></th>
-         <th class="num">${money(employees.reduce((t,r,i)=>{
-           const key=employeeKey(r,i);
-           const entry=(dayRecord?.entries||[]).find(e=>e.employeeKey===key);
-           const salary=+(entry?.dailySalary ?? r.values?.[3] ?? 0);
-           return t+presentDays(key)*salary;
-         },0))}</th>
-       </tr></tfoot>
-     </table>
-   </div>
- </div>`;
-
- $("#attendanceDate").onchange=e=>{
-   sessionStorage.setItem("nysoa_attendance_date",e.target.value);
-   attendance();
- };
- $("#attendanceProject").onchange=e=>{
-   sessionStorage.setItem("nysoa_attendance_project",e.target.value);
-   attendance();
- };
- document.querySelectorAll(".attendance-salary").forEach(input=>{
-   input.addEventListener("input",()=>{
-     const key=input.dataset.key;
-     const amount=presentDays(key)*(+input.value||0);
-     const cell=document.querySelector(`.salary-due[data-key="${CSS.escape(key)}"]`);
-     if(cell)cell.innerHTML=`<b>${money(amount)}</b>`;
-   });
- });
+ const weekStart=mondayOf(selectedDate);
+ const project=sessionStorage.getItem("nysoa_attendance_project")||"";
+ const days=["L","M","M","J","V","S","D"].map((label,i)=>({label,date:addDays(weekStart,i)}));
+ let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);
+ const entries=record?.entries||[];
+ const keyOf=(r,i)=>r.values?.[0]||`EMP-${i+1}`;
+ $("#content").innerHTML=`<div class="panel"><h3>PRÉSENCE HEBDOMADAIRE DU PERSONNEL</h3>
+ <div class="panel-body"><div class="form-grid">
+ <label>Semaine contenant le<input id="attendanceDate" type="date" value="${selectedDate}"></label>
+ <label>Chantier<select id="attendanceProject"><option value="">Tous / Siège</option>${db.projects.filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label>
+ <div class="form-actions full"><button class="btn primary" onclick="saveAttendance()">Enregistrer la semaine</button></div>
+ </div><div class="attendance-note">Cochez Présent ou Absent pour chaque jour. Le total et le montant sont calculés automatiquement. Paiement hebdomadaire à cocher en fin de semaine.</div></div>
+ <div class="table-wrap"><table class="attendance-table weekly-attendance"><thead><tr>
+ <th>Matricule</th><th>Nom</th><th>Fonction</th>
+ ${days.map(d=>`<th class="center">${d.label}<small>${d.date.slice(8,10)}</small></th>`).join("")}
+ <th>Total jours</th><th>Salaire/jour</th><th>Montant</th><th>Payé</th><th>Action</th></tr></thead><tbody>
+ ${employees.length?employees.map((r,i)=>{
+  const key=keyOf(r,i),entry=entries.find(e=>e.employeeKey===key)||{};
+  const states=entry.states||{};
+  const salary=+(entry.dailySalary??r.values?.[3]??0);
+  const total=days.reduce((n,d)=>n+(states[d.date]==="P"?1:0),0);
+  return `<tr data-employee="${esc(key)}"><td>${esc(r.values?.[0]||"")}</td><td><b>${esc(r.values?.[1]||"")}</b></td><td>${esc(r.values?.[2]||"")}</td>
+  ${days.map(d=>`<td class="center"><select class="attendance-state" data-key="${esc(key)}" data-date="${d.date}"><option value="">—</option><option value="P" ${states[d.date]==="P"?"selected":""}>P</option><option value="A" ${states[d.date]==="A"?"selected":""}>A</option></select></td>`).join("")}
+  <td class="num attendance-total" data-key="${esc(key)}"><b>${total}</b></td>
+  <td><input class="attendance-salary num" data-key="${esc(key)}" type="number" min="0" value="${salary}"></td>
+  <td class="num attendance-amount" data-key="${esc(key)}"><b>${money(total*salary)}</b></td>
+  <td class="center"><input class="attendance-paid" data-key="${esc(key)}" type="checkbox" ${entry.paid?"checked":""}><small>${entry.paidAt?new Date(entry.paidAt).toLocaleDateString("fr-FR"):""}</small></td>
+  <td><button class="btn-xs btn-delete" onclick="clearAttendanceEmployee('${esc(key)}')">Effacer</button></td></tr>`;
+ }).join(""):`<tr><td colspan="15"><div class="empty-state">Ajoutez d’abord le personnel dans Employés.</div></td></tr>`}
+ </tbody></table></div>
+ <div class="panel-body"><b>Semaine : ${weekStart} au ${addDays(weekStart,6)}</b> — Paiements cochés : ${entries.filter(e=>e.paid).length}</div></div>`;
+ $("#attendanceDate").onchange=e=>{sessionStorage.setItem("nysoa_attendance_date",e.target.value);attendance();};
+ $("#attendanceProject").onchange=e=>{sessionStorage.setItem("nysoa_attendance_project",e.target.value);attendance();};
+ document.querySelectorAll(".attendance-state,.attendance-salary").forEach(el=>el.onchange=()=>refreshAttendanceRow(el.dataset.key));
 }
-
+function refreshAttendanceRow(key){
+ const states=[...document.querySelectorAll(`.attendance-state[data-key="${CSS.escape(key)}"]`)];
+ const total=states.filter(x=>x.value==="P").length;
+ const salary=+document.querySelector(`.attendance-salary[data-key="${CSS.escape(key)}"]`)?.value||0;
+ const t=document.querySelector(`.attendance-total[data-key="${CSS.escape(key)}"]`);if(t)t.innerHTML=`<b>${total}</b>`;
+ const a=document.querySelector(`.attendance-amount[data-key="${CSS.escape(key)}"]`);if(a)a.innerHTML=`<b>${money(total*salary)}</b>`;
+}
 function saveAttendance(){
- const date=$("#attendanceDate")?.value;
- const project=$("#attendanceProject")?.value||"";
- if(!date)return alert("Veuillez choisir une date.");
-
- const employees=db.modules.employees||[];
- db.modules.attendance=db.modules.attendance||[];
- let record=db.modules.attendance.find(r=>r.date===date&&r.project===project);
-
+ const selectedDate=$("#attendanceDate")?.value,project=$("#attendanceProject")?.value||"";
+ if(!selectedDate)return alert("Choisissez une date.");
+ const weekStart=mondayOf(selectedDate),employees=(db.modules.employees||[]).filter(r=>!r.deleted);
+ let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);
  const entries=employees.map((r,i)=>{
-   const key=r.values?.[0]||`EMP-${i+1}`;
-   const checkbox=document.querySelector(`.attendance-check[data-key="${CSS.escape(key)}"]`);
-   const salaryInput=document.querySelector(`.attendance-salary[data-key="${CSS.escape(key)}"]`);
-   const salary=Math.max(0,+salaryInput?.value||0);
-   if(r.values)r.values[3]=String(salary);
-   return {employeeKey:key,present:checkbox?.checked===true,dailySalary:salary};
+  const key=r.values?.[0]||`EMP-${i+1}`,states={};
+  document.querySelectorAll(`.attendance-state[data-key="${CSS.escape(key)}"]`).forEach(x=>{if(x.value)states[x.dataset.date]=x.value;});
+  const dailySalary=Math.max(0,+document.querySelector(`.attendance-salary[data-key="${CSS.escape(key)}"]`)?.value||0);
+  if(r.values)r.values[3]=String(dailySalary);
+  const paid=document.querySelector(`.attendance-paid[data-key="${CSS.escape(key)}"]`)?.checked===true;
+  const old=record?.entries?.find(e=>e.employeeKey===key);
+  return {employeeKey:key,states,dailySalary,paid,paidAt:paid?(old?.paidAt||new Date().toISOString()):""};
  });
-
- if(record){
-   record.entries=entries;
-   record.updatedBy=user.username;
-   record.updatedAt=new Date().toISOString();
- }else{
-   db.modules.attendance.push({
-     id:"ATT-"+Date.now(),
-     date,project,entries,
-     owner:user.username,
-     updatedBy:user.username,
-     updatedAt:new Date().toISOString(),
-     workflow:"Brouillon"
-   });
- }
- save();
- alert("Présence enregistrée avec succès.");
- attendance();
+ if(record){record.entries=entries;record.updatedAt=new Date().toISOString();record.updatedBy=user.username;}
+ else db.modules.attendanceWeekly.push({id:"ATTW-"+Date.now(),weekStart,project,entries,owner:user.username,updatedBy:user.username,updatedAt:new Date().toISOString()});
+ save();alert("Présence hebdomadaire enregistrée.");attendance();
+}
+function clearAttendanceEmployee(key){
+ document.querySelectorAll(`.attendance-state[data-key="${CSS.escape(key)}"]`).forEach(x=>x.value="");
+ const paid=document.querySelector(`.attendance-paid[data-key="${CSS.escape(key)}"]`);if(paid)paid.checked=false;
+ refreshAttendanceRow(key);
 }
 
 

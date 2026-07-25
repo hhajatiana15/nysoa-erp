@@ -1,0 +1,37 @@
+NYSOA ERP — PATCH CODE V4.5.2
+CHANTIER, PHOTOS ET PRÉSENCE HEBDOMADAIRE
+
+Fonctions ajoutées / consolidées
+1. Modifier / supprimer un chantier (déjà présent, conservé et sécurisé).
+2. Contrôle chantier par le Technicien avec :
+   - photo compressée,
+   - chantier,
+   - date,
+   - ouvriers,
+   - manœuvres,
+   - observation,
+   - validation Admin.
+3. Présence hebdomadaire :
+   - L / M / M / J / V / S / D,
+   - Présent / Absent,
+   - total de jours,
+   - salaire par jour,
+   - montant calculé,
+   - paiement hebdomadaire coché.
+4. Cartes KPI du tableau de bord cliquables vers les détails.
+5. Modifier / supprimer disponible dans les modules enregistrables, selon rôle et verrouillage.
+
+INSTALLATION
+Ce patch contient des modifications structurelles de app.js/styles.css.
+Il NE PEUT PAS être installé par l’ancien moteur .nyupdate de données.
+1. Sauvegarder le dépôt GitHub actuel.
+2. Uploader app.js, styles.css et index.html de ce ZIP dans le dépôt.
+3. Commit changes.
+4. Attendre GitHub Pages.
+5. Faire un rechargement forcé.
+6. Tester Admin, Gestionnaire et Technicien.
+
+IMPORTANT
+- Conserver le ZIP STABLE V4.5 précédent pour retour arrière.
+- Les photos sont compressées puis stockées dans la base locale du navigateur dans cette phase.
+- La synchronisation Cloud des photos nécessitera Firebase Storage dans une phase ultérieure.
