@@ -626,6 +626,8 @@ function dashboardTechnique(){
 function dashboard(){
  let totalBudget=sum(db.projects.map(x=>x.budget));
  let totalApp=sum(db.appro.filter(x=>x.status==="Validée").map(x=>x.amount));
+ let totalRequests=sum(db.requests.map(x=>+x.amount||0));
+ let totalAppDisplayed=user.role==="GESTIONNAIRE"?totalApp+totalRequests:totalApp;
  let totalDep=sum(db.expenses.map(x=>x.amount));
  let cashBal=totalApp-totalDep;
  let invoices=db.modules.invoices||[];
