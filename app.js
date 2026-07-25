@@ -683,7 +683,7 @@ function projectContextNotice(){
  return `<div class="project-context-note">🏗 Chantier sélectionné : <b>${esc(pr?.name||p)}</b> <button class="btn-xs" onclick="setGlobalProjectContext('')">Afficher tout</button></div>`;
 }
 
-function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,invoices:invoicesPage,projects:projects,siteControls:siteControlsPage,reports:reports,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
+function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,invoices:invoicesPage,employees:employeesPage,payroll:payrollPage,projects:projects,siteControls:siteControlsPage,reports:reports,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
 function kpi(icon,color,title,value,note="",page=""){
  const routes={
   "CHANTIERS EN COURS":"projects","NOMBRE DE CHANTIERS":"projects",
@@ -693,7 +693,7 @@ function kpi(icon,color,title,value,note="",page=""){
   "CHIFFRE D’AFFAIRES (TTC)":"invoices"
  };
  const target=page||routes[title]||"";
- const detail=title==="CHIFFRE D’AFFAIRES (TTC)"?"revenue":title==="EMPLOYÉS ACTIFS"?"employees":(title==="CHANTIERS EN COURS"||title==="NOMBRE DE CHANTIERS")?"projects":"";
+ const detail=title==="CHIFFRE D’AFFAIRES (TTC)"?"revenue":title==="DÉPENSES TOTALES"?"expenses":title==="DÉPENSES RÉELLES"?"expenses":title==="EMPLOYÉS ACTIFS"?"employees":(title==="CHANTIERS EN COURS"||title==="NOMBRE DE CHANTIERS")?"projects":"";
  const action=detail?`dashboardDetail('${detail}')`:(target?`go('${target}')`:"");
  return `<div class="kpi ${action?"kpi-link":""}" ${action?`role="button" tabindex="0" onclick="${action}" onkeydown="if(event.key==='Enter')${action}"`:""}>
  <div class="circle ${color}">${icon}</div><div><small>${title}</small><strong>${value}</strong><span style="font-size:10px;color:#6b7885">${note}</span></div></div>`;
@@ -702,18 +702,28 @@ function kpi(icon,color,title,value,note="",page=""){
 function workspaceBanner(type,title,subtitle){
  return `<div class="workspace-banner ${type}"><div><h2>${title}</h2><p>${subtitle}</p></div><b>${type==="finance"?"💰":"🏗"}</b></div>`;
 }
+
+function payrollExpenseTotal(){
+ return (db.modules?.payroll||[])
+  .filter(r=>!r.deleted&&r.workflow!=="En attente")
+  .reduce((n,r)=>n+(+r.netPaid||+r.grossAmount||+(r.values?.[2]||0)||0),0);
+}
+function totalOperatingExpenses(){
+ return sum((db.expenses||[]).filter(x=>!x.deleted).map(x=>+x.amount||0))+payrollExpenseTotal();
+}
+
 function dashboardFinance(){
  let totalApp=sum(db.appro.filter(x=>x.status==="Validée").map(x=>x.amount));
  let totalRequests=sum(db.requests.map(x=>+x.amount||0));
  let totalAppDisplayed=user.role==="GESTIONNAIRE"?totalApp+totalRequests:totalApp;
- let totalDep=sum(db.expenses.map(x=>x.amount));
+ let totalDep=totalOperatingExpenses();
  let cashBal=totalApp-totalDep;
  let totalBudget=sum(db.projects.map(x=>x.budget));
  $("#content").innerHTML=workspaceBanner("finance","ESPACE FINANCE","Gestion confidentielle des budgets, caisse, achats, paie, banque et trésorerie")+
  `<div class="kpis">
  ${kpi("💼","green","BUDGET TOTAL PROJETS",money(totalBudget),"ADMIN uniquement")}
  ${kpi("💵","blue","APPROVISIONNEMENTS",money(totalApp))}
- ${kpi("💸","orange","DÉPENSES RÉELLES",money(totalDep))}
+ ${kpi("💸","orange","DÉPENSES RÉELLES",money(totalDep),"Dépenses + salaires")}
  ${kpi("👛","purple","SOLDE CAISSE",money(cashBal))}
  ${kpi("📋","teal","DEMANDES EN ATTENTE",db.requests.filter(x=>x.status==="En attente").length)}
  </div>
@@ -766,7 +776,7 @@ function dashboard(){
  let totalApp=sum(db.appro.filter(x=>x.status==="Validée").map(x=>x.amount));
  let totalRequests=sum(db.requests.map(x=>+x.amount||0));
  let totalAppDisplayed=user.role==="GESTIONNAIRE"?totalApp+totalRequests:totalApp;
- let totalDep=sum(db.expenses.map(x=>x.amount));
+ let totalDep=totalOperatingExpenses();
  let cashBal=totalApp-totalDep;
  let invoices=db.modules.invoices||[];
  let employees=db.modules.employees||[];
@@ -831,7 +841,7 @@ function dashboard(){
   <div class="panel"><h3>AVANCEMENT DES CHANTIERS</h3>${db.projects.length?projectsTable(true):chartEmpty}</div>
   <div>
    <div class="panel"><h3>SITUATION FINANCIÈRE GLOBALE</h3><div class="panel-body">
-    <table><tr><td>Total budget projets</td><td><b>${money(totalBudget)}</b></td></tr><tr><td>Approvisionnements caisse</td><td>${money(totalApp)}</td></tr><tr><td>Dépenses réelles</td><td>${money(totalDep)}</td></tr><tr><td>Disponible caisse</td><td style="color:#078b4c"><b>${money(cashBal)}</b></td></tr></table>
+    <table><tr><td>Total budget projets</td><td><b>${money(totalBudget)}</b></td></tr><tr><td>Approvisionnements caisse</td><td>${money(totalApp)}</td></tr><tr><td>Dépenses réelles (dont salaires)</td><td>${money(totalDep)}</td></tr><tr><td>Disponible caisse</td><td style="color:#078b4c"><b>${money(cashBal)}</b></td></tr></table>
    </div></div>
   </div>
  </div>
@@ -1338,6 +1348,151 @@ function purchaseHistory(id){
  <div class="table-wrap"><table><thead><tr><th>Date et heure</th><th>Utilisateur</th><th>Action</th><th>Détails</th></tr></thead><tbody>
  ${rows.length?rows.map(h=>`<tr><td>${new Date(h.date).toLocaleString("fr-FR")}</td><td>${esc(h.user)} (${esc(h.role)})</td><td>${esc(h.action)}</td><td>${esc(h.details||"")}</td></tr>`).join(""):`<tr><td colspan="4">Aucun historique.</td></tr>`}
  </tbody></table></div></div>`;
+}
+
+
+
+// ===== EMPLOYÉS & PAIE V4.5.5 =====
+function employeeRows(){
+ db.modules.employees=Array.isArray(db.modules.employees)?db.modules.employees:[];
+ return db.modules.employees.filter(r=>!r.deleted);
+}
+function payrollRows(){
+ db.modules.payroll=Array.isArray(db.modules.payroll)?db.modules.payroll:[];
+ return db.modules.payroll.filter(r=>!r.deleted);
+}
+function employeeName(e){return e?.name||e?.values?.[0]||"";}
+function employeeCategory(e){return e?.category||e?.values?.[1]||"";}
+function employeeRole(e){return e?.jobTitle||e?.values?.[2]||"";}
+function employeePayCycle(e){return e?.payCycle||e?.values?.[3]||"Hebdomadaire";}
+function employeeBaseSalary(e){return +(e?.baseSalary||e?.values?.[4]||0);}
+function employeeProject(e){return e?.project||e?.values?.[5]||"";}
+
+function employeesPage(){
+ const ctx=currentProjectContext();
+ const rows=employeeRows().filter(e=>!ctx||String(employeeProject(e))===String(ctx));
+ $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>EMPLOYÉS</h3>
+ <div class="panel-body"><button class="btn primary" onclick="employeeForm()">+ Nouvel employé</button>
+ <div class="notice">Séparer clairement l’équipe terrain et le staff. Chaque employé peut être payé par semaine ou par mois.</div></div>
+ <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Catégorie</th><th>Poste</th><th>Chantier</th><th>Mode de paie</th><th>Salaire de base</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
+ ${rows.length?rows.map(e=>{
+   const pr=(db.projects||[]).find(p=>String(p.id)===String(employeeProject(e)));
+   return `<tr><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeCategory(e))}</td><td>${esc(employeeRole(e))}</td><td>${esc(pr?.name||employeeProject(e)||"Non affecté")}</td><td>${esc(employeePayCycle(e))}</td><td>${money(employeeBaseSalary(e))}</td><td>${workflowBadge(e.workflow||"Actif")}</td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="employeeForm('${e.id}')">Modifier</button><button class="btn-xs" onclick="payrollForm('', '${e.id}')">Payer</button><button class="btn-xs btn-delete" onclick="deleteEmployee('${e.id}')">Supprimer</button></div></td></tr>`;
+ }).join(""):`<tr><td colspan="8">Aucun employé.</td></tr>`}
+ </tbody></table></div></div>`;
+}
+
+function employeeForm(id=""){
+ const e=id?employeeRows().find(x=>String(x.id)===String(id)):null;
+ const category=e?.category||"Équipe terrain";
+ const project=e?.project||currentProjectContext()||"";
+ $("#content").innerHTML=`<div class="panel"><h3>${e?"MODIFIER":"NOUVEL"} EMPLOYÉ</h3><form id="fEmployee" class="form-grid">
+ <label>Nom et prénom<input name="name" value="${esc(e?.name||"")}" required></label>
+ <label>Catégorie<select name="category" id="employeeCategory" onchange="updateEmployeeRoleOptions()">
+   <option ${category==="Équipe terrain"?"selected":""}>Équipe terrain</option>
+   <option ${category==="Staff"?"selected":""}>Staff</option>
+ </select></label>
+ <label>Poste<select name="jobTitle" id="employeeRole"></select></label>
+ <label>Chantier<select name="project"><option value="">Non affecté / Multi-chantiers</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
+ <label>Mode de paiement<select name="payCycle">
+   <option ${employeePayCycle(e)==="Hebdomadaire"?"selected":""}>Hebdomadaire</option>
+   <option ${employeePayCycle(e)==="Mensuel"?"selected":""}>Mensuel</option>
+ </select></label>
+ <label>Salaire de base (Ar)<input name="baseSalary" type="number" min="0" step="1" value="${employeeBaseSalary(e)||""}" required></label>
+ <label>Date d'entrée<input name="startDate" type="date" value="${esc(e?.startDate||new Date().toISOString().slice(0,10))}"></label>
+ <label>Statut<select name="workflow"><option ${e?.workflow==="Actif"?"selected":""}>Actif</option><option ${e?.workflow==="Inactif"?"selected":""}>Inactif</option></select></label>
+ <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="employeesPage()">Annuler</button></div>
+ </form></div>`;
+ updateEmployeeRoleOptions('${esc(e?.jobTitle||"")}');
+ $("#fEmployee").onsubmit=ev=>{
+  ev.preventDefault();const f=new FormData(ev.target);
+  const obj={id:e?.id||"EMP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),name:f.get("name"),category:f.get("category"),jobTitle:f.get("jobTitle"),project:f.get("project")||"",payCycle:f.get("payCycle"),baseSalary:+f.get("baseSalary")||0,startDate:f.get("startDate"),workflow:f.get("workflow"),owner:e?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
+  if(e)Object.assign(e,obj);else{obj.createdAt=new Date().toISOString();db.modules.employees.push(obj);}
+  save();employeesPage();
+ };
+}
+function updateEmployeeRoleOptions(selected=""){
+ const cat=document.getElementById("employeeCategory")?.value||"Équipe terrain",el=document.getElementById("employeeRole");if(!el)return;
+ const opts=cat==="Staff"?["Contrôleur","Gestionnaire","Commissionnaire"]:["Chef de chantier","Chef d’équipe","Ouvrier","Manœuvre"];
+ el.innerHTML=opts.map(x=>`<option ${x===selected?"selected":""}>${x}</option>`).join("");
+}
+function deleteEmployee(id){
+ const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return;
+ if(!confirm("Supprimer cet employé ?"))return;
+ e.deleted=true;e.deletedAt=new Date().toISOString();e.deletedBy=user.username;save();employeesPage();
+}
+
+function employeeAdvancesTotal(employeeId,excludePayrollId=""){
+ return payrollRows().filter(p=>String(p.employeeId)===String(employeeId)&&String(p.id)!==String(excludePayrollId))
+   .reduce((n,p)=>n+(+p.advanceAmount||0),0);
+}
+function payrollPage(){
+ const ctx=currentProjectContext();
+ const rows=payrollRows().filter(p=>!ctx||String(p.project)===String(ctx));
+ $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>PAIE</h3>
+ <div class="panel-body"><button class="btn primary" onclick="payrollForm()">+ Nouveau paiement</button>
+ <div class="notice">Gestion des paiements hebdomadaires et mensuels, y compris les avances sur salaire.</div></div>
+ <div class="table-wrap"><table><thead><tr><th>Date</th><th>Employé</th><th>Catégorie</th><th>Poste</th><th>Chantier</th><th>Période</th><th>Salaire brut</th><th>Avance</th><th>Net payé</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
+ ${rows.length?rows.map(p=>{
+   const e=employeeRows().find(x=>String(x.id)===String(p.employeeId)),pr=(db.projects||[]).find(x=>String(x.id)===String(p.project));
+   return `<tr><td>${esc(p.date||"")}</td><td><b>${esc(employeeName(e)||p.employeeName||"")}</b></td><td>${esc(employeeCategory(e)||p.category||"")}</td><td>${esc(employeeRole(e)||p.jobTitle||"")}</td><td>${esc(pr?.name||p.project||"")}</td><td>${esc(p.periodLabel||p.payCycle||"")}</td><td>${money(p.grossAmount||0)}</td><td>${money(p.advanceAmount||0)}</td><td><b>${money(p.netPaid||0)}</b></td><td>${workflowBadge(p.workflow||"Payé")}</td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="payrollForm('${p.id}','${p.employeeId}')">Modifier</button><button class="btn-xs btn-delete" onclick="deletePayroll('${p.id}')">Supprimer</button></div></td></tr>`;
+ }).join(""):`<tr><td colspan="11">Aucun paiement enregistré.</td></tr>`}
+ </tbody></table></div></div>`;
+}
+
+function payrollForm(id="",employeeId=""){
+ const p=id?payrollRows().find(x=>String(x.id)===String(id)):null;
+ const eid=p?.employeeId||employeeId||"";
+ const e=employeeRows().find(x=>String(x.id)===String(eid));
+ const payCycle=p?.payCycle||employeePayCycle(e)||"Hebdomadaire";
+ const salary=p?.grossAmount||employeeBaseSalary(e)||0;
+ const project=p?.project||employeeProject(e)||currentProjectContext()||"";
+ $("#content").innerHTML=`<div class="panel"><h3>${p?"MODIFIER":"NOUVEAU"} PAIEMENT</h3><form id="fPayroll" class="form-grid">
+ <label>Employé<select name="employeeId" id="payEmployee" required onchange="payrollEmployeeChanged(this.value)"><option value="">Choisir</option>${employeeRows().filter(x=>x.workflow!=="Inactif").map(x=>`<option value="${esc(x.id)}" ${String(eid)===String(x.id)?"selected":""}>${esc(employeeName(x))} — ${esc(employeeRole(x))}</option>`).join("")}</select></label>
+ <label>Date paiement<input name="date" type="date" value="${esc(p?.date||new Date().toISOString().slice(0,10))}" required></label>
+ <label>Catégorie<input id="payCategory" value="${esc(employeeCategory(e)||"")}" readonly></label>
+ <label>Poste<input id="payRole" value="${esc(employeeRole(e)||"")}" readonly></label>
+ <label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(x=>!x.deleted).map(x=>`<option value="${esc(x.id)}" ${String(project)===String(x.id)?"selected":""}>${esc(x.id)} — ${esc(x.name||"")}</option>`).join("")}</select></label>
+ <label>Mode de paiement<input name="payCycle" id="payCycle" value="${esc(payCycle)}" readonly></label>
+ <label>Période<select name="periodType" id="periodType">
+   <option value="Semaine" ${payCycle==="Hebdomadaire"?"selected":""}>Semaine</option>
+   <option value="Mois" ${payCycle==="Mensuel"?"selected":""}>Mois</option>
+ </select></label>
+ <label>Libellé période<input name="periodLabel" value="${esc(p?.periodLabel||"")}" placeholder="${payCycle==="Hebdomadaire"?"Ex: Semaine 30 / 2026":"Ex: Juillet 2026"}" required></label>
+ <label>Salaire brut / base période (Ar)<input name="grossAmount" id="grossAmount" type="number" min="0" value="${+salary||0}" oninput="recalcPayroll()" required></label>
+ <label>Avance sur salaire (Ar)<input name="advanceAmount" id="advanceAmount" type="number" min="0" value="${+p?.advanceAmount||0}" oninput="recalcPayroll()"></label>
+ <label>Net à payer (Ar)<input name="netPaid" id="netPaid" type="number" value="${+p?.netPaid||salary||0}" readonly></label>
+ <label>Statut<select name="workflow"><option ${p?.workflow==="Payé"?"selected":""}>Payé</option><option ${p?.workflow==="Partiel"?"selected":""}>Partiel</option><option ${p?.workflow==="En attente"?"selected":""}>En attente</option></select></label>
+ <label class="full">Observation<textarea name="note">${esc(p?.note||"")}</textarea></label>
+ <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="payrollPage()">Annuler</button></div>
+ </form></div>`;
+ recalcPayroll();
+ $("#fPayroll").onsubmit=ev=>{
+  ev.preventDefault();const f=new FormData(ev.target),emp=employeeRows().find(x=>String(x.id)===String(f.get("employeeId")));
+  if(!emp)return alert("Choisir un employé.");
+  const gross=+f.get("grossAmount")||0,advance=+f.get("advanceAmount")||0,net=Math.max(0,gross-advance);
+  const obj={id:p?.id||"PAY-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),employeeId:emp.id,employeeName:employeeName(emp),category:employeeCategory(emp),jobTitle:employeeRole(emp),project:f.get("project"),payCycle:employeePayCycle(emp),periodType:f.get("periodType"),periodLabel:f.get("periodLabel"),grossAmount:gross,advanceAmount:advance,netPaid:net,date:f.get("date"),workflow:f.get("workflow"),note:f.get("note")||"",owner:p?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
+  if(p)Object.assign(p,obj);else{obj.createdAt=new Date().toISOString();db.modules.payroll.push(obj);}
+  save();payrollPage();
+ };
+}
+function payrollEmployeeChanged(id){
+ const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return;
+ document.getElementById("payCategory").value=employeeCategory(e);
+ document.getElementById("payRole").value=employeeRole(e);
+ document.getElementById("payCycle").value=employeePayCycle(e);
+ document.getElementById("grossAmount").value=employeeBaseSalary(e);
+ const pt=document.getElementById("periodType");if(pt)pt.value=employeePayCycle(e)==="Mensuel"?"Mois":"Semaine";
+ recalcPayroll();
+}
+function recalcPayroll(){
+ const gross=+document.getElementById("grossAmount")?.value||0,advance=+document.getElementById("advanceAmount")?.value||0;
+ const net=document.getElementById("netPaid");if(net)net.value=Math.max(0,gross-advance).toFixed(0);
+}
+function deletePayroll(id){
+ const p=payrollRows().find(x=>String(x.id)===String(id));if(!p)return;
+ if(!confirm("Supprimer ce paiement ?"))return;
+ p.deleted=true;p.deletedAt=new Date().toISOString();p.deletedBy=user.username;save();payrollPage();
 }
 
 

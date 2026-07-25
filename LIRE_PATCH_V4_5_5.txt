@@ -1,0 +1,38 @@
+NYSOA ERP V4.5.5 — EMPLOYÉS & PAIE
+
+Révision demandée:
+- Deux catégories d'employés:
+  1) ÉQUIPE TERRAIN
+     - Chef de chantier
+     - Chef d’équipe
+     - Ouvrier
+     - Manœuvre
+  2) STAFF
+     - Contrôleur
+     - Gestionnaire
+     - Commissionnaire
+- Affectation chantier pour chaque employé.
+- Mode de paiement:
+  - Hebdomadaire
+  - Mensuel
+- Salaire de base par employé.
+- Module PAIE dédié:
+  - choix employé,
+  - catégorie / poste,
+  - chantier,
+  - semaine ou mois,
+  - salaire brut,
+  - avance sur salaire,
+  - net à payer automatique,
+  - statut Payé / Partiel / En attente.
+- Les paiements de paie continuent d'alimenter les dépenses du tableau de bord.
+
+Installation:
+1. Décompresser.
+2. GitHub > nysoa-erp > Add file > Upload files.
+3. Remplacer app.js, styles.css et index.html.
+4. Commit changes.
+5. Attendre 1 à 3 minutes puis Cmd + Shift + R.
+
+Note:
+Les anciennes données employés/paie restent présentes. Les nouvelles saisies utilisent la structure V4.5.5.
