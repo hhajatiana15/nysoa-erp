@@ -65,6 +65,84 @@ let cloudCurrentPage="dashboard";
 let cloudApplyingSnapshot=false;
 let cloudState={status:"Initialisation…",lastSync:null,error:null};
 
+let presenceTimer=null;
+let adminNotifUnsub=null;
+let cloudAutoSyncTimer=null;
+
+function cloudCollectionLocalRows(collection){
+ if(collection==="attendanceWeekly")return db.modules?.attendanceWeekly||[];
+ if(collection==="employees")return db.modules?.employees||[];
+ return Array.isArray(db[collection])?db[collection]:[];
+}
+function replaceCloudCollectionLocalRows(collection,rows){
+ if(collection==="attendanceWeekly"){db.modules=db.modules||{};db.modules.attendanceWeekly=rows;}
+ else if(collection==="employees"){db.modules=db.modules||{};db.modules.employees=rows;}
+ else db[collection]=rows;
+ save();
+}
+async function updatePresence(status="online"){
+ if(!cloudReady||!user?.uid||!fbStore)return;
+ try{await fbStore.collection("userPresence").doc(user.uid).set({
+  uid:user.uid,email:user.email||"",displayName:user.label||user.username||"",role:user.role,status,
+  currentPage:cloudCurrentPage||"dashboard",lastSeen:new Date().toISOString(),device:navigator.userAgent.slice(0,160)
+ },{merge:true});}catch(e){console.warn("presence",e);}
+}
+function startPresence(){clearInterval(presenceTimer);updatePresence("online");presenceTimer=setInterval(()=>updatePresence(document.hidden?"inactive":"online"),60000);}
+function stopPresence(){clearInterval(presenceTimer);presenceTimer=null;if(user?.uid)updatePresence("offline");}
+document.addEventListener("visibilitychange",()=>{if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");});
+
+function adminPresencePage(){
+ if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
+ $("#content").innerHTML=`<div class="panel"><h3>UTILISATEURS ACTIFS</h3><div id="presenceRows" class="panel-body">Chargement…</div></div>`;
+ fbStore.collection("userPresence").onSnapshot(snap=>{
+  const now=Date.now(),rows=snap.docs.map(d=>d.data());
+  const html=rows.map(r=>{const mins=Math.floor(Math.max(0,now-(Date.parse(r.lastSeen||0)||0))/60000);let st=r.status||"offline";if(mins>=5)st="offline";else if(mins>=2&&st==="online")st="inactive";let label=st==="online"?"En ligne":st==="inactive"?`Inactif depuis ${mins} min`:`Hors ligne — dernière activité il y a ${mins} min`;return `<div class="presence-row"><span class="presence-dot presence-${st}"></span><div><b>${esc(r.displayName||r.email)}</b><small>${esc(r.role||"")} — ${label}</small><small>Module : ${esc(r.currentPage||"dashboard")}</small></div></div>`;}).join("");
+  const el=document.getElementById("presenceRows");if(el)el.innerHTML=html||"Aucune activité enregistrée.";
+ });
+}
+function notifModuleCount(module){return (db.cloudNotifications||[]).filter(n=>n.module===module&&n.read!==true).length;}
+function renderCloudBadges(){
+ document.querySelectorAll(".menu-btn").forEach(btn=>{const page=btn.dataset.page,count=notifModuleCount(page);let badge=btn.querySelector(".menu-notif-badge");if(count){if(!badge){badge=document.createElement("span");badge.className="menu-notif-badge";btn.appendChild(badge);}badge.textContent=count>99?"99+":String(count);}else if(badge)badge.remove();});
+}
+function startAdminNotifications(){
+ if(user.role!=="ADMIN"||!fbStore)return;
+ if(adminNotifUnsub)try{adminNotifUnsub();}catch(e){}
+ adminNotifUnsub=fbStore.collection("notifications").where("targetRole","==","ADMIN").onSnapshot(s=>{db.cloudNotifications=s.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.read!==true);save();renderCloudBadges();});
+}
+async function markNotificationsRead(module){
+ if(user?.role!=="ADMIN"||!fbStore)return;
+ try{const s=await fbStore.collection("notifications").where("targetRole","==","ADMIN").where("module","==",module).get();const b=fbStore.batch();s.docs.filter(d=>d.data().read!==true).forEach(d=>b.update(d.ref,{read:true,readAt:new Date().toISOString(),readBy:user.uid}));await b.commit();}catch(e){console.warn(e);}
+}
+async function createAdminNotification(module,title,detail,entityId){
+ if(!cloudReady||user?.role==="ADMIN"||!fbStore)return;
+ try{await fbStore.collection("notifications").add({module,title,detail:detail||"",entityId:entityId||"",sourceUid:user.uid,sourceName:user.label||user.username,sourceRole:user.role,targetRole:"ADMIN",read:false,createdAt:new Date().toISOString()});}catch(e){console.warn("notif",e);}
+}
+async function cloudWriteGeneric(collection,record,notifyTitle=""){
+ if(!cloudReady||!user||!record?.id)return;
+ try{const payload=cloudSanitize({...record,cloudSyncedAt:new Date().toISOString()});await fbStore.collection(collection).doc(String(record.id)).set(payload,{merge:true});record.cloudSyncedAt=payload.cloudSyncedAt;if(notifyTitle&&!record.cloudNotifiedAt&&user.role!=="ADMIN"){await createAdminNotification(collection,notifyTitle,`${user.label||user.username} — ${record.project||record.id}`,record.id);record.cloudNotifiedAt=new Date().toISOString();}save();cloudMarkSynced();}catch(e){console.warn("cloud generic",collection,e);}
+}
+function startExtendedRealtimeListeners(){
+ if(!cloudReady||!user)return;
+ const collections=["requests","expenses","siteControls","reports","attendanceWeekly","employees"];
+ collections.forEach(collection=>{try{cloudListeners.push(fbStore.collection(collection).onSnapshot(s=>{const remote=s.docs.map(d=>({id:d.id,...d.data()}));const local=cloudCollectionLocalRows(collection);const map=new Map(local.map(r=>[String(r.id),r]));remote.forEach(r=>{const l=map.get(String(r.id));if(!l){local.push(r);return;}const rt=Date.parse(r.updatedAt||r.cloudSyncedAt||r.createdAt||0)||0,lt=Date.parse(l.updatedAt||l.cloudSyncedAt||l.createdAt||0)||0;if(rt>=lt)Object.assign(l,r);});replaceCloudCollectionLocalRows(collection,local);},e=>console.warn("listener",collection,e)));}catch(e){console.warn(e);}});
+}
+function startCloudAutoSync(){
+ clearInterval(cloudAutoSyncTimer);
+ const run=async()=>{if(!cloudReady||!user||!navigator.onLine)return;const cfg=[
+  ["requests","Nouvelle demande d’approvisionnement"],["expenses","Nouvelle dépense"],["siteControls","Nouveau contrôle chantier"],["reports","Nouveau rapport technique"],["attendanceWeekly","Mise à jour présence chantier"],["employees","Mise à jour personnel"]
+ ];for(const [c,title] of cfg){for(const r of cloudCollectionLocalRows(c)){if(r.deleted)continue;const u=Date.parse(r.updatedAt||r.createdAt||0)||0,s=Date.parse(r.cloudSyncedAt||0)||0;if(u>s)await cloudWriteGeneric(c,r,title);}}};
+ run();cloudAutoSyncTimer=setInterval(run,10000);
+}
+function dashboardDetail(type){
+ let title="",rows=[];
+ if(type==="revenue"){title="DÉTAIL DU CHIFFRE D’AFFAIRES";rows=(db.projects||[]).filter(p=>!p.deleted).map(p=>({a:p.name||p.id,b:p.client||"",c:money(+p.budget||0),d:p.status||""}));}
+ if(type==="employees"){title="DÉTAIL DES EMPLOYÉS ACTIFS";rows=(db.modules?.employees||[]).filter(e=>!e.deleted).map(e=>({a:e.values?.[1]||"",b:e.values?.[4]||"Non affecté",c:e.values?.[2]||"",d:"Actif"}));}
+ if(type==="projects"){title="DÉTAIL DES CHANTIERS";rows=(db.projects||[]).filter(p=>!p.deleted).map(p=>({a:p.name||p.id,b:p.client||"",c:(p.progress||0)+"%",d:p.status||""}));}
+ $("#content").innerHTML=`<div class="panel"><h3>${title}</h3><div class="table-wrap"><table><thead><tr><th>Nom / Chantier</th><th>Affectation / Client</th><th>Valeur / Fonction</th><th>Statut</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td><b>${esc(r.a)}</b></td><td>${esc(r.b)}</td><td>${esc(r.c)}</td><td>${esc(r.d)}</td></tr>`).join(""):`<tr><td colspan="4">Aucune donnée.</td></tr>`}</tbody></table></div></div>`;
+}
+function cleanupExpiredLocalPhotos(){const days=+(db.appSettings?.photoRetentionDays||3),cutoff=Date.now()-days*86400000;let n=0;(db.siteControls||[]).forEach(r=>{const t=Date.parse(r.createdAt||r.updatedAt||0)||0;if(r.photo&&t&&t<cutoff){r.photo="";r.photoExpiredAt=new Date().toISOString();n++;}});if(n)save();return n;}
+
+
 function legacyUsernameForRole(role){
   return role==="ADMIN"?"admin":role==="GESTIONNAIRE"?"gestionnaire":role==="CONTROLE"?"controle":"user";
 }
@@ -81,6 +159,7 @@ function cloudStatusText(text,kind="normal"){
 function cloudMarkSynced(){
   cloudState.lastSync=new Date().toISOString();
   cloudStatusText(navigator.onLine?"Connecté":"Hors ligne",navigator.onLine?"ok":"error");
+renderGlobalProjectSelector();
 }
 function cloudSanitize(value){
   return JSON.parse(JSON.stringify(value,(k,v)=>v===undefined?null:v));
@@ -266,6 +345,8 @@ async function firebaseEmailLogin(email,password){
   await fbAuth.signInWithEmailAndPassword(email,password);
 }
 async function firebaseLogout(){
+  stopPresence();
+  clearInterval(cloudAutoSyncTimer);
   cloudStopListeners();
   try{if(fbAuth)await fbAuth.signOut();}catch(e){}
 }
@@ -296,6 +377,10 @@ function initFirebaseCloud(){
         cloudLocalUserUpsert();
         boot();
         cloudAttachPhase1Listeners();
+        startExtendedRealtimeListeners();
+        startPresence();
+        startCloudAutoSync();
+        if(user.role==="ADMIN")startAdminNotifications();
         await cloudSyncPendingPhase1();
       }catch(err){
         console.error(err);
@@ -498,7 +583,7 @@ const ADMIN_TECH_MENU=[
 ];
 
 const menus={
- ADMIN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["situations","📊","SITUATION DE TRAVAUX"],["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],["fuel","⛽","CARBURANT"],["employees","👥","EMPLOYÉS"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],["treasury","💵","TRÉSORERIE"],["dailyReports","📝","RAPPORTS JOURNALIERS"],["reports","◔","RAPPORTS"],["adminValidations","✅","VALIDATIONS À PUBLIER"],["usageTime","⏱","TEMPS D’UTILISATION"],["trash","🗑","CORBEILLE"],["audit","📜","JOURNAL D’AUDIT"],["settings","⚙","PARAMÈTRES"]],
+ ADMIN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["situations","📊","SITUATION DE TRAVAUX"],["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],["fuel","⛽","CARBURANT"],["employees","👥","EMPLOYÉS"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],["treasury","💵","TRÉSORERIE"],["dailyReports","📝","RAPPORTS JOURNALIERS"],["reports","◔","RAPPORTS"],["adminValidations","✅","VALIDATIONS À PUBLIER"],["usageTime","⏱","TEMPS D’UTILISATION"],["trash","🗑","CORBEILLE"],["audit","📜","JOURNAL D’AUDIT"],["presenceUsers","●","UTILISATEURS ACTIFS"],["settings","⚙","PARAMÈTRES"]],
  GESTIONNAIRE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["employees","👥","EMPLOYÉS"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","DEMANDE D'APPRO."],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS FINANCIERS"]],
  CONTROLE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["siteControls","📷","CONTRÔLE CHANTIER"],["attendance","◷","PRÉSENCE CHANTIER"],["situations","📊","SITUATION DE TRAVAUX"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
 };
@@ -549,6 +634,7 @@ function renderMenu(){
  }
  $("#menu").innerHTML=list.map(m=>`<button class="menu-btn" data-page="${m[0]}"><span class="ico">${m[1]}</span>${m[2]}</button>`).join("");
  document.querySelectorAll(".menu-btn").forEach(b=>b.onclick=()=>go(b.dataset.page));
+ renderCloudBadges();
  document.querySelectorAll(".workspace-tab").forEach(b=>{
    b.classList.toggle("active",b.dataset.workspace===adminWorkspace);
    b.onclick=()=>switchWorkspace(b.dataset.workspace);
@@ -562,7 +648,42 @@ function switchWorkspace(workspace){
  else if(workspace==="TECHNIQUE")go("dashboardTechnique");
  else go("dashboard");
 }
-function go(page){cloudCurrentPage=page;document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,projects:projects,siteControls:siteControlsPage,expenses:expenses,appro:appro,reports:reports,cash:cash,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,trash:trashPage,audit:auditPage}[page]||generic)(page)}
+
+function currentProjectContext(){
+ return sessionStorage.getItem("nysoa_project_context")||"";
+}
+function projectContextOptions(selected=currentProjectContext()){
+ return `<option value="">Tous les chantiers</option>`+
+  (db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(selected)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("");
+}
+function renderGlobalProjectSelector(){
+ const el=document.getElementById("globalProjectFilter");
+ if(!el)return;
+ const selected=currentProjectContext();
+ el.innerHTML=projectContextOptions(selected);
+ if(selected && !(db.projects||[]).some(p=>String(p.id)===String(selected)&&!p.deleted)){
+  sessionStorage.removeItem("nysoa_project_context");
+  el.value="";
+ }
+}
+function setGlobalProjectContext(projectId){
+ if(projectId)sessionStorage.setItem("nysoa_project_context",projectId);
+ else sessionStorage.removeItem("nysoa_project_context");
+ go(cloudCurrentPage||"dashboard");
+}
+function matchesProjectContext(record){
+ const p=currentProjectContext();
+ if(!p)return true;
+ return String(record?.project||record?.chantier||"")===String(p);
+}
+function projectContextNotice(){
+ const p=currentProjectContext();
+ if(!p)return "";
+ const pr=(db.projects||[]).find(x=>String(x.id)===String(p));
+ return `<div class="project-context-note">🏗 Chantier sélectionné : <b>${esc(pr?.name||p)}</b> <button class="btn-xs" onclick="setGlobalProjectContext('')">Afficher tout</button></div>`;
+}
+
+function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,invoices:invoicesPage,projects:projects,siteControls:siteControlsPage,expenses:expenses,appro:appro,reports:reports,cash:cash,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
 function kpi(icon,color,title,value,note="",page=""){
  const routes={
   "CHANTIERS EN COURS":"projects","NOMBRE DE CHANTIERS":"projects",
@@ -572,7 +693,9 @@ function kpi(icon,color,title,value,note="",page=""){
   "CHIFFRE D’AFFAIRES (TTC)":"invoices"
  };
  const target=page||routes[title]||"";
- return `<div class="kpi ${target?"kpi-link":""}" ${target?`role="button" tabindex="0" onclick="go('${target}')" onkeydown="if(event.key==='Enter')go('${target}')"`:""}>
+ const detail=title==="CHIFFRE D’AFFAIRES (TTC)"?"revenue":title==="EMPLOYÉS ACTIFS"?"employees":(title==="CHANTIERS EN COURS"||title==="NOMBRE DE CHANTIERS")?"projects":"";
+ const action=detail?`dashboardDetail('${detail}')`:(target?`go('${target}')`:"");
+ return `<div class="kpi ${action?"kpi-link":""}" ${action?`role="button" tabindex="0" onclick="${action}" onkeydown="if(event.key==='Enter')${action}"`:""}>
  <div class="circle ${color}">${icon}</div><div><small>${title}</small><strong>${value}</strong><span style="font-size:10px;color:#6b7885">${note}</span></div></div>`;
 }
 
@@ -648,7 +771,7 @@ function dashboard(){
  let invoices=db.modules.invoices||[];
  let employees=db.modules.employees||[];
  let stock=db.modules.stock||[];
- let totalRevenue=sum(invoices.map(r=>+(r.values?.[2]||0)));
+ let totalRevenue=sum(invoices.filter(r=>!r.deleted).map(r=>+(r.trancheAmount||r.values?.[2]||0)));
  let netProfit=totalRevenue-totalDep;
  let activeEmployees=employees.length;
  let todayKey=new Date().toISOString().slice(0,10);
@@ -874,12 +997,13 @@ function canChangeSiteControl(r){
  return user.role==="ADMIN" || (user.role==="CONTROLE" && r.owner===user.username && r.workflow!=="Validé");
 }
 function siteControlsPage(){
- ensureSecurityData();
+ ensureSecurityData();cleanupExpiredLocalPhotos();
  const rows=(db.siteControls||[]).filter(r=>!r.deleted);
  $("#content").innerHTML=`<div class="panel"><h3>CONTRÔLE CHANTIER AVEC PHOTO</h3>
  <div class="panel-body">
   ${["ADMIN","CONTROLE"].includes(user.role)?'<button class="btn primary" onclick="siteControlForm()">+ Nouveau contrôle</button>':""}
-  <div class="notice">Le Technicien enregistre le contrôle, l’effectif présent et une photo. L’Admin peut consulter, modifier, valider ou supprimer.</div>
+  ${user.role==="ADMIN"?`<label class="inline-setting">Conservation photo <select onchange="db.appSettings=db.appSettings||{};db.appSettings.photoRetentionDays=+this.value;save();siteControlsPage()"><option value="2" ${(db.appSettings?.photoRetentionDays||3)==2?"selected":""}>2 jours</option><option value="3" ${(db.appSettings?.photoRetentionDays||3)==3?"selected":""}>3 jours</option></select></label>`:""}
+  <div class="notice">Le Technicien enregistre le contrôle, l’effectif présent et une photo. Les photos locales expirent après ${db.appSettings?.photoRetentionDays||3} jour(s).</div>
  </div>
  <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Ouvriers</th><th>Manœuvres</th><th>Total</th><th>Observation</th><th>Photo</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
  ${rows.length?rows.map(r=>`<tr>
@@ -922,7 +1046,7 @@ function siteControlForm(id=""){
    };
    if(r)Object.assign(r,obj);else{obj.createdAt=new Date().toISOString();db.siteControls.push(obj);}
    audit(r?"Modification":"Création","siteControls",obj.id,`Contrôle ${obj.project}: ${obj.workers} ouvriers, ${obj.labourers} manœuvres`);
-   save();siteControlsPage();
+   save();cloudWriteGeneric("siteControls",r||obj,"Nouveau contrôle chantier");siteControlsPage();
   }catch(err){alert(err.message||"Enregistrement impossible.");}
   finally{if(btn)btn.disabled=false;}
  };
@@ -1027,7 +1151,7 @@ function technicalRecap(){
 }
 function reports(){$("#content").innerHTML=`<div class="panel"><h3>${user.role==="CONTROLE"?"RAPPORTS TECHNIQUES CONTRÔLE & SUIVI":"RAPPORTS"}</h3>${user.role==="CONTROLE"?'<div class="panel-body"><button class="btn primary" onclick="reportForm()">Nouveau rapport</button></div>':""}${reportsTable()}</div>`}
 function reportsTable(){return `<div class="table-wrap"><table><thead><tr><th>N°</th><th>Date</th><th>Chantier</th><th>Avancement</th><th>Travaux contrôlés</th><th>Conformité</th><th>Incident</th><th>Action</th><th>Statut</th><th>Observation Admin</th><th>Actions</th></tr></thead><tbody>${db.reports.filter(r=>!r.deleted).map(r=>`<tr><td>${r.id}</td><td>${r.date}</td><td>${r.project}</td><td>${r.progress}%</td><td>${r.work}</td><td>${r.conformity}</td><td>${r.issue}</td><td>${r.action}</td><td>${workflowBadge(r.workflow||r.status)}</td><td>${esc(r.adminObservation||"")}</td><td><div class="edit-actions">${canUserChange(r)?`<button class="btn-xs btn-edit" onclick="reportForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteRecord('reports','reports','${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showRecordHistory('reports','${r.id}')">Historique</button></div></td></tr>`).join("")}</tbody></table></div>`}
-function reportForm(id=""){let r=id?db.reports.find(x=>x.id===id):null;if(r&&!canUserChange(r))return alert("Ce rapport est verrouillé ou ne vous appartient pas.");let opts=db.projects.map(p=>`<option value="${p.id}">${p.id} - ${p.name}</option>`).join("");$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEAU"} RAPPORT CONTRÔLE & SUIVI</h3><form id="fReport" class="form-grid"><label>Date<input name="date" type="date" value="${r?.date||""}" required></label><label>Chantier<select name="project">${db.projects.map(p=>`<option value="${p.id}" ${r?.project===p.id?"selected":""}>${p.id} - ${p.name}</option>`).join("")}</select></label><label>Avancement réel (%)<input name="progress" type="number" min="0" max="100" value="${r?.progress??0}" required></label><label>Conformité<select name="conformity"><option ${r?.conformity==="Conforme"?"selected":""}>Conforme</option><option ${r?.conformity==="Non conforme"?"selected":""}>Non conforme</option></select></label><label class="full">Travaux contrôlés<textarea name="work" required>${r?.work||""}</textarea></label><label>Incident / Blocage<input name="issue" value="${r?.issue||""}"></label><label>Action corrective<input name="action" value="${r?.action||""}" required></label><button class="btn primary">Enregistrer</button></form></div>`;$("#fReport").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);let obj={id:r?.id||"RAP-"+String(db.reports.length+1).padStart(3,"0"),owner:r?.owner||user.username,date:f.get("date"),project:f.get("project"),progress:+f.get("progress"),work:f.get("work"),conformity:f.get("conformity"),issue:f.get("issue")||"Aucun",action:f.get("action"),status:r?.status||"À valider",updatedAt:new Date().toISOString()};const before=r?cloneRecord(r):null;obj.workflow=r?.workflow||"Soumis";obj.updatedBy=user.username;if(r){pushHistory(r,"Modification",before);Object.assign(r,obj);audit("Modification","reports",r.id,"Rapport modifié",before,r)}else{obj.createdAt=new Date().toISOString();obj.history=[];pushHistory(obj,"Création");db.reports.push(obj);audit("Création","reports",obj.id,"Rapport créé",null,obj)}logTechnicalEntry(r?"Modification":"Création","Rapport technique",obj.id,`Chantier ${obj.project}, avancement ${obj.progress}%, ${obj.conformity}`);save();reports()}}
+function reportForm(id=""){let r=id?db.reports.find(x=>x.id===id):null;if(r&&!canUserChange(r))return alert("Ce rapport est verrouillé ou ne vous appartient pas.");let opts=db.projects.map(p=>`<option value="${p.id}">${p.id} - ${p.name}</option>`).join("");$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEAU"} RAPPORT CONTRÔLE & SUIVI</h3><form id="fReport" class="form-grid"><label>Date<input name="date" type="date" value="${r?.date||""}" required></label><label>Chantier<select name="project">${db.projects.map(p=>`<option value="${p.id}" ${r?.project===p.id?"selected":""}>${p.id} - ${p.name}</option>`).join("")}</select></label><label>Avancement réel (%)<input name="progress" type="number" min="0" max="100" value="${r?.progress??0}" required></label><label>Conformité<select name="conformity"><option ${r?.conformity==="Conforme"?"selected":""}>Conforme</option><option ${r?.conformity==="Non conforme"?"selected":""}>Non conforme</option></select></label><label class="full">Travaux contrôlés<textarea name="work" required>${r?.work||""}</textarea></label><label>Incident / Blocage<input name="issue" value="${r?.issue||""}"></label><label>Action corrective<input name="action" value="${r?.action||""}" required></label><button class="btn primary">Enregistrer</button></form></div>`;$("#fReport").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);let obj={id:r?.id||"RAP-"+String(db.reports.length+1).padStart(3,"0"),owner:r?.owner||user.username,date:f.get("date"),project:f.get("project"),progress:+f.get("progress"),work:f.get("work"),conformity:f.get("conformity"),issue:f.get("issue")||"Aucun",action:f.get("action"),status:r?.status||"À valider",updatedAt:new Date().toISOString()};const before=r?cloneRecord(r):null;obj.workflow=r?.workflow||"Soumis";obj.updatedBy=user.username;if(r){pushHistory(r,"Modification",before);Object.assign(r,obj);audit("Modification","reports",r.id,"Rapport modifié",before,r)}else{obj.createdAt=new Date().toISOString();obj.history=[];pushHistory(obj,"Création");db.reports.push(obj);audit("Création","reports",obj.id,"Rapport créé",null,obj)}logTechnicalEntry(r?"Modification":"Création","Rapport technique",obj.id,`Chantier ${obj.project}, avancement ${obj.progress}%, ${obj.conformity}`);save();cloudWriteGeneric("reports",r||obj,"Nouveau rapport technique");reports()}}
 function deleteReport(id){if(confirm("Supprimer ce rapport ?")){db.reports=db.reports.filter(x=>x.id!==id);save();reports()}}
 function mondayOf(dateStr){
  const d=new Date(dateStr+"T12:00:00");const day=(d.getDay()+6)%7;d.setDate(d.getDate()-day);
@@ -1097,7 +1221,7 @@ function saveAttendance(){
  });
  if(record){record.entries=entries;record.updatedAt=new Date().toISOString();record.updatedBy=user.username;}
  else db.modules.attendanceWeekly.push({id:"ATTW-"+Date.now(),weekStart,project,entries,owner:user.username,updatedBy:user.username,updatedAt:new Date().toISOString()});
- save();alert("Présence hebdomadaire enregistrée.");attendance();
+ save();const saved=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);if(saved)cloudWriteGeneric("attendanceWeekly",saved,"Mise à jour présence chantier");alert("Présence hebdomadaire enregistrée.");attendance();
 }
 function clearAttendanceEmployee(key){
  document.querySelectorAll(`.attendance-state[data-key="${CSS.escape(key)}"]`).forEach(x=>x.value="");
@@ -1216,9 +1340,120 @@ function purchaseHistory(id){
  </tbody></table></div></div>`;
 }
 
+
+// ===== FACTURATION PAR CHANTIER / DEVIS VALIDÉ =====
+function acceptedQuotesForProject(projectId){
+ return (db.quotes||[]).filter(q=>q.status==="Accepté"&&(!projectId||String(q.project)===String(projectId)));
+}
+function invoiceRows(){
+ db.modules.invoices=Array.isArray(db.modules.invoices)?db.modules.invoices:[];
+ return db.modules.invoices.filter(r=>!r.deleted);
+}
+function invoicePaidForProject(projectId,excludeId=""){
+ return invoiceRows().filter(r=>String(r.project)===String(projectId)&&String(r.id)!==String(excludeId))
+  .reduce((n,r)=>n+(+r.trancheAmount||+(r.values?.[2]||0)||0),0);
+}
+function validatedQuoteAmount(projectId,quoteId=""){
+ const q=quoteId?(db.quotes||[]).find(x=>x.id===quoteId):acceptedQuotesForProject(projectId).slice(-1)[0];
+ return q?quoteFinancials(q).ttc:0;
+}
+function invoicesPage(){
+ if(user.role!=="ADMIN")return generic("invoices");
+ const ctx=currentProjectContext(),rows=invoiceRows().filter(r=>!ctx||String(r.project)===String(ctx));
+ $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>FACTURATION PAR CHANTIER</h3>
+ <div class="panel-body"><button class="btn primary" onclick="invoiceForm()">+ Nouvelle tranche / facture</button>
+ <div class="notice">Chaque facture est rattachée à un chantier et à un devis accepté. Le reste à payer est recalculé automatiquement.</div></div>
+ <div class="table-wrap"><table><thead><tr><th>N° facture</th><th>Date</th><th>Chantier</th><th>Client</th><th>Devis validé</th><th>Montant devis</th><th>Tranche</th><th>Montant tranche</th><th>Total payé</th><th>Reste à payer</th><th>Actions</th></tr></thead><tbody>
+ ${rows.length?rows.map(r=>{
+  const qa=+r.quoteAmount||validatedQuoteAmount(r.project,r.quoteId);
+  const paid=invoiceRows().filter(x=>String(x.project)===String(r.project)).reduce((n,x)=>n+(+x.trancheAmount||+(x.values?.[2]||0)||0),0);
+  const remain=Math.max(0,qa-paid),pr=(db.projects||[]).find(p=>String(p.id)===String(r.project));
+  return `<tr><td><b>${esc(r.id)}</b></td><td>${esc(r.date||"")}</td><td>${esc(pr?.name||r.project||"")}</td><td>${esc(r.client||"")}</td><td>${esc(r.quoteId||"")}</td><td>${money(qa)}</td><td><b>${(+r.tranchePercent||0).toFixed(2)}%</b></td><td>${money(r.trancheAmount||0)}</td><td>${money(paid)}</td><td><b>${money(remain)}</b></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="invoiceForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="deleteInvoice('${r.id}')">Supprimer</button></div></td></tr>`;
+ }).join(""):`<tr><td colspan="11">Aucune facture pour ce chantier.</td></tr>`}
+ </tbody></table></div></div>`;
+}
+function invoiceForm(id=""){
+ if(user.role!=="ADMIN")return;
+ db.modules.invoices=Array.isArray(db.modules.invoices)?db.modules.invoices:[];
+ const r=id?db.modules.invoices.find(x=>String(x.id)===String(id)):null;
+ const projectId=r?.project||currentProjectContext()||"",quotes=acceptedQuotesForProject(projectId);
+ const selectedQuoteId=r?.quoteId||quotes.slice(-1)[0]?.id||"",selectedQuote=(db.quotes||[]).find(q=>q.id===selectedQuoteId);
+ const qa=r?.quoteAmount||(selectedQuote?quoteFinancials(selectedQuote).ttc:0),pct=+r?.tranchePercent||0;
+ $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} FACTURATION</h3><form id="fInvoice" class="form-grid">
+ <label>N° facture<input name="id" value="${esc(r?.id||"FAC-"+new Date().getFullYear()+"-"+String(db.modules.invoices.length+1).padStart(4,"0"))}" required></label>
+ <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
+ <label>Chantier<select name="project" required onchange="invoiceProjectChanged(this.value)"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(projectId)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
+ <label>Devis validé<select name="quoteId" required onchange="invoiceQuoteChanged(this.value)"><option value="">Choisir le devis accepté</option>${quotes.map(q=>`<option value="${esc(q.id)}" ${q.id===selectedQuoteId?"selected":""}>${esc(q.id)} — ${money(quoteFinancials(q).ttc)}</option>`).join("")}</select></label>
+ <label>Client<input name="client" id="invoiceClient" value="${esc(r?.client||selectedQuote?.client||"")}" readonly></label>
+ <label>Montant du devis validé<input name="quoteAmount" id="invoiceQuoteAmount" type="number" value="${+qa||0}" readonly></label>
+ <label>Tranche de paiement (%)<input name="tranchePercent" id="invoiceTranchePercent" type="number" min="0.01" max="100" step="0.01" value="${pct||""}" oninput="recalcInvoiceForm()" required></label>
+ <label>Montant de cette tranche<input name="trancheAmount" id="invoiceTrancheAmount" type="number" value="${r?.trancheAmount||((+qa||0)*pct/100)||0}" readonly></label>
+ <label>Total déjà payé avant cette tranche<input id="invoiceAlreadyPaid" value="${invoicePaidForProject(projectId,r?.id||"")}" readonly></label>
+ <label>Reste à payer après cette tranche<input id="invoiceRemaining" value="0" readonly></label>
+ <label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label>
+ <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="invoicesPage()">Annuler</button></div></form></div>`;
+ recalcInvoiceForm();
+ $("#fInvoice").onsubmit=e=>{
+  e.preventDefault();const f=new FormData(e.target),project=f.get("project"),quoteId=f.get("quoteId"),q=(db.quotes||[]).find(x=>x.id===quoteId);
+  if(!q||q.status!=="Accepté")return alert("Le devis sélectionné doit être accepté.");
+  const amount=quoteFinancials(q).ttc,pct=+f.get("tranchePercent")||0,tranche=amount*pct/100,already=invoicePaidForProject(project,r?.id||"");
+  if(already+tranche>amount+0.01)return alert("Cette tranche dépasse le reste à payer.");
+  const obj={id:f.get("id"),date:f.get("date"),project,quoteId,client:q.client,quoteAmount:amount,tranchePercent:pct,trancheAmount:tranche,note:f.get("note")||"",workflow:r?.workflow||"Validé",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
+  if(r)Object.assign(r,obj);else{obj.createdAt=new Date().toISOString();db.modules.invoices.push(obj);}
+  save();invoicesPage();
+ };
+}
+function invoiceProjectChanged(projectId){
+ if(projectId)sessionStorage.setItem("nysoa_project_context",projectId);else sessionStorage.removeItem("nysoa_project_context");
+ invoiceForm();
+}
+function invoiceQuoteChanged(quoteId){
+ const q=(db.quotes||[]).find(x=>x.id===quoteId);if(!q)return;
+ document.getElementById("invoiceClient").value=q.client||"";
+ document.getElementById("invoiceQuoteAmount").value=quoteFinancials(q).ttc;
+ recalcInvoiceForm();
+}
+function recalcInvoiceForm(){
+ const amount=+document.getElementById("invoiceQuoteAmount")?.value||0,pct=+document.getElementById("invoiceTranchePercent")?.value||0,already=+document.getElementById("invoiceAlreadyPaid")?.value||0,tranche=amount*pct/100;
+ const ta=document.getElementById("invoiceTrancheAmount");if(ta)ta.value=tranche.toFixed(2);
+ const rem=document.getElementById("invoiceRemaining");if(rem)rem.value=Math.max(0,amount-already-tranche).toFixed(2);
+}
+function deleteInvoice(id){
+ if(user.role!=="ADMIN")return;
+ const r=(db.modules.invoices||[]).find(x=>String(x.id)===String(id));if(!r)return;
+ if(!confirm("Supprimer cette facture / tranche ?"))return;
+ r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=user.username;save();invoicesPage();
+}
+
+
 const GENERIC_FIELDS={clients:["Nom / raison sociale","Téléphone","Adresse"],suppliers:["Fournisseur","Téléphone","Spécialité"],stock:["Article","Quantité","Unité"],employees:["Matricule","Nom complet","Fonction"],payroll:["Employé","Mois","Net à payer"],bank:["Référence","Libellé","Montant"],accounting:["Journal","Libellé","Montant"],treasury:["Libellé","Échéance","Montant"],planning:["Activité","Début","Fin"],situations:["Situation","Période","Avancement"],technicalFollowup:["Chantier","Travaux du jour","Observation"],quality:["Contrôle","Résultat","Observation"],nonConformities:["Référence","Description","Action corrective"],equipment:["Matériel / engin","État","Affectation"],vehicles:["Véhicule","Immatriculation","État"],fuel:["Véhicule / engin","Quantité (L)","Montant"],invoices:["N° facture","Client","Montant"]};
-function generic(page){let label=(menus[user.role].find(x=>x[0]===page)||ADMIN_FINANCE_MENU.concat(ADMIN_TECH_MENU).find(x=>x[0]===page)||[])[2]||page,fields=GENERIC_FIELDS[page]||["Référence","Désignation","Observation"],rows=(db.modules[page]||[]).filter(r=>!r.deleted);$("#content").innerHTML=`<div class="panel"><h3>${label}</h3><div class="panel-body"><button class="btn primary" onclick="genericForm('${page}')">+ Nouvelle entrée</button><button class="btn secondary" onclick="exportBackup()">Sauvegarder les données</button></div><div class="table-wrap"><table><thead><tr>${fields.map(x=>`<th>${x}</th>`).join("")}<th>Statut</th><th>Actions</th></tr></thead><tbody>${rows.map(r=>`<tr>${fields.map((_,j)=>`<td>${esc(r.values[j]||"")}</td>`).join("")}<td>${workflowBadge(r.workflow)}</td><td><div class="edit-actions">${canUserChange(r)?`<button class="btn-xs btn-edit" onclick="genericFormById('${page}','${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteGeneric('${page}','${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showGenericHistory('${page}','${r.id}')">Historique</button></div></td></tr>`).join("")}</tbody></table></div></div>`}
-function genericForm(page,index=-1){let fields=GENERIC_FIELDS[page]||["Référence","Désignation","Observation"],r=index>=0?(db.modules[page]||[])[index]:null;if(r&&!canEditRecord(r))return alert("Cette entrée validée ne peut plus être modifiée.");$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} ENTRÉE</h3><form id="fGeneric" class="form-grid">${fields.map((f,i)=>`<label>${f}<input name="v${i}" value="${esc(r?.values?.[i]||"")}" required></label>`).join("")}<label>Statut<select name="workflow">${["Brouillon","Soumis","À corriger","Validé"].filter(x=>user.role==="ADMIN"||x!=="Validé").map(x=>`<option ${r?.workflow===x?"selected":""}>${x}</option>`).join("")}</select></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="generic('${page}')">Annuler</button></div></form></div>`;$("#fGeneric").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target),obj={id:r?.id||"GEN-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),values:fields.map((_,i)=>f.get("v"+i)),workflow:f.get("workflow"),owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};db.modules[page]=db.modules[page]||[];const before=r?cloneRecord(r):null;if(r){pushHistory(r,"Modification",before);Object.assign(r,obj);audit("Modification","modules."+page,r.id,"Entrée modifiée",before,r)}else{obj.createdAt=new Date().toISOString();obj.history=[];pushHistory(obj,"Création");db.modules[page].push(obj);audit("Création","modules."+page,obj.id,"Entrée créée",null,obj)}save();generic(page)}}
+function generic(page){
+ let label=(menus[user.role].find(x=>x[0]===page)||ADMIN_FINANCE_MENU.concat(ADMIN_TECH_MENU).find(x=>x[0]===page)||[])[2]||page,
+ fields=GENERIC_FIELDS[page]||["Référence","Désignation","Observation"],
+ rows=(db.modules[page]||[]).filter(r=>!r.deleted&&matchesProjectContext(r));
+ $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>${label}</h3><div class="panel-body">
+ <button class="btn primary" onclick="genericForm('${page}')">+ Nouvelle entrée</button><button class="btn secondary" onclick="exportBackup()">Sauvegarder les données</button></div>
+ <div class="table-wrap"><table><thead><tr><th>Chantier</th>${fields.map(x=>`<th>${x}</th>`).join("")}<th>Statut</th><th>Actions</th></tr></thead><tbody>
+ ${rows.length?rows.map(r=>`<tr><td>${esc((db.projects||[]).find(p=>String(p.id)===String(r.project))?.name||r.project||"Non affecté")}</td>${fields.map((_,j)=>`<td>${esc(r.values[j]||"")}</td>`).join("")}<td>${workflowBadge(r.workflow)}</td><td><div class="edit-actions">${canUserChange(r)?`<button class="btn-xs btn-edit" onclick="genericFormById('${page}','${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteGeneric('${page}','${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showGenericHistory('${page}','${r.id}')">Historique</button></div></td></tr>`).join(""):`<tr><td colspan="${fields.length+3}">Aucune donnée pour ce chantier.</td></tr>`}
+ </tbody></table></div></div>`;
+}
+function genericForm(page,index=-1){
+ let fields=GENERIC_FIELDS[page]||["Référence","Désignation","Observation"],r=index>=0?(db.modules[page]||[])[index]:null;
+ if(r&&!canEditRecord(r))return alert("Cette entrée validée ne peut plus être modifiée.");
+ const selectedProject=r?.project||currentProjectContext()||"";
+ $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} ENTRÉE</h3><form id="fGeneric" class="form-grid">
+ <label>Chantier<select name="project" required><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(selectedProject)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
+ ${fields.map((f,i)=>`<label>${f}<input name="v${i}" value="${esc(r?.values?.[i]||"")}" required></label>`).join("")}
+ <label>Statut<select name="workflow">${["Brouillon","Soumis","À corriger","Validé"].filter(x=>user.role==="ADMIN"||x!=="Validé").map(x=>`<option ${r?.workflow===x?"selected":""}>${x}</option>`).join("")}</select></label>
+ <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="generic('${page}')">Annuler</button></div></form></div>`;
+ $("#fGeneric").onsubmit=e=>{
+  e.preventDefault();let f=new FormData(e.target),obj={id:r?.id||"GEN-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),project:f.get("project"),values:fields.map((_,i)=>f.get("v"+i)),workflow:f.get("workflow"),owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
+  db.modules[page]=db.modules[page]||[];const before=r?cloneRecord(r):null;
+  if(r){pushHistory(r,"Modification",before);Object.assign(r,obj);audit("Modification","modules."+page,r.id,"Entrée modifiée",before,r)}
+  else{obj.createdAt=new Date().toISOString();obj.history=[];pushHistory(obj,"Création");db.modules[page].push(obj);audit("Création","modules."+page,obj.id,"Entrée créée",null,obj)}
+  save();generic(page);
+ };
+}
 function genericDelete(page,index){if(user.role!=="ADMIN")return;if(confirm("Supprimer cette entrée ?")){db.modules[page].splice(index,1);save();generic(page)}}
 function exportBackup(){let blob=new Blob([JSON.stringify(db,null,2)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="NYSOA_CONSTRUCT_SAUVEGARDE_"+new Date().toISOString().slice(0,10)+".json";a.click();URL.revokeObjectURL(a.href)}
 $("#showLoginPass").onchange=e=>{
@@ -1242,10 +1477,10 @@ function quoteFinancials(q){let ht=quoteTotal(q),discount=+q.discount||0,net=Mat
 function quoteStatusClass(s){return s==="Accepté"?"qs-approved":s==="Refusé"?"qs-refused":s==="Envoyé"?"qs-sent":"qs-draft"}
 function quotes(){
  if(user.role!=="ADMIN"){document.querySelector("#content").innerHTML='<div class="panel"><div class="panel-body"><div class="admin-only-note">Le module Devis est réservé exclusivement à l’ADMIN.</div></div></div>';return}
- document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button></div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${db.quotes.map(q=>{let f=quoteFinancials(q);return `<tr data-search="${(q.id+' '+q.client+' '+q.object).toLowerCase()}"><td><b>${q.id}</b></td><td>${q.date}</td><td>${q.client}</td><td>${q.object}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${q.status}</span></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${q.id}')">Ouvrir</button><button class="btn-xs btn-save" onclick="duplicateQuote('${q.id}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${q.id}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
+ document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button></div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Chantier</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${db.quotes.map(q=>{let f=quoteFinancials(q);return `<tr data-search="${(q.id+' '+q.client+' '+q.object).toLowerCase()}"><td><b>${q.id}</b></td><td>${q.date}</td><td>${esc((db.projects||[]).find(p=>String(p.id)===String(q.project))?.name||q.project||"Non affecté")}</td><td>${q.client}</td><td>${q.object}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${q.status}</span></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${q.id}')">Ouvrir</button><button class="btn-xs btn-save" onclick="duplicateQuote('${q.id}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${q.id}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
 }
 function filterQuotes(){let v=(document.querySelector('#quoteSearch')?.value||'').toLowerCase();document.querySelectorAll('#quoteList tbody tr').forEach(r=>r.style.display=r.dataset.search.includes(v)?'':'none')}
-function newQuote(){return{id:"DEV-"+new Date().getFullYear()+"-"+String(db.quotes.length+1).padStart(3,"0"),date:new Date().toISOString().slice(0,10),validUntil:"",client:"",clientAddress:"",clientPhone:"",object:"",status:"Brouillon",vatEnabled:false,vatRate:20,discount:0,sections:[{title:"NOUVEAU LOT",items:[{no:"1.1",designation:"",unit:"",qty:1,pu:0}]}],notes:"Arrêté le présent devis à la somme indiquée ci-dessous.",createdBy:"ADMIN"}}
+function newQuote(){return{id:"DEV-"+new Date().getFullYear()+"-"+String(db.quotes.length+1).padStart(3,"0"),date:new Date().toISOString().slice(0,10),validUntil:"",project:currentProjectContext()||"",client:"",clientAddress:"",clientPhone:"",object:"",status:"Brouillon",vatEnabled:false,vatRate:20,discount:0,sections:[{title:"NOUVEAU LOT",items:[{no:"1.1",designation:"",unit:"",qty:1,pu:0}]}],notes:"Arrêté le présent devis à la somme indiquée ci-dessous.",createdBy:"ADMIN"}}
 let activeQuote=null;
 function quoteEditor(id=""){
  if(user.role!=="ADMIN"){quotes();return}
@@ -1255,6 +1490,7 @@ function renderQuoteEditor(){let q=activeQuote,f=quoteFinancials(q);document.que
  <div class="quote-editor">
   <div class="quote-head"><div class="quote-company"><img src="assets/logo_nysoa_construct.png"><div class="quote-company-info"><strong>ENTREPRISE NYSOA CONSTRUCT</strong><br>Construction - Bâtiment - Génie Civil - Travaux Publics<br>Lot 0708 K Ambohimena, Antsirabe<br>Téléphone / WhatsApp : +261 34 99 498 49<br>E-mail : hhajatiana15@gmail.com<br>Facebook : Entreprise NySoa Antsirabe</div></div><div class="quote-title-box"><h1>DEVIS</h1><div class="quote-no"><input value="${q.id}" onchange="activeQuote.id=this.value" style="text-align:right;font-weight:800"></div><div style="margin-top:8px">Date : <input type="date" value="${q.date}" onchange="activeQuote.date=this.value" style="width:150px;display:inline-block"></div></div></div>
   <div class="quote-meta"><label>Client<input value="${esc(q.client)}" onchange="activeQuote.client=this.value"></label><label>Adresse<input value="${esc(q.clientAddress)}" onchange="activeQuote.clientAddress=this.value"></label><label>Téléphone<input value="${esc(q.clientPhone)}" onchange="activeQuote.clientPhone=this.value"></label><label>Validité<input type="date" value="${q.validUntil||''}" onchange="activeQuote.validUntil=this.value"></label></div>
+  <div class="quote-object"><label>Chantier<select onchange="activeQuote.project=this.value"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(q.project||"")===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label></div>
   <div class="quote-object"><label>Objet du devis<input value="${esc(q.object)}" onchange="activeQuote.object=this.value"></label></div>
   <div class="table-wrap"><table class="quote-table"><thead><tr><th style="width:60px">N°</th><th>DÉSIGNATION</th><th style="width:90px">UNITÉ</th><th style="width:100px">QUANTITÉ</th><th style="width:145px">PU</th><th style="width:155px">PRIX TOTAL</th><th class="no-print" style="width:55px"></th></tr></thead><tbody>${q.sections.map((s,si)=>quoteSectionHtml(s,si)).join('')}</tbody></table></div>
   <div class="quote-add-row no-print"><button class="btn secondary" onclick="addQuoteSection()">+ Ajouter un lot</button><button class="btn secondary" onclick="addQuoteItem(${Math.max(0,q.sections.length-1)})">+ Ajouter une ligne</button></div>
@@ -1267,7 +1503,7 @@ function addQuoteSection(){activeQuote.sections.push({title:"NOUVEAU LOT",items:
 function removeQuoteSection(si){if(activeQuote.sections.length===1)return alert('Le devis doit contenir au moins un lot.');activeQuote.sections.splice(si,1);renderQuoteEditor()}
 function addQuoteItem(si){let s=activeQuote.sections[si];s.items.push({no:(si+1)+"."+(s.items.length+1),designation:"",unit:"",qty:1,pu:0});renderQuoteEditor()}
 function removeQuoteItem(si,ii){let s=activeQuote.sections[si];if(s.items.length===1)return alert('Le lot doit contenir au moins une ligne.');s.items.splice(ii,1);renderQuoteEditor()}
-function saveQuote(){if(!activeQuote.client.trim()||!activeQuote.object.trim())return alert('Veuillez renseigner le client et l’objet du devis.');let idx=db.quotes.findIndex(x=>x.id===activeQuote.id);if(idx>=0)db.quotes[idx]=structuredClone(activeQuote);else db.quotes.push(structuredClone(activeQuote));save();alert('Devis enregistré.');quotes()}
+function saveQuote(){if(!activeQuote.project)return alert('Veuillez choisir le chantier.');if(!activeQuote.client.trim()||!activeQuote.object.trim())return alert('Veuillez renseigner le client et l’objet du devis.');let idx=db.quotes.findIndex(x=>x.id===activeQuote.id);if(idx>=0)db.quotes[idx]=structuredClone(activeQuote);else db.quotes.push(structuredClone(activeQuote));save();alert('Devis enregistré.');quotes()}
 function duplicateQuote(id){let q=structuredClone(db.quotes.find(x=>x.id===id));q.id='DEV-'+new Date().getFullYear()+'-'+String(db.quotes.length+1).padStart(3,'0');q.status='Brouillon';q.date=new Date().toISOString().slice(0,10);db.quotes.push(q);save();quotes()}
 function deleteQuote(id){if(confirm('Supprimer définitivement ce devis ?')){db.quotes=db.quotes.filter(x=>x.id!==id);save();quotes()}}
 function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}

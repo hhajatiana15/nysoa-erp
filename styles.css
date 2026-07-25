@@ -271,3 +271,13 @@ textarea{min-height:90px}.btn{border:0;border-radius:8px;padding:10px 14px;font-
 .weekly-attendance select{min-width:52px;padding:7px 4px}
 .weekly-attendance .attendance-paid{width:22px;height:22px}
 @media(max-width:760px){.site-photo-preview{max-width:100%}.weekly-attendance{font-size:11px}}
+
+/* V4.5.3 Realtime Dashboard */
+.menu-notif-badge{margin-left:auto;min-width:20px;height:20px;padding:0 6px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;background:#d92d20;color:#fff}
+.presence-row{display:flex;gap:10px;align-items:flex-start;padding:12px 0;border-bottom:1px solid #e7ebef}.presence-row small{display:block;color:#667085;margin-top:2px}.presence-dot{width:11px;height:11px;border-radius:50%;margin-top:4px;flex:0 0 auto}.presence-online{background:#16a34a}.presence-inactive{background:#f59e0b}.presence-offline{background:#9ca3af}
+
+/* V4.5.4 — contexte chantier universel + facturation */
+.global-project-scope{display:inline-flex;align-items:center;gap:7px;padding:6px 9px;border:1px solid #d5dde5;border-radius:9px;background:#fff;font-size:12px;font-weight:700}
+.global-project-scope select{min-width:210px;margin:0;padding:7px 28px 7px 8px}
+.project-context-note{margin:0 0 10px;padding:10px 12px;border:1px solid #b9d7ef;border-radius:9px;background:#eef8ff;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+@media(max-width:760px){.global-project-scope{width:100%}.global-project-scope select{min-width:0;flex:1}}

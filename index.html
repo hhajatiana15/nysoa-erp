@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="nysoa-sync-version" content="4.5.2">
+  <meta name="nysoa-sync-version" content="4.5.4">
 <title>ERP NYSOA CONSTRUCT</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -68,6 +68,11 @@
           <button class="workspace-tab technique-tab" data-workspace="TECHNIQUE">TECHNIQUE</button>
         </div>
         <div class="data-toolbar no-print">
+          <label class="global-project-scope">🏗 Chantier
+            <select id="globalProjectFilter" onchange="setGlobalProjectContext(this.value)">
+              <option value="">Tous les chantiers</option>
+            </select>
+          </label>
           <button class="btn secondary" onclick="printCurrentView()">🖨 Impression directe</button>
           <button class="btn secondary" onclick="exportCurrentModuleCSV()">⬇ Exporter CSV</button>
           <button class="btn primary" onclick="openImportDialog()">⬆ Importer Excel / CSV</button>
@@ -95,7 +100,7 @@
 
     <footer class="footer">
       <span>© 2026 ENTREPRISE NYSOA CONSTRUCT - Tous droits réservés</span>
-      <span>Logiciel de Gestion BTP - Version 4.5.2 Chantier & Présence</span>
+      <span>Logiciel de Gestion BTP - Version 4.5.4 Chantier & Facturation</span>
       <span>Téléphone / WhatsApp : +261 34 99 498 49</span>
     </footer>
   </div>

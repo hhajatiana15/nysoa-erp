@@ -1,0 +1,18 @@
+NYSOA ERP — PATCH V4.5.4
+CHANTIER UNIVERSEL + FACTURATION PAR TRANCHES
+
+- Sélecteur Chantier visible dans toute l’ERP.
+- Les modules génériques demandent obligatoirement le chantier.
+- Filtrage des listes par chantier.
+- Devis rattaché à un chantier.
+- Facturation par chantier et devis accepté :
+  montant devis validé, pourcentage de tranche, montant de tranche,
+  total payé et reste à payer.
+- Chiffre d’affaires calculé depuis les tranches facturées et détail par chantier.
+
+INSTALLATION
+1. Décompresser ce ZIP.
+2. GitHub > nysoa-erp > Add file > Upload files.
+3. Remplacer app.js, styles.css et index.html.
+4. Commit changes.
+5. Attendre GitHub Pages puis Cmd + Shift + R.
