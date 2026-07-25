@@ -1,0 +1,16 @@
+NYSOA ERP V4.5.4b — HOTFIX FACTURATION SAISIE
+
+Corrections:
+- Client devient saisissable.
+- Montant du devis validé devient saisissable.
+- Le choix d'un devis accepté reste possible et remplit automatiquement Client + Montant.
+- La facturation peut aussi être saisie manuellement sans devis lié.
+- Tranche (%) reste saisissable.
+- Montant de la tranche, total déjà payé et reste à payer restent calculés automatiquement pour éviter les incohérences.
+
+Installation:
+1. Décompresser le ZIP.
+2. GitHub > nysoa-erp > Add file > Upload files.
+3. Remplacer app.js, styles.css et index.html.
+4. Commit changes.
+5. Attendre 1 à 3 minutes et faire Cmd + Shift + R.

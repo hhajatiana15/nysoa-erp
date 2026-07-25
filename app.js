@@ -1379,13 +1379,13 @@ function invoiceForm(id=""){
  const projectId=r?.project||currentProjectContext()||"",quotes=acceptedQuotesForProject(projectId);
  const selectedQuoteId=r?.quoteId||quotes.slice(-1)[0]?.id||"",selectedQuote=(db.quotes||[]).find(q=>q.id===selectedQuoteId);
  const qa=r?.quoteAmount||(selectedQuote?quoteFinancials(selectedQuote).ttc:0),pct=+r?.tranchePercent||0;
- $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} FACTURATION</h3><form id="fInvoice" class="form-grid">
+ $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} FACTURATION</h3><div class="notice">Vous pouvez sélectionner un devis accepté pour remplir automatiquement les champs, ou saisir manuellement le client et le montant du devis validé.</div><form id="fInvoice" class="form-grid">
  <label>N° facture<input name="id" value="${esc(r?.id||"FAC-"+new Date().getFullYear()+"-"+String(db.modules.invoices.length+1).padStart(4,"0"))}" required></label>
  <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
  <label>Chantier<select name="project" required onchange="invoiceProjectChanged(this.value)"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(projectId)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
- <label>Devis validé<select name="quoteId" required onchange="invoiceQuoteChanged(this.value)"><option value="">Choisir le devis accepté</option>${quotes.map(q=>`<option value="${esc(q.id)}" ${q.id===selectedQuoteId?"selected":""}>${esc(q.id)} — ${money(quoteFinancials(q).ttc)}</option>`).join("")}</select></label>
- <label>Client<input name="client" id="invoiceClient" value="${esc(r?.client||selectedQuote?.client||"")}" readonly></label>
- <label>Montant du devis validé<input name="quoteAmount" id="invoiceQuoteAmount" type="number" value="${+qa||0}" readonly></label>
+ <label>Devis validé<select name="quoteId" onchange="invoiceQuoteChanged(this.value)"><option value="">Saisie manuelle / aucun devis lié</option>${quotes.map(q=>`<option value="${esc(q.id)}" ${q.id===selectedQuoteId?"selected":""}>${esc(q.id)} — ${money(quoteFinancials(q).ttc)}</option>`).join("")}</select></label>
+ <label>Client<input name="client" id="invoiceClient" value="${esc(r?.client||selectedQuote?.client||"")}" placeholder="Nom du client" required></label>
+ <label>Montant du devis validé<input name="quoteAmount" id="invoiceQuoteAmount" type="number" min="0" step="0.01" value="${+qa||0}" oninput="recalcInvoiceForm()" required></label>
  <label>Tranche de paiement (%)<input name="tranchePercent" id="invoiceTranchePercent" type="number" min="0.01" max="100" step="0.01" value="${pct||""}" oninput="recalcInvoiceForm()" required></label>
  <label>Montant de cette tranche<input name="trancheAmount" id="invoiceTrancheAmount" type="number" value="${r?.trancheAmount||((+qa||0)*pct/100)||0}" readonly></label>
  <label>Total déjà payé avant cette tranche<input id="invoiceAlreadyPaid" value="${invoicePaidForProject(projectId,r?.id||"")}" readonly></label>
@@ -1395,10 +1395,12 @@ function invoiceForm(id=""){
  recalcInvoiceForm();
  $("#fInvoice").onsubmit=e=>{
   e.preventDefault();const f=new FormData(e.target),project=f.get("project"),quoteId=f.get("quoteId"),q=(db.quotes||[]).find(x=>x.id===quoteId);
-  if(!q||q.status!=="Accepté")return alert("Le devis sélectionné doit être accepté.");
-  const amount=quoteFinancials(q).ttc,pct=+f.get("tranchePercent")||0,tranche=amount*pct/100,already=invoicePaidForProject(project,r?.id||"");
+  if(q&&q.status!=="Accepté")return alert("Le devis sélectionné doit être accepté.");
+  const client=(f.get("client")||q?.client||"").trim(),amount=+f.get("quoteAmount")||0,pct=+f.get("tranchePercent")||0,tranche=amount*pct/100,already=invoicePaidForProject(project,r?.id||"");
+  if(!client)return alert("Veuillez renseigner le client.");
+  if(amount<=0)return alert("Veuillez renseigner le montant du devis validé.");
   if(already+tranche>amount+0.01)return alert("Cette tranche dépasse le reste à payer.");
-  const obj={id:f.get("id"),date:f.get("date"),project,quoteId,client:q.client,quoteAmount:amount,tranchePercent:pct,trancheAmount:tranche,note:f.get("note")||"",workflow:r?.workflow||"Validé",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
+  const obj={id:f.get("id"),date:f.get("date"),project,quoteId:quoteId||"",client,quoteAmount:amount,tranchePercent:pct,trancheAmount:tranche,note:f.get("note")||"",workflow:r?.workflow||"Validé",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
   if(r)Object.assign(r,obj);else{obj.createdAt=new Date().toISOString();db.modules.invoices.push(obj);}
   save();invoicesPage();
  };
@@ -1408,9 +1410,11 @@ function invoiceProjectChanged(projectId){
  invoiceForm();
 }
 function invoiceQuoteChanged(quoteId){
- const q=(db.quotes||[]).find(x=>x.id===quoteId);if(!q)return;
- document.getElementById("invoiceClient").value=q.client||"";
- document.getElementById("invoiceQuoteAmount").value=quoteFinancials(q).ttc;
+ const q=(db.quotes||[]).find(x=>x.id===quoteId);
+ if(q){
+  document.getElementById("invoiceClient").value=q.client||"";
+  document.getElementById("invoiceQuoteAmount").value=quoteFinancials(q).ttc;
+ }
  recalcInvoiceForm();
 }
 function recalcInvoiceForm(){
