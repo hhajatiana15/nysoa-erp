@@ -1,0 +1,47 @@
+NYSOA ERP V4.6.0 — AUDIT LOGIQUE ERP
+
+OBJECTIF
+Cette version ne se contente pas d'ajouter des écrans. Elle normalise les relations financières entre les modules afin d'éviter les doubles comptages et les confusions.
+
+LOGIQUE FINANCIÈRE
+- Budget projet = prévision. Ce n'est pas le chiffre d'affaires.
+- Devis validé = valeur contractuelle acceptée.
+- Chiffre d'affaires = factures / tranches émises.
+- Encaissement client = argent réellement reçu.
+- Reste à facturer = devis validé - facturation.
+- Créance client = facturation - encaissements validés.
+- Appro caisse = entrée de fonds pour le chantier.
+- Dépense = sortie réelle.
+- Paie = sortie réelle au moment de l'avance et/ou du solde.
+- Solde caisse = appro validées - sorties réelles.
+- Coût réel = dépenses + paie.
+- Coût engagé = coût réel + achats approuvés/effectués/livrés non payés.
+- Marge provisoire = chiffre d'affaires facturé - coût réel.
+
+NOUVEAUTÉS
+1. Module ENCAISSEMENTS CLIENTS séparé de FACTURATION.
+2. FACTURATION corrigée : « Total facturé » et « Reste à facturer ».
+3. Dashboard Finance standardisé.
+4. Fiche financière par chantier.
+5. Achats : chantier obligatoire + état paiement.
+6. Achat marqué Payé : création automatique d'une dépense liée, une seule fois.
+7. CONTRÔLE LOGIQUE ERP pour détecter :
+   - facturation supérieure aux devis validés,
+   - encaissements supérieurs à la facturation,
+   - caisse négative,
+   - opérations sans chantier,
+   - paie supérieure au salaire dû,
+   - achat payé sans dépense liée.
+8. Les données existantes sont conservées.
+
+IMPORTANT
+Les modules techniques et opérationnels restent rattachés au chantier. Ils ne doivent pas créer une charge financière en double : la source comptable des sorties reste DÉPENSES + PAIE.
+
+INSTALLATION
+1. Décompresser le ZIP.
+2. GitHub > nysoa-erp > Add file > Upload files.
+3. Remplacer app.js, styles.css et index.html.
+4. Commit changes.
+5. Attendre le déploiement GitHub Pages.
+6. Cmd + Shift + R.
+7. Ouvrir ADMIN > CONTRÔLE LOGIQUE ERP pour vérifier les anciennes données.

@@ -1,0 +1,14 @@
+{
+  "version": "4.6.0",
+  "principles": {
+    "budget": "prévision",
+    "validated_quote": "valeur contractuelle",
+    "revenue": "facturation",
+    "client_receipts": "encaissements réellement reçus",
+    "cash": "appro validées - sorties réelles",
+    "actual_cost": "dépenses + paie",
+    "committed_cost": "coût réel + achats engagés non payés",
+    "margin": "CA facturé - coût réel"
+  },
+  "migration": "non destructive"
+}

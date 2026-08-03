@@ -284,3 +284,14 @@ textarea{min-height:90px}.btn{border:0;border-radius:8px;padding:10px 14px;font-
 
 /* V4.5.5 employés & paie */
 .panel .notice{line-height:1.45}
+
+/* V4.5.6 finance logic */
+.checkline{display:flex!important;align-items:center;gap:8px;padding-top:26px}
+.checkline input{width:auto!important;margin:0!important}
+.cash-entry{color:#087a45;font-weight:700}.cash-exit{color:#b42318;font-weight:700}
+
+/* V4.6.0 — audit logique ERP */
+.finance-kpis-v460{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.finance-logic-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:12px 0}
+.finance-logic-strip>div{background:#fff;border:1px solid #dfe6ee;border-radius:10px;padding:12px;display:flex;justify-content:space-between;gap:12px}
+.finance-logic-strip span{font-weight:800}
