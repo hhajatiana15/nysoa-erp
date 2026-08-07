@@ -45,3 +45,8 @@ INSTALLATION
 5. Attendre le déploiement GitHub Pages.
 6. Cmd + Shift + R.
 7. Ouvrir ADMIN > CONTRÔLE LOGIQUE ERP pour vérifier les anciennes données.
+
+HOTFIX V4.6.1 — 07/08/2026
+- Correction de l'erreur « cashTable is not defined » sur le tableau de bord GESTIONNAIRE.
+- Ajout du tableau des 10 derniers mouvements de caisse.
+- Aucun changement de la logique financière V4.6.0.

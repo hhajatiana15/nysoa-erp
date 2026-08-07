@@ -890,6 +890,23 @@ function dashboardTechnique(){
  </div>`;
 }
 
+// ===== HOTFIX V4.6.1 — TABLE CAISSE DASHBOARD GESTIONNAIRE =====
+function cashTable(){
+ const ctx=currentProjectContext();
+ const rows=cashMovements(ctx);
+ let running=0;
+ const rendered=rows.map(r=>{
+  running+=r.type==="Entrée"?(+r.amount||0):-(+r.amount||0);
+  return {...r,balance:running};
+ });
+ const recent=rendered.slice(-10).reverse();
+ return `<div class="panel"><h3>DERNIERS MOUVEMENTS DE CAISSE</h3>
+ <div class="notice">Le solde est calculé uniquement à partir des approvisionnements validés et des sorties réelles.</div>
+ <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Type</th><th>Libellé</th><th>Entrée</th><th>Sortie</th><th>Solde</th></tr></thead><tbody>
+ ${recent.length?recent.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(r.type||"")}</td><td>${esc(r.label||r.source||"")}</td><td>${r.type==="Entrée"?money(r.amount):""}</td><td>${r.type==="Sortie"?money(r.amount):""}</td><td><b>${money(r.balance)}</b></td></tr>`).join(""):`<tr><td colspan="7">Aucun mouvement de caisse.</td></tr>`}
+ </tbody></table></div></div>`;
+}
+
 function dashboard(){
  let totalBudget=sum(db.projects.map(x=>x.budget));
  let totalApp=sum(db.appro.filter(x=>x.status==="Validée").map(x=>x.amount));
