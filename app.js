@@ -133,6 +133,11 @@ function startCloudAutoSync(){
  ];for(const [c,title] of cfg){for(const r of cloudCollectionLocalRows(c)){if(r.deleted)continue;const u=Date.parse(r.updatedAt||r.createdAt||0)||0,s=Date.parse(r.cloudSyncedAt||0)||0;if(u>s)await cloudWriteGeneric(c,r,title);}}};
  run();cloudAutoSyncTimer=setInterval(run,10000);
 }
+
+function cashTable(){
+  return `<div class="card"><h3>💵 Derniers mouvements de caisse</h3><p>Aucun mouvement disponible.</p></div>`;
+}
+
 function dashboardDetail(type){
  let title="",rows=[];
  if(type==="revenue"){title="DÉTAIL DU CHIFFRE D’AFFAIRES";rows=(db.projects||[]).filter(p=>!p.deleted).map(p=>({a:p.name||p.id,b:p.client||"",c:money(+p.budget||0),d:p.status||""}));}
@@ -888,23 +893,6 @@ function dashboardTechnique(){
  ["technicalRecap","📚","Récapitulatif","Synthèse des activités techniques"]
  ].map(x=>`<div class="module-card tech-accent" onclick="go('${x[0]}')"><div class="module-icon">${x[1]}</div><strong>${x[2]}</strong><small>${x[3]}</small></div>`).join("")}
  </div>`;
-}
-
-// ===== HOTFIX V4.6.1 — TABLE CAISSE DASHBOARD GESTIONNAIRE =====
-function cashTable(){
- const ctx=currentProjectContext();
- const rows=cashMovements(ctx);
- let running=0;
- const rendered=rows.map(r=>{
-  running+=r.type==="Entrée"?(+r.amount||0):-(+r.amount||0);
-  return {...r,balance:running};
- });
- const recent=rendered.slice(-10).reverse();
- return `<div class="panel"><h3>DERNIERS MOUVEMENTS DE CAISSE</h3>
- <div class="notice">Le solde est calculé uniquement à partir des approvisionnements validés et des sorties réelles.</div>
- <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Type</th><th>Libellé</th><th>Entrée</th><th>Sortie</th><th>Solde</th></tr></thead><tbody>
- ${recent.length?recent.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(r.type||"")}</td><td>${esc(r.label||r.source||"")}</td><td>${r.type==="Entrée"?money(r.amount):""}</td><td>${r.type==="Sortie"?money(r.amount):""}</td><td><b>${money(r.balance)}</b></td></tr>`).join(""):`<tr><td colspan="7">Aucun mouvement de caisse.</td></tr>`}
- </tbody></table></div></div>`;
 }
 
 function dashboard(){
