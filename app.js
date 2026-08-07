@@ -17,6 +17,7 @@ function ensureSecurityData(){
  db.modules.attendanceWeekly=Array.isArray(db.modules.attendanceWeekly)?db.modules.attendanceWeekly:[];
  db.modules.attendanceQR=Array.isArray(db.modules.attendanceQR)?db.modules.attendanceQR:[];
  db.userActivityLog=Array.isArray(db.userActivityLog)?db.userActivityLog:[];
+ db.technicianMiniProfiles=Array.isArray(db.technicianMiniProfiles)?db.technicianMiniProfiles:[];
 
  save();
 }
@@ -48,6 +49,58 @@ function logTechnicalEntry(action,moduleName,reference,details){
  });
  save();
 }
+
+
+// ===== V4.7.5 — MINI IDENTITÉS TECHNICIENS / SESSIONS SIMULTANÉES =====
+function technicianSessionProfile(){
+ try{return JSON.parse(sessionStorage.getItem("nysoa_technician_identity")||"null");}catch(e){return null;}
+}
+function effectiveUserIdentity(){
+ const t=technicianSessionProfile();
+ if(user?.role==="TECHNICIEN"&&t)return {uid:"TECH-"+t.id,username:t.name,label:t.name,role:"TECHNICIEN",technicianId:t.id,sharedUid:user.uid||""};
+ return user||{};
+}
+async function loadTechnicianMiniProfiles(){
+ let rows=Array.isArray(db.technicianMiniProfiles)?db.technicianMiniProfiles:[];
+ if(cloudReady&&fbStore){
+  try{const s=await fbStore.collection("technicianMiniProfiles").get();rows=s.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.active!==false);db.technicianMiniProfiles=rows;save();}catch(e){console.warn("mini technicians",e);}
+ }
+ return rows.filter(x=>x.active!==false);
+}
+async function saveTechnicianMiniProfile(obj){
+ db.technicianMiniProfiles=Array.isArray(db.technicianMiniProfiles)?db.technicianMiniProfiles:[];
+ const old=db.technicianMiniProfiles.find(x=>x.id===obj.id);
+ if(old)Object.assign(old,obj);else db.technicianMiniProfiles.push(obj);save();
+ if(cloudReady&&fbStore)await fbStore.collection("technicianMiniProfiles").doc(obj.id).set(cloudSanitize(obj),{merge:true});
+}
+async function technicianIdentityGate(){
+ const rows=await loadTechnicianMiniProfiles();
+ $("#content").innerHTML=`<div class="panel"><h3>IDENTIFICATION TECHNICIEN</h3><div class="panel-body">
+ <div class="notice">Compte TECHNICIEN partagé. Choisissez votre identité personnelle. Chaque téléphone ou ordinateur garde sa propre session, donc plusieurs techniciens peuvent travailler simultanément.</div>
+ <div class="form-actions"><button class="btn primary" onclick="technicianMiniCreate()">+ Créer mon identité</button></div>
+ <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Accès</th></tr></thead><tbody>${rows.length?rows.map(t=>`<tr><td><b>${esc(t.name||"Technicien")}</b></td><td><button class="btn-xs btn-edit" onclick="technicianMiniLogin('${esc(t.id)}')">Choisir</button></td></tr>`).join(""):'<tr><td colspan="2">Aucune identité. Cliquez sur « Créer mon identité ».</td></tr>'}</tbody></table></div></div></div>`;
+}
+function technicianMiniCreate(){
+ $("#content").innerHTML=`<div class="panel"><h3>CRÉER MON IDENTITÉ</h3><form id="fMiniTech" class="form-grid">
+ <label>Nom<input name="name" required placeholder="Ex. Jean Rakoto"></label>
+ <label>PIN personnel<input name="pin" inputmode="numeric" minlength="4" maxlength="8" required placeholder="4 à 8 chiffres"></label>
+ <div class="form-actions full"><button class="btn primary">Créer et entrer</button><button type="button" class="btn secondary" onclick="technicianIdentityGate()">Annuler</button></div></form></div>`;
+ document.getElementById("fMiniTech").onsubmit=async ev=>{ev.preventDefault();const f=new FormData(ev.target),name=String(f.get("name")||"").trim(),pin=String(f.get("pin")||"").trim();if(!/^\d{4,8}$/.test(pin))return alert("PIN : 4 à 8 chiffres.");
+ const obj={id:"TMIN-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),name,pin,active:true,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};await saveTechnicianMiniProfile(obj);sessionStorage.setItem("nysoa_technician_identity",JSON.stringify({id:obj.id,name:obj.name}));$("#currentUserLabel").textContent=obj.name+" — Technicien";lastMeaningfulActivityAt=Date.now();await logUserActivity("Identification technicien créée","session",obj.id,obj.name);renderMenu();go("dashboard");};
+}
+async function technicianMiniLogin(id){
+ const rows=await loadTechnicianMiniProfiles(),t=rows.find(x=>String(x.id)===String(id));if(!t)return alert("Identité introuvable.");
+ const pin=prompt("PIN personnel de "+t.name+" :");if(pin===null)return;if(String(pin)!==String(t.pin||""))return alert("PIN incorrect.");
+ sessionStorage.setItem("nysoa_technician_identity",JSON.stringify({id:t.id,name:t.name}));$("#currentUserLabel").textContent=t.name+" — Technicien";lastMeaningfulActivityAt=Date.now();await logUserActivity("Identification technicien","session",t.id,t.name);renderMenu();go("dashboard");
+}
+async function technicianMyIdentity(){
+ const cur=technicianSessionProfile();if(!cur)return technicianIdentityGate();const rows=await loadTechnicianMiniProfiles(),t=rows.find(x=>String(x.id)===String(cur.id));if(!t)return technicianIdentityGate();
+ $("#content").innerHTML=`<div class="panel"><h3>MON IDENTITÉ TECHNICIEN</h3><form id="fMiniTechEdit" class="form-grid">
+ <label>Nom<input name="name" value="${esc(t.name||"")}" required></label><label>Nouveau PIN<input name="pin" inputmode="numeric" minlength="4" maxlength="8" placeholder="Laisser vide pour conserver"></label>
+ <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="go('dashboard')">Annuler</button><button type="button" class="btn secondary" onclick="technicianChangeIdentity()">Changer de technicien</button></div></form></div>`;
+ document.getElementById("fMiniTechEdit").onsubmit=async ev=>{ev.preventDefault();const f=new FormData(ev.target),name=String(f.get("name")||"").trim(),pin=String(f.get("pin")||"").trim();if(pin&&!/^\d{4,8}$/.test(pin))return alert("PIN : 4 à 8 chiffres.");t.name=name;if(pin)t.pin=pin;t.updatedAt=new Date().toISOString();await saveTechnicianMiniProfile(t);sessionStorage.setItem("nysoa_technician_identity",JSON.stringify({id:t.id,name:t.name}));$("#currentUserLabel").textContent=t.name+" — Technicien";await logUserActivity("Identité technicien modifiée","session",t.id,t.name);renderMenu();go("dashboard");};
+}
+function technicianChangeIdentity(){sessionStorage.removeItem("nysoa_technician_identity");lastMeaningfulActivityAt=0;technicianIdentityGate();}
 
 // ===== FIREBASE CLOUD SYNC — VERSION 4.5 / PHASE 1 =====
 // Phase 1 : Authentication, profils utilisateurs, chantiers et rapports journaliers.
@@ -100,7 +153,7 @@ async function logUserActivity(action,moduleName="",reference="",details=""){
  const now=new Date();lastMeaningfulActivityAt=now.getTime();
  const rec={id:"ACT-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),uid:user.uid||"",username:user.username||user.email||"",label:user.label||user.username||user.email||"",role:user.role||"",module:moduleName||cloudCurrentPage||"dashboard",action:String(action||"Activité"),reference:String(reference||""),details:String(details||""),createdAt:now.toISOString()};
  db.userActivityLog=Array.isArray(db.userActivityLog)?db.userActivityLog:[];db.userActivityLog.unshift(rec);if(db.userActivityLog.length>5000)db.userActivityLog.length=5000;save();
- if(cloudReady&&fbStore&&user.uid){try{await Promise.all([fbStore.collection("userActivity").doc(rec.id).set(cloudSanitize(rec)),updatePresence("active")]);}catch(e){console.warn("activity",e);}}
+ if(cloudReady&&fbStore&&actor.uid){try{await Promise.all([fbStore.collection("userActivity").doc(rec.id).set(cloudSanitize(rec)),updatePresence("active")]);}catch(e){console.warn("activity",e);}}
 }
 function startPresence(){clearInterval(presenceTimer);lastMeaningfulActivityAt=Date.now();logUserActivity("Connexion ERP","session");presenceTimer=setInterval(()=>updatePresence("auto"),60000);}
 function stopPresence(){clearInterval(presenceTimer);presenceTimer=null;if(user?.uid){logUserActivity("Déconnexion ERP","session");updatePresence("offline");}}
@@ -622,7 +675,7 @@ const menus={
  ADMIN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["situations","📊","SITUATION DE TRAVAUX"],["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],["fuel","⛽","CARBURANT"],["employees","👥","EMPLOYÉS"],["qrAttendance","▣","PRÉSENCE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],["treasury","💵","TRÉSORERIE"],["dailyReports","📝","RAPPORTS JOURNALIERS"],["reports","◔","RAPPORTS"],["adminValidations","✅","VALIDATIONS À PUBLIER"],["usageTime","⏱","TEMPS D’UTILISATION"],["trash","🗑","CORBEILLE"],["audit","📜","JOURNAL D’AUDIT"],["logicAudit","🧭","CONTRÔLE LOGIQUE ERP"],["presenceUsers","●","UTILISATEURS ACTIFS"],["technicians","🧑‍🔧","TECHNICIENS & ACCÈS"],["settings","⚙","PARAMÈTRES"]],
  GESTIONNAIRE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["employees","👥","EMPLOYÉS"],["qrAttendance","▣","SCAN BADGE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","DEMANDE D'APPRO."],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS FINANCIERS"]],
  CONTROLE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["qrAttendance","▣","SCAN BADGE QR"],["siteControls","📷","CONTRÔLE CHANTIER"],["attendance","◷","PRÉSENCE CHANTIER"],["situations","📊","SITUATION DE TRAVAUX"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]],
- TECHNICIEN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","CHANTIERS"],["qrAttendance","▣","SCAN BADGE QR"],["attendance","◷","POINTAGE"],["siteControls","📷","SUIVI CHANTIER"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
+ TECHNICIEN:[["dashboard","◉","TABLEAU DE BORD"],["technicianMyIdentity","👤","MON IDENTITÉ"],["projects","🏗","CHANTIERS"],["qrAttendance","▣","SCAN BADGE QR"],["attendance","◷","POINTAGE"],["siteControls","📷","SUIVI CHANTIER"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
 };
 
 function projectFinancialDetail(projectId){
@@ -664,7 +717,7 @@ async function login(u,p){
     return false;
   }
 }
-function boot(){ensureSecurityData();touchCurrentUser();if(user.role!=="ADMIN")startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");$("#currentUserLabel").textContent=user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");renderMenu();
+function boot(){ensureSecurityData();touchCurrentUser();if(user.role!=="ADMIN")startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");const actor=effectiveUserIdentity();$("#currentUserLabel").textContent=actor.label||user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");renderMenu();
 const sendBtn=document.getElementById("sendUpdatesBtn");
 const refreshBtn=document.getElementById("refreshAdminBtn");
 if(sendBtn)sendBtn.style.display=user.role==="ADMIN"?"none":"inline-flex";
@@ -686,7 +739,7 @@ const cloudSyncBtn=document.getElementById("cloudSyncBtn");
 if(cloudMigrateBtn)cloudMigrateBtn.style.display=user.role==="ADMIN"?"inline-flex":"none";
 if(cloudSyncBtn)cloudSyncBtn.style.display="inline-flex";
 cloudStatusText(navigator.onLine?"Connecté":"Hors ligne",navigator.onLine?"ok":"error");
-if(user.role==="ADMIN"&&adminWorkspace==="FINANCE")go("dashboardFinance");else if(user.role==="ADMIN"&&adminWorkspace==="TECHNIQUE")go("dashboardTechnique");else go("dashboard")}
+if(user.role==="TECHNICIEN"&&!technicianSessionProfile())technicianIdentityGate();else if(user.role==="ADMIN"&&adminWorkspace==="FINANCE")go("dashboardFinance");else if(user.role==="ADMIN"&&adminWorkspace==="TECHNIQUE")go("dashboardTechnique");else go("dashboard")}
 function renderMenu(){
  let list=menus[user.role];
  if(user.role==="ADMIN"){
@@ -752,7 +805,7 @@ function projectContextNotice(){
  return `<div class="project-context-note">🏗 Chantier sélectionné : <b>${esc(pr?.name||p)}</b> <button class="btn-xs" onclick="setGlobalProjectContext('')">Afficher tout</button></div>`;
 }
 
-function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,invoices:invoicesPage,clientReceipts:clientReceiptsPage,employees:employeesPage,qrAttendance:qrAttendancePage,technicians:techniciansPage,payroll:payrollPage,expenses:expensesPage,appro:approPage,cash:cashPage,projects:projects,siteControls:siteControlsPage,reports:reports,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage,logicAudit:logicAuditPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
+function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,invoices:invoicesPage,clientReceipts:clientReceiptsPage,employees:employeesPage,qrAttendance:qrAttendancePage,technicianMyIdentity:technicianMyIdentity,technicians:techniciansPage,payroll:payrollPage,expenses:expensesPage,appro:approPage,cash:cashPage,projects:projects,siteControls:siteControlsPage,reports:reports,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage,logicAudit:logicAuditPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
 function kpi(icon,color,title,value,note="",page=""){
  const routes={
   "CHANTIERS EN COURS":"projects","NOMBRE DE CHANTIERS":"projects",

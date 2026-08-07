@@ -1,0 +1,11 @@
+NYSOA ERP V4.7.5 — MULTI-TECHNICIENS SIMULTANÉS
+
+- Un seul compte Firebase TECHNICIEN peut être partagé.
+- Après connexion: mini-identification personnelle Nom + PIN.
+- Création d'identité très simple.
+- Chaque téléphone/ordinateur conserve sa propre identité dans sa session.
+- Plusieurs techniciens peuvent travailler simultanément sans se remplacer.
+- Menu MON IDENTITÉ: modifier son nom ou son PIN, ou changer de technicien.
+- Les activités et présences Admin sont attribuées à l'identité technicien, pas seulement au compte partagé.
+- Les profils mini-techniciens sont synchronisés via Firebase collection technicianMiniProfiles.
+- Base: V4.7.4 Employee Edit Fix.
