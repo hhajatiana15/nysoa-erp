@@ -1,0 +1,23 @@
+NYSOA ERP V4.7.2 — BADGE PROFESSIONNEL + QR LOCAL
+
+Base: V4.7.1
+
+Ajouts:
+- Générateur QR embarqué localement (qrcode.min.js): le badge ne dépend plus du chargement d'une bibliothèque QR sur Internet.
+- Champ Photo employé optionnel dans la fiche employé.
+- Photo compressée avant stockage pour limiter le poids.
+- Après Enregistrer un nouvel employé, affichage automatique de son badge professionnel.
+- Badge format standard 85,6 x 54 mm, avec logo NYSOA, photo/cadre vide, nom, fonction, matricule, chantier, statut et QR de présence.
+- Impression: seul le badge est imprimé, au format carte.
+- Les employés déjà existants peuvent aussi ouvrir/générer leur badge QR.
+
+Installation GitHub:
+Uploader/remplacer tous les fichiers de cette archive, y compris qrcode.min.js.
+Ne pas oublier qrcode.min.js: il rend la génération QR locale.
+
+Test recommandé:
+1. Créer un employé avec ou sans photo.
+2. Enregistrer.
+3. Vérifier que le badge apparaît immédiatement avec QR.
+4. Cliquer Imprimer le badge uniquement.
+5. Tester le scan du QR dans Présence QR.

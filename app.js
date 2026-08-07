@@ -1413,11 +1413,35 @@ function ensureEmployeeQrToken(e){
 }
 function employeeBadge(id){
  const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return alert("Employé introuvable.");
- ensureEmployeeQrToken(e);const project=projectLabel(employeeProject(e))||"Multi-chantiers / non affecté";
- $("#content").innerHTML=`<div class="panel"><h3>BADGE QR — EMPLOYÉ</h3><div class="badge-qr-wrap"><div class="employee-badge" id="employeeBadgePrint"><div class="badge-brand">ENTREPRISE NYSOA CONSTRUCT</div><div id="employeeQrCanvas" class="qr-canvas"></div><h2>${esc(employeeName(e))}</h2><p><b>${esc(employeeRole(e))}</b></p><p>Matricule : ${esc(e.id)}</p><p>Chantier : ${esc(project)}</p><small>Badge personnel — ne pas prêter</small></div></div><div class="panel-body no-print"><button class="btn primary" onclick="window.print()">🖨 Imprimer le badge</button> <button class="btn secondary" onclick="employeesPage()">Retour</button><div class="notice">Le QR contient uniquement un identifiant technique NYSOA et un jeton aléatoire. Le nom du salarié n’est pas encodé directement dans le QR.</div></div></div>`;
+ ensureEmployeeQrToken(e);const project=projectLabel(employeeProject(e))||"Multi-chantiers / Non affecté";
+ const photo=e.photoData||"";
+ $("#content").innerHTML=`<div class="panel badge-screen"><h3 class="no-print">BADGE PROFESSIONNEL — EMPLOYÉ</h3>
+ <div class="badge-qr-wrap"><div class="employee-badge employee-badge-v472" id="employeeBadgePrint">
+   <div class="badge-top"><img src="assets/logo_nysoa_construct.png" class="badge-logo" alt="NYSOA"><div><div class="badge-brand">ENTREPRISE NYSOA CONSTRUCT</div><div class="badge-subtitle">CARTE PROFESSIONNELLE</div></div></div>
+   <div class="badge-main">
+     <div class="badge-photo">${photo?`<img src="${photo}" alt="Photo ${esc(employeeName(e))}">`:`<div class="badge-photo-empty"><span>PHOTO</span></div>`}</div>
+     <div class="badge-info"><h2>${esc(employeeName(e))}</h2><div class="badge-job">${esc(employeeRole(e))}</div><p><b>Matricule :</b> ${esc(e.id)}</p><p><b>Chantier :</b> ${esc(project)}</p><p><b>Statut :</b> ${esc(e.workflow||"Actif")}</p></div>
+     <div class="badge-qr-col"><div id="employeeQrCanvas" class="qr-canvas"></div><small>SCAN PRÉSENCE</small></div>
+   </div>
+   <div class="badge-footer">Badge personnel • ENTREPRISE NYSOA CONSTRUCT</div>
+ </div></div>
+ <div class="panel-body no-print badge-actions"><button class="btn primary" onclick="printEmployeeBadge()">🖨 Imprimer le badge uniquement</button> <button class="btn secondary" onclick="employeeForm('${e.id}')">Modifier / Photo</button> <button class="btn secondary" onclick="employeesPage()">Retour</button></div></div>`;
  const box=document.getElementById("employeeQrCanvas");
- if(window.QRCode){new QRCode(box,{text:employeeQrCode(e),width:190,height:190,correctLevel:QRCode.CorrectLevel.M});}
- else box.innerHTML=`<div class="qr-lib-error">Générateur QR indisponible.<br><b>${esc(employeeQrCode(e))}</b></div>`;
+ if(window.QRCode){new QRCode(box,{text:employeeQrCode(e),width:118,height:118,correctLevel:QRCode.CorrectLevel.M});}
+ else box.innerHTML=`<div class="qr-lib-error">QR local indisponible.</div>`;
+}
+function printEmployeeBadge(){window.print();}
+async function compressEmployeePhoto(file){
+ return new Promise((resolve,reject)=>{
+  if(!file)return resolve("");
+  const reader=new FileReader();reader.onerror=reject;reader.onload=()=>{
+   const img=new Image();img.onerror=reject;img.onload=()=>{
+    const max=420,scale=Math.min(1,max/Math.max(img.width,img.height)),w=Math.max(1,Math.round(img.width*scale)),h=Math.max(1,Math.round(img.height*scale));
+    const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);
+    resolve(c.toDataURL("image/jpeg",0.78));
+   };img.src=reader.result;
+  };reader.readAsDataURL(file);
+ });
 }
 function qrAttendanceRows(){db.modules=db.modules||{};db.modules.attendanceQR=Array.isArray(db.modules.attendanceQR)?db.modules.attendanceQR:[];return db.modules.attendanceQR.filter(x=>!x.deleted);}
 function qrAttendancePage(){
@@ -1764,6 +1788,7 @@ function employeeForm(id=""){
  const project=e?.project||currentProjectContext()||"";
  $("#content").innerHTML=`<div class="panel"><h3>${e?"MODIFIER":"NOUVEL"} EMPLOYÉ</h3><form id="fEmployee" class="form-grid">
  <label>Nom et prénom<input name="name" value="${esc(e?.name||"")}" required></label>
+ <label>Photo employé (optionnel)<input name="photo" type="file" accept="image/*" capture="user"><small>${e?.photoData?"Photo enregistrée — choisir une nouvelle image pour la remplacer.":"Cadre photo vide si aucune image n’est choisie."}</small></label>
  <label>Catégorie<select name="category" id="employeeCategory" onchange="updateEmployeeRoleOptions()">
    <option ${category==="Équipe terrain"?"selected":""}>Équipe terrain</option>
    <option ${category==="Staff"?"selected":""}>Staff</option>
@@ -1780,11 +1805,12 @@ function employeeForm(id=""){
  <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="employeesPage()">Annuler</button></div>
  </form></div>`;
  updateEmployeeRoleOptions('${esc(e?.jobTitle||"")}');
- $("#fEmployee").onsubmit=ev=>{
-  ev.preventDefault();const f=new FormData(ev.target);
-  const obj={id:e?.id||"EMP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),qrToken:e?.qrToken||("QR"+Date.now().toString(36)+Math.random().toString(36).slice(2,10)).toUpperCase(),name:f.get("name"),category:f.get("category"),jobTitle:f.get("jobTitle"),project:f.get("project")||"",payCycle:f.get("payCycle"),baseSalary:+f.get("baseSalary")||0,startDate:f.get("startDate"),workflow:f.get("workflow"),owner:e?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
+ $("#fEmployee").onsubmit=async ev=>{
+  ev.preventDefault();const f=new FormData(ev.target);const photoFile=f.get("photo");let photoData=e?.photoData||"";
+  if(photoFile&&photoFile.size){try{photoData=await compressEmployeePhoto(photoFile);}catch(err){console.error(err);alert("Impossible de traiter la photo. Le badge sera créé sans nouvelle photo.");}}
+  const obj={id:e?.id||"EMP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),qrToken:e?.qrToken||("QR"+Date.now().toString(36)+Math.random().toString(36).slice(2,10)).toUpperCase(),name:f.get("name"),category:f.get("category"),jobTitle:f.get("jobTitle"),project:f.get("project")||"",payCycle:f.get("payCycle"),baseSalary:+f.get("baseSalary")||0,startDate:f.get("startDate"),workflow:f.get("workflow"),owner:e?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString(),photoData:photoData};
   if(e)Object.assign(e,obj);else{obj.createdAt=new Date().toISOString();db.modules.employees.push(obj);}
-  save();employeesPage();
+  save();cloudWriteGeneric("employees",obj,e?"Modification employé":"Création employé");logUserActivity(e?"Employé modifié":"Employé créé","employés",obj.id,obj.name);employeeBadge(obj.id);
  };
 }
 function updateEmployeeRoleOptions(selected=""){
