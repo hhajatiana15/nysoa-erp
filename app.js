@@ -15,6 +15,8 @@ function ensureSecurityData(){
  db.siteControls=Array.isArray(db.siteControls)?db.siteControls:[];
  db.modules=db.modules||{};
  db.modules.attendanceWeekly=Array.isArray(db.modules.attendanceWeekly)?db.modules.attendanceWeekly:[];
+ db.modules.attendanceQR=Array.isArray(db.modules.attendanceQR)?db.modules.attendanceQR:[];
+ db.userActivityLog=Array.isArray(db.userActivityLog)?db.userActivityLog:[];
 
  save();
 }
@@ -71,34 +73,57 @@ let cloudAutoSyncTimer=null;
 
 function cloudCollectionLocalRows(collection){
  if(collection==="attendanceWeekly")return db.modules?.attendanceWeekly||[];
+ if(collection==="attendanceQR")return db.modules?.attendanceQR||[];
  if(collection==="employees")return db.modules?.employees||[];
  return Array.isArray(db[collection])?db[collection]:[];
 }
 function replaceCloudCollectionLocalRows(collection,rows){
  if(collection==="attendanceWeekly"){db.modules=db.modules||{};db.modules.attendanceWeekly=rows;}
+ else if(collection==="attendanceQR"){db.modules=db.modules||{};db.modules.attendanceQR=rows;}
  else if(collection==="employees"){db.modules=db.modules||{};db.modules.employees=rows;}
  else db[collection]=rows;
  save();
 }
-async function updatePresence(status="online"){
+let lastMeaningfulActivityAt=0;
+const REAL_ACTIVITY_WINDOW_MS=5*60*1000;
+async function updatePresence(status="auto"){
  if(!cloudReady||!user?.uid||!fbStore)return;
+ const now=Date.now(),recent=lastMeaningfulActivityAt&&(now-lastMeaningfulActivityAt)<=REAL_ACTIVITY_WINDOW_MS;
+ const realStatus=status==="offline"?"offline":(recent?"active":"inactive");
  try{await fbStore.collection("userPresence").doc(user.uid).set({
-  uid:user.uid,email:user.email||"",displayName:user.label||user.username||"",role:user.role,status,
-  currentPage:cloudCurrentPage||"dashboard",lastSeen:new Date().toISOString(),device:navigator.userAgent.slice(0,160)
+  uid:user.uid,email:user.email||"",displayName:user.label||user.username||"",role:user.role,status:realStatus,
+  currentPage:cloudCurrentPage||"dashboard",lastSeen:new Date().toISOString(),lastActivityAt:lastMeaningfulActivityAt?new Date(lastMeaningfulActivityAt).toISOString():null,device:navigator.userAgent.slice(0,160)
  },{merge:true});}catch(e){console.warn("presence",e);}
 }
-function startPresence(){clearInterval(presenceTimer);updatePresence("online");presenceTimer=setInterval(()=>updatePresence(document.hidden?"inactive":"online"),60000);}
-function stopPresence(){clearInterval(presenceTimer);presenceTimer=null;if(user?.uid)updatePresence("offline");}
-document.addEventListener("visibilitychange",()=>{if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");});
+async function logUserActivity(action,moduleName="",reference="",details=""){
+ if(!user)return;
+ const now=new Date();lastMeaningfulActivityAt=now.getTime();
+ const rec={id:"ACT-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),uid:user.uid||"",username:user.username||user.email||"",label:user.label||user.username||user.email||"",role:user.role||"",module:moduleName||cloudCurrentPage||"dashboard",action:String(action||"Activité"),reference:String(reference||""),details:String(details||""),createdAt:now.toISOString()};
+ db.userActivityLog=Array.isArray(db.userActivityLog)?db.userActivityLog:[];db.userActivityLog.unshift(rec);if(db.userActivityLog.length>5000)db.userActivityLog.length=5000;save();
+ if(cloudReady&&fbStore&&user.uid){try{await Promise.all([fbStore.collection("userActivity").doc(rec.id).set(cloudSanitize(rec)),updatePresence("active")]);}catch(e){console.warn("activity",e);}}
+}
+function startPresence(){clearInterval(presenceTimer);lastMeaningfulActivityAt=Date.now();logUserActivity("Connexion ERP","session");presenceTimer=setInterval(()=>updatePresence("auto"),60000);}
+function stopPresence(){clearInterval(presenceTimer);presenceTimer=null;if(user?.uid){logUserActivity("Déconnexion ERP","session");updatePresence("offline");}}
+document.addEventListener("visibilitychange",()=>{if(user&&cloudReady)updatePresence("auto");});
 
 function adminPresencePage(){
  if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
- $("#content").innerHTML=`<div class="panel"><h3>UTILISATEURS ACTIFS</h3><div id="presenceRows" class="panel-body">Chargement…</div></div>`;
+ $("#content").innerHTML=`<div class="panel"><h3>ÉTAT RÉEL DES UTILISATEURS ERP</h3><div class="panel-body"><div class="notice">ACTIF = une action métier réelle a été effectuée dans les 5 dernières minutes. Un ERP simplement laissé ouvert reste INACTIF.</div><div id="presenceRows">Chargement…</div></div></div>`;
  fbStore.collection("userPresence").onSnapshot(snap=>{
-  const now=Date.now(),rows=snap.docs.map(d=>d.data());
-  const html=rows.map(r=>{const mins=Math.floor(Math.max(0,now-(Date.parse(r.lastSeen||0)||0))/60000);let st=r.status||"offline";if(mins>=5)st="offline";else if(mins>=2&&st==="online")st="inactive";let label=st==="online"?"En ligne":st==="inactive"?`Inactif depuis ${mins} min`:`Hors ligne — dernière activité il y a ${mins} min`;return `<div class="presence-row"><span class="presence-dot presence-${st}"></span><div><b>${esc(r.displayName||r.email)}</b><small>${esc(r.role||"")} — ${label}</small><small>Module : ${esc(r.currentPage||"dashboard")}</small></div></div>`;}).join("");
+  const now=Date.now(),rows=snap.docs.map(d=>d.data()).sort((a,b)=>String(a.displayName||a.email).localeCompare(String(b.displayName||b.email)));
+  const html=rows.map(r=>{const act=Date.parse(r.lastActivityAt||0)||0,mins=act?Math.floor(Math.max(0,now-act)/60000):null;let st=r.status==="offline"?"offline":(act&&now-act<=REAL_ACTIVITY_WINDOW_MS?"active":"inactive");let label=st==="active"?"ACTIF — travail détecté":st==="inactive"?`INACTIF${mins!==null?` — dernière action il y a ${mins} min`:""}`:"DÉCONNECTÉ";return `<button class="presence-row presence-click" onclick="userActivityHistory('${esc(r.uid||"")}','${esc(r.displayName||r.email||"")}')"><span class="presence-dot presence-${st==='active'?'online':st}"></span><div><b>${esc(r.displayName||r.email)}</b><small>${esc(r.role||"")} — ${label}</small><small>Dernière action : ${esc(r.currentPage||"dashboard")} ${r.lastActivityAt?"— "+new Date(r.lastActivityAt).toLocaleString("fr-FR"):""}</small></div><span>Historique ›</span></button>`;}).join("");
   const el=document.getElementById("presenceRows");if(el)el.innerHTML=html||"Aucune activité enregistrée.";
  });
+}
+async function userActivityHistory(uid,label=""){
+ if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
+ $("#content").innerHTML=`<div class="panel"><h3>HISTORIQUE D’ACTIVITÉ — ${esc(label)}</h3><div class="panel-body"><button class="btn secondary" onclick="adminPresencePage()">← Retour</button><label style="margin-left:10px">Période <select id="activityPeriod"><option value="1">Aujourd’hui</option><option value="7">7 jours</option><option value="30">30 jours</option><option value="3650">Tout</option></select></label></div><div id="activityHistoryRows" class="table-wrap">Chargement…</div></div>`;
+ const render=async()=>{const days=+document.getElementById("activityPeriod").value||1,cut=Date.now()-days*86400000;let rows=[];
+  try{if(cloudReady&&fbStore&&uid){const snap=await fbStore.collection("userActivity").where("uid","==",uid).get();rows=snap.docs.map(d=>d.data());}else rows=(db.userActivityLog||[]).filter(x=>x.uid===uid);}
+  catch(e){rows=(db.userActivityLog||[]).filter(x=>x.uid===uid);}
+  rows=rows.filter(x=>(Date.parse(x.createdAt)||0)>=cut).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)));
+  document.getElementById("activityHistoryRows").innerHTML=`<table><thead><tr><th>Date / heure</th><th>Module</th><th>Action réelle</th><th>Référence</th><th>Détails</th></tr></thead><tbody>${rows.length?rows.map(x=>`<tr><td>${new Date(x.createdAt).toLocaleString("fr-FR")}</td><td>${esc(x.module||"")}</td><td><b>${esc(x.action||"")}</b></td><td>${esc(x.reference||"")}</td><td>${esc(x.details||"")}</td></tr>`).join(""):'<tr><td colspan="5">Aucune activité sur cette période.</td></tr>'}</tbody></table>`;};
+ document.getElementById("activityPeriod").onchange=render;render();
 }
 function notifModuleCount(module){return (db.cloudNotifications||[]).filter(n=>n.module===module&&n.read!==true).length;}
 function renderCloudBadges(){
@@ -118,18 +143,20 @@ async function createAdminNotification(module,title,detail,entityId){
  try{await fbStore.collection("notifications").add({module,title,detail:detail||"",entityId:entityId||"",sourceUid:user.uid,sourceName:user.label||user.username,sourceRole:user.role,targetRole:"ADMIN",read:false,createdAt:new Date().toISOString()});}catch(e){console.warn("notif",e);}
 }
 async function cloudWriteGeneric(collection,record,notifyTitle=""){
- if(!cloudReady||!user||!record?.id)return;
+ if(!user||!record?.id)return;
+ logUserActivity(notifyTitle||"Enregistrement / modification",collection,record.id,record.project||record.employeeName||"");
+ if(!cloudReady)return;
  try{const payload=cloudSanitize({...record,cloudSyncedAt:new Date().toISOString()});await fbStore.collection(collection).doc(String(record.id)).set(payload,{merge:true});record.cloudSyncedAt=payload.cloudSyncedAt;if(notifyTitle&&!record.cloudNotifiedAt&&user.role!=="ADMIN"){await createAdminNotification(collection,notifyTitle,`${user.label||user.username} — ${record.project||record.id}`,record.id);record.cloudNotifiedAt=new Date().toISOString();}save();cloudMarkSynced();}catch(e){console.warn("cloud generic",collection,e);}
 }
 function startExtendedRealtimeListeners(){
  if(!cloudReady||!user)return;
- const collections=["requests","appro","expenses","siteControls","reports","attendanceWeekly","employees"];
+ const collections=["requests","appro","expenses","siteControls","reports","attendanceWeekly","attendanceQR","employees"];
  collections.forEach(collection=>{try{cloudListeners.push(fbStore.collection(collection).onSnapshot(s=>{const remote=s.docs.map(d=>({id:d.id,...d.data()}));const local=cloudCollectionLocalRows(collection);const map=new Map(local.map(r=>[String(r.id),r]));remote.forEach(r=>{const l=map.get(String(r.id));if(!l){local.push(r);return;}const rt=Date.parse(r.updatedAt||r.cloudSyncedAt||r.createdAt||0)||0,lt=Date.parse(l.updatedAt||l.cloudSyncedAt||l.createdAt||0)||0;if(rt>=lt)Object.assign(l,r);});replaceCloudCollectionLocalRows(collection,local);},e=>console.warn("listener",collection,e)));}catch(e){console.warn(e);}});
 }
 function startCloudAutoSync(){
  clearInterval(cloudAutoSyncTimer);
  const run=async()=>{if(!cloudReady||!user||!navigator.onLine)return;const cfg=[
-  ["requests","Nouvelle demande d’approvisionnement"],["appro","Approvisionnement caisse validé"],["expenses","Nouvelle dépense"],["siteControls","Nouveau contrôle chantier"],["reports","Nouveau rapport technique"],["attendanceWeekly","Mise à jour présence chantier"],["employees","Mise à jour personnel"]
+  ["requests","Nouvelle demande d’approvisionnement"],["appro","Approvisionnement caisse validé"],["expenses","Nouvelle dépense"],["siteControls","Nouveau contrôle chantier"],["reports","Nouveau rapport technique"],["attendanceWeekly","Mise à jour présence chantier"],["attendanceQR","Scan badge QR"],["employees","Mise à jour personnel"]
  ];for(const [c,title] of cfg){for(const r of cloudCollectionLocalRows(c)){if(r.deleted)continue;const u=Date.parse(r.updatedAt||r.createdAt||0)||0,s=Date.parse(r.cloudSyncedAt||0)||0;if(u>s)await cloudWriteGeneric(c,r,title);}}};
  run();cloudAutoSyncTimer=setInterval(run,10000);
 }
@@ -149,7 +176,7 @@ function cleanupExpiredLocalPhotos(){const days=+(db.appSettings?.photoRetention
 
 
 function legacyUsernameForRole(role){
-  return role==="ADMIN"?"admin":role==="GESTIONNAIRE"?"gestionnaire":role==="CONTROLE"?"controle":role==="TECHNICIEN"?"technicien":"user";
+  return role==="ADMIN"?"admin":role==="GESTIONNAIRE"?"gestionnaire":role==="CONTROLE"?"controle":"user";
 }
 function cloudStatusText(text,kind="normal"){
   cloudState.status=text;
@@ -176,7 +203,7 @@ function cloudLocalUserUpsert(){
   if(!user)return;
   db.users=Array.isArray(db.users)?db.users:[];
   let u=db.users.find(x=>x.uid===user.uid)||db.users.find(x=>x.username===user.username);
-  const rec={uid:user.uid,email:user.email,username:user.username,role:user.role,label:user.label,active:true,lastSeen:new Date().toISOString()};
+  const rec={uid:user.uid,email:user.email,username:user.username,role:user.role,label:user.label,assignedProjects:user.assignedProjects||[],active:true,lastSeen:new Date().toISOString()};
   if(u)Object.assign(u,rec);else db.users.push(rec);
   save();
 }
@@ -186,13 +213,14 @@ async function cloudLoadProfile(fbUser){
   if(!snap.exists)throw new Error("Profil Firestore introuvable pour cet utilisateur.");
   const profile=snap.data()||{};
   if(profile.active!==true)throw new Error("Ce compte est désactivé.");
-  if(!["ADMIN","GESTIONNAIRE","CONTROLE","TECHNICIEN"].includes(profile.role))throw new Error("Rôle utilisateur non reconnu.");
+  if(!["ADMIN","GESTIONNAIRE","CONTROLE"].includes(profile.role))throw new Error("Rôle utilisateur non reconnu.");
   return {
     uid:fbUser.uid,
     email:fbUser.email||"",
     username:legacyUsernameForRole(profile.role),
     role:profile.role,
-    label:cloudProfileLabel(profile)
+    label:cloudProfileLabel(profile),
+    assignedProjects:Array.isArray(profile.assignedProjects)?profile.assignedProjects:[]
   };
 }
 function cloudStopListeners(){
@@ -576,14 +604,14 @@ const ADMIN_FINANCE_MENU=[
  ["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],
  ["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],
  ["purchases","🛒","ACHATS"],["stock","📦","STOCK"],
- ["employees","👥","EMPLOYÉS"],["qrPresence","▣","PRÉSENCE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],
+ ["employees","👥","EMPLOYÉS"],["qrAttendance","▣","PRÉSENCE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],
  ["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES"],
  ["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],
  ["treasury","💰","TRÉSORERIE"],["reportsFinance","◔","RAPPORTS FINANCIERS"]
 ];
 const ADMIN_TECH_MENU=[
  ["dashboardTechnique","◉","TABLEAU DE BORD TECHNIQUE"],
- ["projects","🏗","CHANTIERS"],["siteControls","📷","CONTRÔLE CHANTIER"],["planning","📅","PLANNING"],
+ ["projects","🏗","CHANTIERS"],["qrAttendance","▣","PRÉSENCE QR"],["siteControls","📷","CONTRÔLE CHANTIER"],["planning","📅","PLANNING"],
  ["situations","📊","SITUATION DE TRAVAUX"],["technicalFollowup","🧰","SUIVI JOURNALIER"],
  ["quality","✅","CONTRÔLE QUALITÉ"],["nonConformities","⚠","NON-CONFORMITÉS"],
  ["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],
@@ -591,10 +619,10 @@ const ADMIN_TECH_MENU=[
 ];
 
 const menus={
- ADMIN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["situations","📊","SITUATION DE TRAVAUX"],["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],["fuel","⛽","CARBURANT"],["employees","👥","EMPLOYÉS"],["qrPresence","▣","PRÉSENCE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],["treasury","💵","TRÉSORERIE"],["dailyReports","📝","RAPPORTS JOURNALIERS"],["reports","◔","RAPPORTS"],["adminValidations","✅","VALIDATIONS À PUBLIER"],["usageTime","⏱","TEMPS D’UTILISATION"],["trash","🗑","CORBEILLE"],["audit","📜","JOURNAL D’AUDIT"],["logicAudit","🧭","CONTRÔLE LOGIQUE ERP"],["presenceUsers","●","UTILISATEURS ACTIFS"],["settings","⚙","PARAMÈTRES"]],
- GESTIONNAIRE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["employees","👥","EMPLOYÉS"],["qrPresence","▣","PRÉSENCE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","DEMANDE D'APPRO."],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS FINANCIERS"]],
- CONTROLE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["siteControls","📷","CONTRÔLE CHANTIER"],["qrPresence","▣","PRÉSENCE QR"],["attendance","◷","PRÉSENCE CHANTIER"],["situations","📊","SITUATION DE TRAVAUX"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]],
- TECHNICIEN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","MES CHANTIERS"],["qrPresence","▣","SCAN BADGE QR"],["attendance","◷","PRÉSENCE CHANTIER"],["siteControls","📷","CONTRÔLE CHANTIER"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
+ ADMIN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["situations","📊","SITUATION DE TRAVAUX"],["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],["fuel","⛽","CARBURANT"],["employees","👥","EMPLOYÉS"],["qrAttendance","▣","PRÉSENCE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],["treasury","💵","TRÉSORERIE"],["dailyReports","📝","RAPPORTS JOURNALIERS"],["reports","◔","RAPPORTS"],["adminValidations","✅","VALIDATIONS À PUBLIER"],["usageTime","⏱","TEMPS D’UTILISATION"],["trash","🗑","CORBEILLE"],["audit","📜","JOURNAL D’AUDIT"],["logicAudit","🧭","CONTRÔLE LOGIQUE ERP"],["presenceUsers","●","UTILISATEURS ACTIFS"],["technicians","🧑‍🔧","TECHNICIENS & ACCÈS"],["settings","⚙","PARAMÈTRES"]],
+ GESTIONNAIRE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["employees","👥","EMPLOYÉS"],["qrAttendance","▣","SCAN BADGE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","DEMANDE D'APPRO."],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS FINANCIERS"]],
+ CONTROLE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["qrAttendance","▣","SCAN BADGE QR"],["siteControls","📷","CONTRÔLE CHANTIER"],["attendance","◷","PRÉSENCE CHANTIER"],["situations","📊","SITUATION DE TRAVAUX"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]],
+ TECHNICIEN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","CHANTIERS"],["qrAttendance","▣","SCAN BADGE QR"],["attendance","◷","POINTAGE"],["siteControls","📷","SUIVI CHANTIER"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
 };
 
 function projectFinancialDetail(projectId){
@@ -687,9 +715,15 @@ function switchWorkspace(workspace){
 function currentProjectContext(){
  return sessionStorage.getItem("nysoa_project_context")||"";
 }
+function userCanAccessProject(projectId){
+ if(!user||user.role!=="CONTROLE")return true;
+ const assigned=Array.isArray(user.assignedProjects)?user.assignedProjects:[];
+ return assigned.length===0||assigned.map(String).includes(String(projectId));
+}
+function accessibleProjects(){return (db.projects||[]).filter(p=>!p.deleted&&userCanAccessProject(p.id));}
 function projectContextOptions(selected=currentProjectContext()){
  return `<option value="">Tous les chantiers</option>`+
-  (db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(selected)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("");
+  accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${String(selected)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("");
 }
 function renderGlobalProjectSelector(){
  const el=document.getElementById("globalProjectFilter");
@@ -718,7 +752,7 @@ function projectContextNotice(){
  return `<div class="project-context-note">🏗 Chantier sélectionné : <b>${esc(pr?.name||p)}</b> <button class="btn-xs" onclick="setGlobalProjectContext('')">Afficher tout</button></div>`;
 }
 
-function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,invoices:invoicesPage,clientReceipts:clientReceiptsPage,employees:employeesPage,payroll:payrollPage,expenses:expensesPage,appro:approPage,cash:cashPage,projects:projects,siteControls:siteControlsPage,reports:reports,attendance:attendance,qrPresence:qrPresencePage,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage,logicAudit:logicAuditPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
+function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,invoices:invoicesPage,clientReceipts:clientReceiptsPage,employees:employeesPage,qrAttendance:qrAttendancePage,technicians:techniciansPage,payroll:payrollPage,expenses:expensesPage,appro:approPage,cash:cashPage,projects:projects,siteControls:siteControlsPage,reports:reports,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage,logicAudit:logicAuditPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
 function kpi(icon,color,title,value,note="",page=""){
  const routes={
   "CHANTIERS EN COURS":"projects","NOMBRE DE CHANTIERS":"projects",
@@ -939,13 +973,13 @@ function dashboard(){
  </div>
   ${cashTable()}`;return;
  }
- if(user.role==="CONTROLE"||user.role==="TECHNICIEN"){
+ if(user.role==="CONTROLE"){
   $("#content").innerHTML=`<div class="kpis">
     ${kpi("🏗","green","CHANTIERS EN COURS",db.projects.filter(x=>x.status==="En cours").length)}
     ${kpi("📊","blue","RAPPORTS TECHNIQUES",db.reports.length)}
     ${kpi("✅","orange","RAPPORTS VALIDÉS",db.reports.filter(x=>x.status==="Validé").length)}
     ${kpi("⚠","purple","NON-CONFORMITÉS",db.reports.filter(x=>x.conformity==="Non conforme").length)}
-    ${kpi("👷","teal","TECHNICIENS ACTIFS",1)}
+    ${kpi("👷","teal","TECHNICIENS ACTIFS",user.role==="CONTROLE"?1:0)}
   </div>${reportsTable()}`;return;
  }
  $("#content").innerHTML=`<div class="sync-guide">
@@ -1006,7 +1040,7 @@ function projects(){
          <th>Début</th><th>Fin prévue</th><th>Avancement</th><th>Statut</th><th>Actions</th>
        </tr></thead>
        <tbody>
-         ${db.projects.filter(p=>!p.deleted).length?db.projects.filter(p=>!p.deleted).map(p=>{
+         ${accessibleProjects().length?accessibleProjects().map(p=>{
            const isOwner=p.owner===user.username;
            let actions="";
            if(user.role==="ADMIN"){
@@ -1017,10 +1051,10 @@ function projects(){
              actions=`<button class="btn-xs btn-edit" onclick="projectForm('${p.id}')">Modifier</button>
                       <button class="btn-xs btn-delete" onclick="softDeleteRecord('projects','projects','${p.id}')">Supprimer</button>
                       <button class="btn-xs" onclick="showRecordHistory('projects','${p.id}')">Historique</button>`;
-             if(user.role==="CONTROLE"||user.role==="TECHNICIEN"){
+             if(user.role==="CONTROLE"){
                actions+=`<button class="btn-xs btn-edit" onclick="projectTechnicalForm('${p.id}')">Suivi technique</button>`;
              }
-           }else if(user.role==="CONTROLE"||user.role==="TECHNICIEN"){
+           }else if(user.role==="CONTROLE"){
              actions=`<button class="btn-xs btn-edit" onclick="projectTechnicalForm('${p.id}')">Modifier suivi</button>`;
            }else{
              actions="<span>Consultation</span>";
@@ -1043,7 +1077,7 @@ function projects(){
  </div>`;
 }
 function projectForm(id=""){
- if(user.role==="CONTROLE"||user.role==="TECHNICIEN"){alert("La création/modification principale d’un chantier est réservée à l’Admin et au Gestionnaire. Utilisez le suivi technique.");return projects();}
+ if(user.role==="CONTROLE"){alert("La création/modification principale d’un chantier est réservée à l’Admin et au Gestionnaire. Utilisez le suivi technique.");return projects();}
  let p=id?db.projects.find(x=>x.id===id):null;
  if(p && !canUserChange(p)){
    alert("Vous pouvez modifier uniquement les chantiers que vous avez créés.");
@@ -1134,7 +1168,7 @@ function canChangeSiteControl(r){
 }
 function siteControlsPage(){
  ensureSecurityData();cleanupExpiredLocalPhotos();
- const rows=(db.siteControls||[]).filter(r=>!r.deleted);
+ const rows=(db.siteControls||[]).filter(r=>!r.deleted&&userCanAccessProject(r.project));
  $("#content").innerHTML=`<div class="panel"><h3>CONTRÔLE CHANTIER AVEC PHOTO</h3>
  <div class="panel-body">
   ${["ADMIN","CONTROLE"].includes(user.role)?'<button class="btn primary" onclick="siteControlForm()">+ Nouveau contrôle</button>':""}
@@ -1160,7 +1194,7 @@ function siteControlForm(id=""){
  $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEAU"} CONTRÔLE CHANTIER</h3>
  <form id="fSiteControl" class="form-grid">
  <label>Date<input name="date" type="date" value="${r?.date||new Date().toISOString().slice(0,10)}" required></label>
- <label>Chantier<select name="project" required>${db.projects.filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${r?.project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label>
+ <label>Chantier<select name="project" required>${accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${r?.project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label>
  <label>Nombre d’ouvriers<input name="workers" type="number" min="0" value="${r?.workers??0}" required></label>
  <label>Nombre de manœuvres<input name="labourers" type="number" min="0" value="${r?.labourers??0}" required></label>
  <label class="full">Travaux contrôlés / Observation<textarea name="note" required>${esc(r?.note||"")}</textarea></label>
@@ -1231,8 +1265,7 @@ function userForm(username=""){
   <label>Nom d’utilisateur<input name="username" value="${esc(existing?.username||"")}" ${existing?"readonly":""} required></label>
   <label>Nom affiché<input name="label" value="${esc(existing?.label||"")}" required></label>
   <label>Rôle<select name="role">
-   <option value="CONTROLE" ${existing?.role==="CONTROLE"?"selected":""}>Contrôle & suivi</option>
-   <option value="TECHNICIEN" ${existing?.role==="TECHNICIEN"?"selected":""}>Technicien chantier</option>
+   <option value="CONTROLE" ${existing?.role==="CONTROLE"?"selected":""}>Technicien contrôle & suivi</option>
    <option value="GESTIONNAIRE" ${existing?.role==="GESTIONNAIRE"?"selected":""}>Gestionnaire</option>
    <option value="ADMIN" ${existing?.role==="ADMIN"?"selected":""}>Administrateur</option>
   </select></label>
@@ -1333,84 +1366,115 @@ function technicalRecap(){
  </tbody></table></div></div>`;
 }
 function reports(){$("#content").innerHTML=`<div class="panel"><h3>${user.role==="CONTROLE"?"RAPPORTS TECHNIQUES CONTRÔLE & SUIVI":"RAPPORTS"}</h3>${user.role==="CONTROLE"?'<div class="panel-body"><button class="btn primary" onclick="reportForm()">Nouveau rapport</button></div>':""}${reportsTable()}</div>`}
-function reportsTable(){return `<div class="table-wrap"><table><thead><tr><th>N°</th><th>Date</th><th>Chantier</th><th>Avancement</th><th>Travaux contrôlés</th><th>Conformité</th><th>Incident</th><th>Action</th><th>Statut</th><th>Observation Admin</th><th>Actions</th></tr></thead><tbody>${db.reports.filter(r=>!r.deleted).map(r=>`<tr><td>${r.id}</td><td>${r.date}</td><td>${r.project}</td><td>${r.progress}%</td><td>${r.work}</td><td>${r.conformity}</td><td>${r.issue}</td><td>${r.action}</td><td>${workflowBadge(r.workflow||r.status)}</td><td>${esc(r.adminObservation||"")}</td><td><div class="edit-actions">${canUserChange(r)?`<button class="btn-xs btn-edit" onclick="reportForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteRecord('reports','reports','${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showRecordHistory('reports','${r.id}')">Historique</button></div></td></tr>`).join("")}</tbody></table></div>`}
-function reportForm(id=""){let r=id?db.reports.find(x=>x.id===id):null;if(r&&!canUserChange(r))return alert("Ce rapport est verrouillé ou ne vous appartient pas.");let opts=db.projects.map(p=>`<option value="${p.id}">${p.id} - ${p.name}</option>`).join("");$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEAU"} RAPPORT CONTRÔLE & SUIVI</h3><form id="fReport" class="form-grid"><label>Date<input name="date" type="date" value="${r?.date||""}" required></label><label>Chantier<select name="project">${db.projects.map(p=>`<option value="${p.id}" ${r?.project===p.id?"selected":""}>${p.id} - ${p.name}</option>`).join("")}</select></label><label>Avancement réel (%)<input name="progress" type="number" min="0" max="100" value="${r?.progress??0}" required></label><label>Conformité<select name="conformity"><option ${r?.conformity==="Conforme"?"selected":""}>Conforme</option><option ${r?.conformity==="Non conforme"?"selected":""}>Non conforme</option></select></label><label class="full">Travaux contrôlés<textarea name="work" required>${r?.work||""}</textarea></label><label>Incident / Blocage<input name="issue" value="${r?.issue||""}"></label><label>Action corrective<input name="action" value="${r?.action||""}" required></label><button class="btn primary">Enregistrer</button></form></div>`;$("#fReport").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);let obj={id:r?.id||"RAP-"+String(db.reports.length+1).padStart(3,"0"),owner:r?.owner||user.username,date:f.get("date"),project:f.get("project"),progress:+f.get("progress"),work:f.get("work"),conformity:f.get("conformity"),issue:f.get("issue")||"Aucun",action:f.get("action"),status:r?.status||"À valider",updatedAt:new Date().toISOString()};const before=r?cloneRecord(r):null;obj.workflow=r?.workflow||"Soumis";obj.updatedBy=user.username;if(r){pushHistory(r,"Modification",before);Object.assign(r,obj);audit("Modification","reports",r.id,"Rapport modifié",before,r)}else{obj.createdAt=new Date().toISOString();obj.history=[];pushHistory(obj,"Création");db.reports.push(obj);audit("Création","reports",obj.id,"Rapport créé",null,obj)}logTechnicalEntry(r?"Modification":"Création","Rapport technique",obj.id,`Chantier ${obj.project}, avancement ${obj.progress}%, ${obj.conformity}`);save();cloudWriteGeneric("reports",r||obj,"Nouveau rapport technique");reports()}}
+function reportsTable(){return `<div class="table-wrap"><table><thead><tr><th>N°</th><th>Date</th><th>Chantier</th><th>Avancement</th><th>Travaux contrôlés</th><th>Conformité</th><th>Incident</th><th>Action</th><th>Statut</th><th>Observation Admin</th><th>Actions</th></tr></thead><tbody>${db.reports.filter(r=>!r.deleted&&userCanAccessProject(r.project)).map(r=>`<tr><td>${r.id}</td><td>${r.date}</td><td>${r.project}</td><td>${r.progress}%</td><td>${r.work}</td><td>${r.conformity}</td><td>${r.issue}</td><td>${r.action}</td><td>${workflowBadge(r.workflow||r.status)}</td><td>${esc(r.adminObservation||"")}</td><td><div class="edit-actions">${canUserChange(r)?`<button class="btn-xs btn-edit" onclick="reportForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteRecord('reports','reports','${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showRecordHistory('reports','${r.id}')">Historique</button></div></td></tr>`).join("")}</tbody></table></div>`}
+function reportForm(id=""){let r=id?db.reports.find(x=>x.id===id):null;if(r&&!canUserChange(r))return alert("Ce rapport est verrouillé ou ne vous appartient pas.");let opts=accessibleProjects().map(p=>`<option value="${p.id}">${p.id} - ${p.name}</option>`).join("");$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEAU"} RAPPORT CONTRÔLE & SUIVI</h3><form id="fReport" class="form-grid"><label>Date<input name="date" type="date" value="${r?.date||""}" required></label><label>Chantier<select name="project">${accessibleProjects().map(p=>`<option value="${p.id}" ${r?.project===p.id?"selected":""}>${p.id} - ${p.name}</option>`).join("")}</select></label><label>Avancement réel (%)<input name="progress" type="number" min="0" max="100" value="${r?.progress??0}" required></label><label>Conformité<select name="conformity"><option ${r?.conformity==="Conforme"?"selected":""}>Conforme</option><option ${r?.conformity==="Non conforme"?"selected":""}>Non conforme</option></select></label><label class="full">Travaux contrôlés<textarea name="work" required>${r?.work||""}</textarea></label><label>Incident / Blocage<input name="issue" value="${r?.issue||""}"></label><label>Action corrective<input name="action" value="${r?.action||""}" required></label><button class="btn primary">Enregistrer</button></form></div>`;$("#fReport").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);let obj={id:r?.id||"RAP-"+String(db.reports.length+1).padStart(3,"0"),owner:r?.owner||user.username,date:f.get("date"),project:f.get("project"),progress:+f.get("progress"),work:f.get("work"),conformity:f.get("conformity"),issue:f.get("issue")||"Aucun",action:f.get("action"),status:r?.status||"À valider",updatedAt:new Date().toISOString()};const before=r?cloneRecord(r):null;obj.workflow=r?.workflow||"Soumis";obj.updatedBy=user.username;if(r){pushHistory(r,"Modification",before);Object.assign(r,obj);audit("Modification","reports",r.id,"Rapport modifié",before,r)}else{obj.createdAt=new Date().toISOString();obj.history=[];pushHistory(obj,"Création");db.reports.push(obj);audit("Création","reports",obj.id,"Rapport créé",null,obj)}logTechnicalEntry(r?"Modification":"Création","Rapport technique",obj.id,`Chantier ${obj.project}, avancement ${obj.progress}%, ${obj.conformity}`);save();cloudWriteGeneric("reports",r||obj,"Nouveau rapport technique");reports()}}
 function deleteReport(id){if(confirm("Supprimer ce rapport ?")){db.reports=db.reports.filter(x=>x.id!==id);save();reports()}}
 function mondayOf(dateStr){
  const d=new Date(dateStr+"T12:00:00");const day=(d.getDay()+6)%7;d.setDate(d.getDate()-day);
  return d.toISOString().slice(0,10);
 }
 function addDays(dateStr,n){const d=new Date(dateStr+"T12:00:00");d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);}
+function employeeStatusLabel(e){return (e.workflow==="Inactif"||e.active===false)?"Passif":"Actif";}
 function attendance(){
  ensureSecurityData();
  const employees=(db.modules.employees||[]).filter(r=>!r.deleted);
- const today=new Date().toISOString().slice(0,10);
- const selectedDate=sessionStorage.getItem("nysoa_attendance_date")||today;
- const weekStart=mondayOf(selectedDate);
- const project=sessionStorage.getItem("nysoa_attendance_project")||"";
+ const today=new Date().toISOString().slice(0,10),selectedDate=sessionStorage.getItem("nysoa_attendance_date")||today;
+ const weekStart=mondayOf(selectedDate),project=sessionStorage.getItem("nysoa_attendance_project")||"";
  const days=["L","M","M","J","V","S","D"].map((label,i)=>({label,date:addDays(weekStart,i)}));
- let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);
- const entries=record?.entries||[];
- const keyOf=(r,i)=>r.values?.[0]||`EMP-${i+1}`;
- $("#content").innerHTML=`<div class="panel"><h3>PRÉSENCE HEBDOMADAIRE DU PERSONNEL</h3>
- <div class="panel-body"><div class="form-grid">
- <label>Semaine contenant le<input id="attendanceDate" type="date" value="${selectedDate}"></label>
- <label>Chantier<select id="attendanceProject"><option value="">Tous / Siège</option>${db.projects.filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label>
- <div class="form-actions full"><button class="btn primary" onclick="saveAttendance()">Enregistrer la semaine</button></div>
- </div><div class="attendance-note">Cochez Présent ou Absent pour chaque jour. Le total et le montant sont calculés automatiquement. Paiement hebdomadaire à cocher en fin de semaine.</div></div>
- <div class="table-wrap"><table class="attendance-table weekly-attendance"><thead><tr>
- <th>Matricule</th><th>Nom</th><th>Fonction</th>
- ${days.map(d=>`<th class="center">${d.label}<small>${d.date.slice(8,10)}</small></th>`).join("")}
- <th>Total jours</th><th>Salaire/jour</th><th>Montant</th><th>Payé</th><th>Action</th></tr></thead><tbody>
- ${employees.length?employees.map((r,i)=>{
-  const key=keyOf(r,i),entry=entries.find(e=>e.employeeKey===key)||{};
-  const states=entry.states||{};
-  const salary=+(entry.dailySalary??r.values?.[3]??0);
-  const total=days.reduce((n,d)=>n+(states[d.date]==="P"?1:0),0);
-  return `<tr data-employee="${esc(key)}"><td>${esc(r.values?.[0]||"")}</td><td><b>${esc(r.values?.[1]||"")}</b></td><td>${esc(r.values?.[2]||"")}</td>
-  ${days.map(d=>`<td class="center"><select class="attendance-state" data-key="${esc(key)}" data-date="${d.date}"><option value="">—</option><option value="P" ${states[d.date]==="P"?"selected":""}>P</option><option value="A" ${states[d.date]==="A"?"selected":""}>A</option></select></td>`).join("")}
-  <td class="num attendance-total" data-key="${esc(key)}"><b>${total}</b></td>
-  <td><input class="attendance-salary num" data-key="${esc(key)}" type="number" min="0" value="${salary}"></td>
-  <td class="num attendance-amount" data-key="${esc(key)}"><b>${money(total*salary)}</b></td>
-  <td class="center"><input class="attendance-paid" data-key="${esc(key)}" type="checkbox" ${entry.paid?"checked":""}><small>${entry.paidAt?new Date(entry.paidAt).toLocaleDateString("fr-FR"):""}</small></td>
-  <td><button class="btn-xs btn-delete" onclick="clearAttendanceEmployee('${esc(key)}')">Effacer</button></td></tr>`;
- }).join(""):`<tr><td colspan="15"><div class="empty-state">Ajoutez d’abord le personnel dans Employés.</div></td></tr>`}
- </tbody></table></div>
- <div class="panel-body"><b>Semaine : ${weekStart} au ${addDays(weekStart,6)}</b> — Paiements cochés : ${entries.filter(e=>e.paid).length}</div></div>`;
- $("#attendanceDate").onchange=e=>{sessionStorage.setItem("nysoa_attendance_date",e.target.value);attendance();};
- $("#attendanceProject").onchange=e=>{sessionStorage.setItem("nysoa_attendance_project",e.target.value);attendance();};
- document.querySelectorAll(".attendance-state,.attendance-salary").forEach(el=>el.onchange=()=>refreshAttendanceRow(el.dataset.key));
+ let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);const entries=record?.entries||[];const keyOf=(r,i)=>r.id||r.values?.[0]||`EMP-${i+1}`;
+ $("#content").innerHTML=`<div class="panel"><h3>POINTAGE DU PERSONNEL — LISTE COMPLÈTE</h3><div class="panel-body"><div class="form-grid"><label>Semaine contenant le<input id="attendanceDate" type="date" value="${selectedDate}"></label><label>Filtre chantier<select id="attendanceProject"><option value="">Tous les employés</option>${accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label><div class="form-actions full"><button class="btn primary" onclick="saveAttendance()">Enregistrer le pointage</button><button class="btn secondary" onclick="go('qrAttendance')">📷 Scanner les badges QR</button></div></div><div class="attendance-note">Tous les employés sont visibles, Actifs ou Passifs. Sans scan ou saisie manuelle, le jour est considéré <b>Absent</b>. Un scan QR met automatiquement le salarié <b>Présent</b>. Vous pouvez corriger manuellement.</div></div><div class="table-wrap"><table class="attendance-table weekly-attendance"><thead><tr><th>Matricule</th><th>Nom</th><th>Fonction</th><th>État employé</th><th>Affectation</th>${days.map(d=>`<th class="center">${d.label}<small>${d.date.slice(8,10)}</small></th>`).join("")}<th>Total P</th><th>Mode aujourd’hui</th></tr></thead><tbody>${employees.length?employees.map((r,i)=>{const key=keyOf(r,i),entry=entries.find(e=>e.employeeKey===key)||{},states=entry.states||{},assigned=employeeProject(r),show=!project||String(assigned||"")===String(project);if(!show)return "";const total=days.reduce((n,d)=>n+((states[d.date]||"A")==="P"?1:0),0);const qrToday=qrAttendanceRows().find(q=>q.employeeId===key&&q.date===selectedDate&&q.direction==="Entrée");return `<tr data-employee="${esc(key)}"><td>${esc(r.id||r.values?.[0]||"")}</td><td><b>${esc(employeeName(r))}</b></td><td>${esc(employeeRole(r))}</td><td>${employeeStatusLabel(r)==="Actif"?'<span class="qr-in">Actif</span>':'<span class="qr-out">Passif</span>'}</td><td>${esc(projectLabel(assigned)||"Non affecté")}</td>${days.map(d=>{const state=states[d.date]||"A";return `<td class="center"><label class="attendance-check"><input type="checkbox" class="att-present" data-key="${esc(key)}" data-date="${d.date}" ${state==="P"?"checked":""} onchange="setAttendanceCheck('${esc(key)}','${d.date}','P',this.checked)"> P</label><label class="attendance-check"><input type="checkbox" class="att-absent" data-key="${esc(key)}" data-date="${d.date}" ${state!=="P"?"checked":""} onchange="setAttendanceCheck('${esc(key)}','${d.date}','A',this.checked)"> A</label></td>`}).join("")}<td class="num attendance-total" data-key="${esc(key)}"><b>${total}</b></td><td>${qrToday?'<span class="qr-in">QR</span>':'<span>Manuel / défaut</span>'}</td></tr>`;}).join(""):'<tr><td colspan="14">Aucun employé enregistré.</td></tr>'}</tbody></table></div><div class="panel-body"><b>Semaine : ${weekStart} au ${addDays(weekStart,6)}</b> — ${employees.length} employé(s) enregistré(s)</div></div>`;
+ $("#attendanceDate").onchange=e=>{sessionStorage.setItem("nysoa_attendance_date",e.target.value);attendance();};$("#attendanceProject").onchange=e=>{sessionStorage.setItem("nysoa_attendance_project",e.target.value);attendance();};
 }
-function refreshAttendanceRow(key){
- const states=[...document.querySelectorAll(`.attendance-state[data-key="${CSS.escape(key)}"]`)];
- const total=states.filter(x=>x.value==="P").length;
- const salary=+document.querySelector(`.attendance-salary[data-key="${CSS.escape(key)}"]`)?.value||0;
- const t=document.querySelector(`.attendance-total[data-key="${CSS.escape(key)}"]`);if(t)t.innerHTML=`<b>${total}</b>`;
- const a=document.querySelector(`.attendance-amount[data-key="${CSS.escape(key)}"]`);if(a)a.innerHTML=`<b>${money(total*salary)}</b>`;
+function setAttendanceCheck(key,date,state,checked){
+ const p=document.querySelector(`.att-present[data-key="${CSS.escape(key)}"][data-date="${date}"]`),a=document.querySelector(`.att-absent[data-key="${CSS.escape(key)}"][data-date="${date}"]`);
+ if(state==="P"){if(checked){if(a)a.checked=false;}else if(a)a.checked=true;}else{if(checked){if(p)p.checked=false;}else if(p)p.checked=true;}refreshAttendanceRow(key);
 }
+function refreshAttendanceRow(key){const states=[...document.querySelectorAll(`.att-present[data-key="${CSS.escape(key)}"]`)];const total=states.filter(x=>x.checked).length;const t=document.querySelector(`.attendance-total[data-key="${CSS.escape(key)}"]`);if(t)t.innerHTML=`<b>${total}</b>`;}
 function saveAttendance(){
- const selectedDate=$("#attendanceDate")?.value,project=$("#attendanceProject")?.value||"";
- if(!selectedDate)return alert("Choisissez une date.");
- const weekStart=mondayOf(selectedDate),employees=(db.modules.employees||[]).filter(r=>!r.deleted);
- let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);
- const entries=employees.map((r,i)=>{
-  const key=r.values?.[0]||`EMP-${i+1}`,states={};
-  document.querySelectorAll(`.attendance-state[data-key="${CSS.escape(key)}"]`).forEach(x=>{if(x.value)states[x.dataset.date]=x.value;});
-  const dailySalary=Math.max(0,+document.querySelector(`.attendance-salary[data-key="${CSS.escape(key)}"]`)?.value||0);
-  if(r.values)r.values[3]=String(dailySalary);
-  const paid=document.querySelector(`.attendance-paid[data-key="${CSS.escape(key)}"]`)?.checked===true;
-  const old=record?.entries?.find(e=>e.employeeKey===key);
-  return {employeeKey:key,states,dailySalary,paid,paidAt:paid?(old?.paidAt||new Date().toISOString()):""};
- });
- if(record){record.entries=entries;record.updatedAt=new Date().toISOString();record.updatedBy=user.username;}
- else db.modules.attendanceWeekly.push({id:"ATTW-"+Date.now(),weekStart,project,entries,owner:user.username,updatedBy:user.username,updatedAt:new Date().toISOString()});
- save();const saved=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);if(saved)cloudWriteGeneric("attendanceWeekly",saved,"Mise à jour présence chantier");alert("Présence hebdomadaire enregistrée.");attendance();
+ const selectedDate=$("#attendanceDate")?.value,project=$("#attendanceProject")?.value||"";if(!selectedDate)return alert("Choisissez une date.");
+ const weekStart=mondayOf(selectedDate),employees=(db.modules.employees||[]).filter(r=>!r.deleted);let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);
+ if(!record){record={id:"ATTW-"+Date.now(),weekStart,project,entries:[],owner:user.username,updatedAt:new Date().toISOString(),updatedBy:user.username};db.modules.attendanceWeekly.push(record);}record.entries=record.entries||[];
+ employees.forEach((e,i)=>{const key=e.id||e.values?.[0]||`EMP-${i+1}`;if(project&&String(employeeProject(e)||"")!==String(project))return;let entry=record.entries.find(x=>x.employeeKey===key);if(!entry){entry={employeeKey:key,states:{},paid:false,paidAt:""};record.entries.push(entry);}entry.states=entry.states||{};document.querySelectorAll(`.att-present[data-key="${CSS.escape(key)}"]`).forEach(el=>{entry.states[el.dataset.date]=el.checked?"P":"A";});});
+ record.updatedAt=new Date().toISOString();record.updatedBy=user.username;save();logUserActivity("Pointage manuel enregistré","pointage",record.id,project?projectLabel(project):"Tous les employés");cloudWriteGeneric("attendanceWeekly",record,"Pointage du personnel");alert("Pointage enregistré. Les salariés non présents restent Absent.");attendance();
 }
 function clearAttendanceEmployee(key){
  document.querySelectorAll(`.attendance-state[data-key="${CSS.escape(key)}"]`).forEach(x=>x.value="");
  const paid=document.querySelector(`.attendance-paid[data-key="${CSS.escape(key)}"]`);if(paid)paid.checked=false;
  refreshAttendanceRow(key);
 }
+
+
+// ===== V4.7 — PRÉSENCE QR & MULTI-TECHNICIENS =====
+let activeQrScanner=null;
+function employeeQrCode(e){return `NYSOA-EMP|${e.id}|${e.qrToken||""}`;}
+function ensureEmployeeQrToken(e){
+ if(!e.qrToken){e.qrToken=("QR"+Date.now().toString(36)+Math.random().toString(36).slice(2,10)).toUpperCase();e.updatedAt=new Date().toISOString();save();cloudWriteGeneric("employees",e,"Mise à jour badge QR");}
+ return e.qrToken;
+}
+function employeeBadge(id){
+ const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return alert("Employé introuvable.");
+ ensureEmployeeQrToken(e);const project=projectLabel(employeeProject(e))||"Multi-chantiers / non affecté";
+ $("#content").innerHTML=`<div class="panel"><h3>BADGE QR — EMPLOYÉ</h3><div class="badge-qr-wrap"><div class="employee-badge" id="employeeBadgePrint"><div class="badge-brand">ENTREPRISE NYSOA CONSTRUCT</div><div id="employeeQrCanvas" class="qr-canvas"></div><h2>${esc(employeeName(e))}</h2><p><b>${esc(employeeRole(e))}</b></p><p>Matricule : ${esc(e.id)}</p><p>Chantier : ${esc(project)}</p><small>Badge personnel — ne pas prêter</small></div></div><div class="panel-body no-print"><button class="btn primary" onclick="window.print()">🖨 Imprimer le badge</button> <button class="btn secondary" onclick="employeesPage()">Retour</button><div class="notice">Le QR contient uniquement un identifiant technique NYSOA et un jeton aléatoire. Le nom du salarié n’est pas encodé directement dans le QR.</div></div></div>`;
+ const box=document.getElementById("employeeQrCanvas");
+ if(window.QRCode){new QRCode(box,{text:employeeQrCode(e),width:190,height:190,correctLevel:QRCode.CorrectLevel.M});}
+ else box.innerHTML=`<div class="qr-lib-error">Générateur QR indisponible.<br><b>${esc(employeeQrCode(e))}</b></div>`;
+}
+function qrAttendanceRows(){db.modules=db.modules||{};db.modules.attendanceQR=Array.isArray(db.modules.attendanceQR)?db.modules.attendanceQR:[];return db.modules.attendanceQR.filter(x=>!x.deleted);}
+function qrAttendancePage(){
+ if(!["ADMIN","GESTIONNAIRE","CONTROLE","TECHNICIEN"].includes(user.role))return alert("Accès non autorisé.");
+ const ctx=currentProjectContext();const today=new Date().toISOString().slice(0,10);
+ const rows=qrAttendanceRows().filter(r=>(!ctx||String(r.project)===String(ctx))&&String(r.date)===today).sort((a,b)=>String(b.timestamp).localeCompare(String(a.timestamp)));
+ $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>PRÉSENCE PAR BADGE QR</h3><div class="panel-body"><div class="form-grid"><label>Chantier<select id="qrProject" required><option value="">Choisir le chantier</option>${accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${String(ctx)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label><div class="form-actions"><button class="btn primary" onclick="startQrScanner()">📷 Scanner un badge</button><button class="btn secondary" onclick="stopQrScanner()">Arrêter caméra</button></div><label class="full">Saisie manuelle (secours)<div class="manual-qr"><input id="qrManualCode" placeholder="Coller / saisir le code du badge"><button type="button" class="btn secondary" onclick="processBadgeScan(document.getElementById('qrManualCode').value)">Valider</button></div></label></div><div id="qr-reader" class="qr-reader"></div><div id="qrScanResult"></div><div class="notice">Premier scan de la journée = <b>Entrée</b>. Le scan suivant après l’entrée = <b>Sortie</b>. Un double scan dans les 30 secondes est ignoré.</div></div></div>
+ <div class="panel" style="margin-top:12px"><h3>SCANS DU JOUR</h3><div class="table-wrap"><table><thead><tr><th>Heure</th><th>Employé</th><th>Poste</th><th>Chantier</th><th>Mouvement</th><th>Scanné par</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${new Date(r.timestamp).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</td><td><b>${esc(r.employeeName)}</b></td><td>${esc(r.jobTitle||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${r.direction==="Entrée"?'<span class="qr-in">Entrée</span>':'<span class="qr-out">Sortie</span>'}</td><td>${esc(r.scannedByLabel||r.scannedBy||"")}</td></tr>`).join(""):'<tr><td colspan="6">Aucun scan aujourd’hui.</td></tr>'}</tbody></table></div></div>`;
+}
+async function startQrScanner(){
+ const project=document.getElementById("qrProject")?.value;if(!project)return alert("Choisissez d’abord le chantier.");
+ if(!window.Html5Qrcode){document.getElementById("qrScanResult").innerHTML='<div class="notice error">Le lecteur QR n’a pas pu se charger. Utilisez la saisie manuelle de secours.</div>';return;}
+ await stopQrScanner();
+ try{activeQrScanner=new Html5Qrcode("qr-reader");await activeQrScanner.start({facingMode:"environment"},{fps:10,qrbox:{width:240,height:240}},text=>processBadgeScan(text),()=>{});}
+ catch(err){activeQrScanner=null;document.getElementById("qrScanResult").innerHTML=`<div class="notice error">Caméra indisponible : ${esc(err?.message||String(err))}. Autorisez la caméra dans le navigateur.</div>`;}
+}
+async function stopQrScanner(){if(activeQrScanner){try{await activeQrScanner.stop();await activeQrScanner.clear();}catch(e){}activeQrScanner=null;}}
+async function processBadgeScan(code){
+ code=String(code||"").trim();if(!code)return;
+ const project=document.getElementById("qrProject")?.value;if(!project)return alert("Choisissez le chantier.");
+ const parts=code.split("|");if(parts.length!==3||parts[0]!=="NYSOA-EMP")return showQrResult("Badge QR invalide.",false);
+ const [,id,token]=parts,e=employeeRows().find(x=>String(x.id)===String(id));
+ if(!e||!e.qrToken||String(e.qrToken)!==String(token)||e.workflow==="Inactif")return showQrResult("Badge inconnu, expiré ou employé inactif.",false);
+ const assigned=employeeProject(e);if(assigned&&String(assigned)!==String(project)){return showQrResult(`Ce salarié est affecté à ${projectLabel(assigned)}, pas à ${projectLabel(project)}.`,false);}
+ const now=new Date(),date=now.toISOString().slice(0,10),same=qrAttendanceRows().filter(r=>r.employeeId===e.id&&r.project===project&&r.date===date).sort((a,b)=>String(b.timestamp).localeCompare(String(a.timestamp)));
+ const last=same[0];if(last&&now-new Date(last.timestamp)<30000)return showQrResult(`Double scan ignoré — ${employeeName(e)}.`,false);
+ const direction=last?.direction==="Entrée"?"Sortie":"Entrée";
+ const rec={id:"QRATT-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),employeeId:e.id,employeeName:employeeName(e),jobTitle:employeeRole(e),project,date,timestamp:now.toISOString(),direction,scannedBy:user.username,scannedByLabel:user.label,scannerUid:user.uid||"",owner:user.username,createdAt:now.toISOString(),updatedAt:now.toISOString()};
+ db.modules.attendanceQR.push(rec);save();syncQrPresenceToWeekly(e,project,date);logUserActivity("Scan badge QR — "+direction,"pointage",e.id,employeeName(e)+" — "+projectLabel(project));cloudWriteGeneric("attendanceQR",rec,"Scan badge QR");
+ showQrResult(`${direction} enregistrée — ${employeeName(e)} — ${now.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}.`,true);setTimeout(qrAttendancePage,900);
+}
+function showQrResult(msg,ok){const el=document.getElementById("qrScanResult");if(el)el.innerHTML=`<div class="qr-result ${ok?"ok":"bad"}">${ok?"✓":"⚠"} ${esc(msg)}</div>`;}
+function syncQrPresenceToWeekly(e,project,date){
+ const weekStart=mondayOf(date);let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);
+ if(!record){record={id:"ATTW-"+Date.now(),weekStart,project,entries:[],owner:user.username,updatedAt:new Date().toISOString(),updatedBy:user.username};db.modules.attendanceWeekly.push(record);}
+ const key=e.id;let entry=record.entries.find(x=>x.employeeKey===key);if(!entry){entry={employeeKey:key,states:{},dailySalary:employeePayCycle(e)==="Hebdomadaire"?Math.round(employeeBaseSalary(e)/6):0,paid:false,paidAt:""};record.entries.push(entry);}
+ entry.states=entry.states||{};entry.states[date]="P";record.updatedAt=new Date().toISOString();record.updatedBy=user.username;save();cloudWriteGeneric("attendanceWeekly",record,"Présence QR synchronisée");
+}
+async function techniciansPage(){
+ if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
+ $("#content").innerHTML='<div class="panel"><h3>TECHNICIENS & ACCÈS</h3><div class="panel-body">Chargement des profils…</div></div>';
+ try{const snap=await fbStore.collection("users").get();const rows=snap.docs.map(d=>({uid:d.id,...d.data()})).filter(x=>["TECHNICIEN","CONTROLE"].includes(x.role));
+ $("#content").innerHTML=`<div class="panel"><h3>TECHNICIENS & ACCÈS</h3><div class="panel-body"><button class="btn primary" onclick="technicianForm()">+ Ajouter un technicien</button><div class="notice">Chaque technicien possède son propre compte Firebase (e-mail + mot de passe). Les affectations chantier sont enregistrées dans son profil.</div></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>E-mail</th><th>Chantiers affectés</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${rows.length?rows.map(t=>`<tr><td><b>${esc(t.displayName||t.label||"")}</b></td><td>${esc(t.email||"")}</td><td>${esc((t.assignedProjects||[]).map(projectLabel).join(", ")||"Tous")}</td><td>${t.active===true?'<span class="qr-in">Actif</span>':'<span class="qr-out">Désactivé</span>'}</td><td><button class="btn-xs btn-edit" onclick="technicianEdit('${t.uid}')">Modifier</button> <button class="btn-xs" onclick="technicianToggle('${t.uid}',${t.active===true?'false':'true'})">${t.active===true?'Désactiver':'Activer'}</button> <button class="btn-xs" onclick="technicianReset('${esc(t.email||"")}')">Réinitialiser MDP</button></td></tr>`).join(""):'<tr><td colspan="5">Aucun technicien.</td></tr>'}</tbody></table></div></div>`;
+ }catch(err){$("#content").innerHTML=`<div class="panel"><h3>TECHNICIENS & ACCÈS</h3><div class="panel-body"><div class="notice error">${esc(err.message||String(err))}</div></div></div>`;}
+}
+function technicianForm(){
+ if(user.role!=="ADMIN")return;
+ $("#content").innerHTML=`<div class="panel"><h3>NOUVEAU TECHNICIEN</h3><form id="fTechnician" class="form-grid"><label>Nom affiché<input name="displayName" required></label><label>E-mail de connexion<input name="email" type="email" required></label><label>Mot de passe initial<input name="password" type="password" minlength="6" required></label><label class="full">Chantiers affectés<div class="project-checks">${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<label><input type="checkbox" name="projects" value="${esc(p.id)}"> ${esc(p.id)} — ${esc(p.name||"")}</label>`).join("")||"Aucun chantier créé."}</div></label><div class="form-actions full"><button class="btn primary">Créer le compte</button><button type="button" class="btn secondary" onclick="techniciansPage()">Annuler</button></div></form></div>`;
+ document.getElementById("fTechnician").onsubmit=async ev=>{ev.preventDefault();const btn=ev.target.querySelector('button[type="submit"]')||ev.target.querySelector("button");btn.disabled=true;const f=new FormData(ev.target),email=String(f.get("email")).trim(),password=String(f.get("password")),displayName=String(f.get("displayName")).trim(),assignedProjects=f.getAll("projects");let secondary=null;try{secondary=firebase.apps.find(a=>a.name==="nysoaUserCreator")||firebase.initializeApp(FIREBASE_CONFIG,"nysoaUserCreator");const cred=await secondary.auth().createUserWithEmailAndPassword(email,password);await fbStore.collection("users").doc(cred.user.uid).set({email,displayName,role:"TECHNICIEN",active:true,assignedProjects,createdAt:new Date().toISOString(),createdBy:user.uid||user.username});await secondary.auth().signOut();alert("Compte technicien créé avec succès.");techniciansPage();}catch(err){alert("Création impossible : "+(err.message||String(err)));}finally{btn.disabled=false;}};
+}
+async function technicianEdit(uid){
+ const snap=await fbStore.collection("users").doc(uid).get();if(!snap.exists)return alert("Profil introuvable.");const t=snap.data(),assigned=t.assignedProjects||[];
+ $("#content").innerHTML=`<div class="panel"><h3>MODIFIER TECHNICIEN</h3><form id="fTechnicianEdit" class="form-grid"><label>Nom affiché<input name="displayName" value="${esc(t.displayName||t.label||"")}" required></label><label>E-mail<input value="${esc(t.email||"")}" readonly></label><label class="full">Chantiers affectés<div class="project-checks">${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<label><input type="checkbox" name="projects" value="${esc(p.id)}" ${assigned.includes(p.id)?"checked":""}> ${esc(p.id)} — ${esc(p.name||"")}</label>`).join("")}</div></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="techniciansPage()">Annuler</button></div></form></div>`;
+ document.getElementById("fTechnicianEdit").onsubmit=async ev=>{ev.preventDefault();const f=new FormData(ev.target);await fbStore.collection("users").doc(uid).set({displayName:String(f.get("displayName")).trim(),assignedProjects:f.getAll("projects"),updatedAt:new Date().toISOString(),updatedBy:user.uid||user.username},{merge:true});alert("Profil mis à jour.");techniciansPage();};
+}
+async function technicianToggle(uid,active){if(!confirm(active?"Réactiver ce technicien ?":"Désactiver ce technicien ?"))return;await fbStore.collection("users").doc(uid).set({active,updatedAt:new Date().toISOString(),updatedBy:user.uid||user.username},{merge:true});techniciansPage();}
+async function technicianReset(email){if(!email)return;try{await fbAuth.sendPasswordResetEmail(email);alert("E-mail de réinitialisation envoyé à "+email);}catch(err){alert(err.message||String(err));}}
 
 
 const PURCHASE_STATUSES=["Demandé","Approuvé","Effectué","Livré","Refusé","Annulé"];
@@ -1689,7 +1753,7 @@ function employeesPage(){
  <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Catégorie</th><th>Poste</th><th>Chantier</th><th>Mode de paie</th><th>Salaire de base</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
  ${rows.length?rows.map(e=>{
    const pr=(db.projects||[]).find(p=>String(p.id)===String(employeeProject(e)));
-   return `<tr><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeCategory(e))}</td><td>${esc(employeeRole(e))}</td><td>${esc(pr?.name||employeeProject(e)||"Non affecté")}</td><td>${esc(employeePayCycle(e))}</td><td>${money(employeeBaseSalary(e))}</td><td>${workflowBadge(e.workflow||"Actif")}</td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="employeeForm('${e.id}')">Modifier</button><button class="btn-xs" onclick="showEmployeeBadge('${e.id}')">Badge QR</button><button class="btn-xs" onclick="payrollForm('', '${e.id}')">Payer</button><button class="btn-xs btn-delete" onclick="deleteEmployee('${e.id}')">Supprimer</button></div></td></tr>`;
+   return `<tr><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeCategory(e))}</td><td>${esc(employeeRole(e))}</td><td>${esc(pr?.name||employeeProject(e)||"Non affecté")}</td><td>${esc(employeePayCycle(e))}</td><td>${money(employeeBaseSalary(e))}</td><td>${workflowBadge(e.workflow||"Actif")}</td><td><div class="edit-actions"><button class="btn-xs" onclick="employeeBadge('${e.id}')">Badge QR</button><button class="btn-xs btn-edit" onclick="employeeForm('${e.id}')">Modifier</button><button class="btn-xs" onclick="payrollForm('', '${e.id}')">Payer</button><button class="btn-xs btn-delete" onclick="deleteEmployee('${e.id}')">Supprimer</button></div></td></tr>`;
  }).join(""):`<tr><td colspan="8">Aucun employé.</td></tr>`}
  </tbody></table></div></div>`;
 }
@@ -1718,7 +1782,7 @@ function employeeForm(id=""){
  updateEmployeeRoleOptions('${esc(e?.jobTitle||"")}');
  $("#fEmployee").onsubmit=ev=>{
   ev.preventDefault();const f=new FormData(ev.target);
-  const obj={id:e?.id||"EMP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),name:f.get("name"),category:f.get("category"),jobTitle:f.get("jobTitle"),project:f.get("project")||"",payCycle:f.get("payCycle"),baseSalary:+f.get("baseSalary")||0,startDate:f.get("startDate"),workflow:f.get("workflow"),owner:e?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
+  const obj={id:e?.id||"EMP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),qrToken:e?.qrToken||("QR"+Date.now().toString(36)+Math.random().toString(36).slice(2,10)).toUpperCase(),name:f.get("name"),category:f.get("category"),jobTitle:f.get("jobTitle"),project:f.get("project")||"",payCycle:f.get("payCycle"),baseSalary:+f.get("baseSalary")||0,startDate:f.get("startDate"),workflow:f.get("workflow"),owner:e?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
   if(e)Object.assign(e,obj);else{obj.createdAt=new Date().toISOString();db.modules.employees.push(obj);}
   save();employeesPage();
  };
@@ -3058,60 +3122,4 @@ function showGenericHistory(page,id){
  const record=(db.modules[page]||[]).find(x=>String(x.id)===String(id));if(!record)return;
  const rows=record.history||[];
  $("#content").innerHTML=`<div class="panel"><h3>HISTORIQUE — ${esc(id)}</h3><div class="panel-body"><button class="btn secondary" onclick="generic('${page}')">Retour</button></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Utilisateur</th><th>Action</th><th>Détails</th></tr></thead><tbody>${rows.length?rows.map(h=>`<tr><td>${new Date(h.date).toLocaleString("fr-FR")}</td><td>${esc(h.user)}</td><td>${esc(h.action)}</td><td>${esc(h.details||"")}</td></tr>`).join(""):`<tr><td colspan="4">Aucun historique.</td></tr>`}</tbody></table></div></div>`;
-}
-
-
-/* ===== NYSOA ERP V4.7 — PRÉSENCE QR + MULTI-TECHNICIENS ===== */
-function ensureV47Data(){
- db.modules=db.modules||{};
- db.modules.qrAttendance=Array.isArray(db.modules.qrAttendance)?db.modules.qrAttendance:[];
- employeeRows().forEach(e=>{if(!e.qrCode)e.qrCode="NYSOA-EMP-"+String(e.id).replace(/[^A-Za-z0-9_-]/g,"");});
- save();
-}
-function employeeQrCode(e){if(!e.qrCode)e.qrCode="NYSOA-EMP-"+String(e.id).replace(/[^A-Za-z0-9_-]/g,"");return e.qrCode;}
-function showEmployeeBadge(id){
- ensureV47Data();const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return alert("Employé introuvable.");
- const code=employeeQrCode(e),pr=(db.projects||[]).find(p=>String(p.id)===String(employeeProject(e)));
- $("#content").innerHTML=`<div class="panel"><h3>BADGE QR — ${esc(employeeName(e))}</h3><div class="panel-body" style="text-align:center">
- <div id="employeeQrBox" style="display:inline-block;background:#fff;padding:18px;border-radius:12px"></div>
- <h2>${esc(employeeName(e))}</h2><p><b>${esc(employeeRole(e))}</b></p><p>${esc(pr?.name||"Multi-chantiers / Non affecté")}</p><p><small>${esc(code)}</small></p>
- <button class="btn primary" onclick="window.print()">Imprimer le badge</button> <button class="btn secondary" onclick="employeesPage()">Retour</button></div></div>`;
- if(window.QRCode)new QRCode(document.getElementById("employeeQrBox"),{text:code,width:220,height:220}); else document.getElementById("employeeQrBox").innerHTML="Bibliothèque QR indisponible.";
- save();
-}
-function qrAttendanceRows(){ensureV47Data();return db.modules.qrAttendance.filter(x=>!x.deleted);}
-function lastQrForEmployee(empId,dateKey){return qrAttendanceRows().filter(x=>String(x.employeeId)===String(empId)&&String(x.date||"")===String(dateKey)).sort((a,b)=>String(b.timestamp||"").localeCompare(String(a.timestamp||"")))[0];}
-async function recordQrScan(decoded){
- ensureV47Data();const code=String(decoded||"").trim();const e=employeeRows().find(x=>employeeQrCode(x)===code||String(x.id)===code);
- if(!e)return alert("Badge QR inconnu. Aucun employé correspondant.");
- const ctx=currentProjectContext(),empProject=employeeProject(e);let project=ctx||empProject||"";
- if(ctx&&empProject&&String(ctx)!==String(empProject)&&user.role!=="ADMIN")return alert("Cet employé est affecté à un autre chantier.");
- if(!project){const active=(db.projects||[]).filter(p=>!p.deleted&&p.status!=="Terminé");if(active.length===1)project=active[0].id;else return alert("Sélectionnez d’abord le chantier dans le filtre global.");}
- const now=new Date(),date=now.toISOString().slice(0,10),last=lastQrForEmployee(e.id,date),action=last?.action==="ENTRÉE"?"SORTIE":"ENTRÉE";
- const rec={id:"QR-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),employeeId:e.id,employeeName:employeeName(e),qrCode:code,project,action,date,time:now.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit",second:"2-digit"}),timestamp:now.toISOString(),scannedBy:user.username,scannedByLabel:user.label||user.username,workflow:"Validé"};
- db.modules.qrAttendance.push(rec);save();
- try{if(cloudReady&&fbStore)await fbStore.collection("qrAttendance").doc(rec.id).set(cloudSanitize(rec),{merge:true});}catch(err){console.warn("qrAttendance sync",err);}
- alert(`${employeeName(e)} — ${action} enregistrée à ${rec.time}`);qrPresencePage();
-}
-let nysoaQrScanner=null;
-async function startQrScanner(){
- const el=document.getElementById("qr-reader");if(!el)return;
- if(!window.Html5Qrcode){alert("Module caméra QR indisponible. Vérifiez la connexion internet puis rechargez la page.");return;}
- try{if(nysoaQrScanner)try{await nysoaQrScanner.stop()}catch(e){};nysoaQrScanner=new Html5Qrcode("qr-reader");
- await nysoaQrScanner.start({facingMode:"environment"},{fps:10,qrbox:{width:250,height:250}},async text=>{try{await nysoaQrScanner.stop()}catch(e){};nysoaQrScanner=null;await recordQrScan(text);},()=>{});
- }catch(e){console.error(e);alert("Impossible d’ouvrir la caméra. Autorisez l’accès caméra dans le navigateur.");}
-}
-async function stopQrScanner(){if(nysoaQrScanner){try{await nysoaQrScanner.stop()}catch(e){}nysoaQrScanner=null;}}
-function qrPresencePage(){
- ensureV47Data();stopQrScanner();const ctx=currentProjectContext();const today=new Date().toISOString().slice(0,10);let rows=qrAttendanceRows().filter(r=>!ctx||String(r.project)===String(ctx));
- rows=rows.sort((a,b)=>String(b.timestamp||"").localeCompare(String(a.timestamp||""))).slice(0,200);
- $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>PRÉSENCE PAR BADGE QR</h3><div class="panel-body">
- <button class="btn primary" onclick="startQrScanner()">📷 Scanner un badge</button> <button class="btn secondary" onclick="stopQrScanner()">Arrêter la caméra</button>
- <div class="notice">1er scan du jour = ENTRÉE. Scan suivant = SORTIE. Le chantier actif est celui sélectionné en haut de l’ERP.</div>
- <div id="qr-reader" style="max-width:520px;margin:14px auto"></div>
- <label>Ou saisir le code du badge<input id="qrManualCode" placeholder="NYSOA-EMP-..."></label> <button class="btn primary" onclick="recordQrScan(document.getElementById('qrManualCode').value)">Valider</button>
- </div></div>
- <div class="panel"><h3>HISTORIQUE QR — ${today}</h3><div class="table-wrap"><table><thead><tr><th>Date</th><th>Heure</th><th>Employé</th><th>Chantier</th><th>Mouvement</th><th>Scanné par</th></tr></thead><tbody>
- ${rows.length?rows.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(r.time||"")}</td><td><b>${esc(r.employeeName||"")}</b></td><td>${esc(projectLabel(r.project)||r.project||"")}</td><td>${workflowBadge(r.action||"")}</td><td>${esc(r.scannedByLabel||r.scannedBy||"")}</td></tr>`).join(""):`<tr><td colspan="6">Aucun scan enregistré.</td></tr>`}
- </tbody></table></div></div>`;
 }

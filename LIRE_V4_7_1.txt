@@ -1,0 +1,27 @@
+NYSOA CONSTRUCT ERP — V4.7.1
+Base: V4.7.0 issue de V4.6.1 stable
+
+NOUVEAUTÉS
+- Pointage affiche tous les employés enregistrés, actifs ou passifs.
+- Statut quotidien par défaut: Absent.
+- Cases à cocher Présent / Absent, exclusives l'une de l'autre.
+- Scan badge QR = Présent automatique, avec traçabilité QR.
+- Correction manuelle autorisée.
+- Affectation chantier visible dans le pointage.
+- Accès pointage/QR pour ADMIN, GESTIONNAIRE, CONTROLE et TECHNICIEN.
+- Nouveau rôle TECHNICIEN pour les comptes créés depuis le module Techniciens & Accès.
+- État utilisateur basé sur l'activité réelle: ACTIF seulement après une action métier récente.
+- Historique détaillé des actions utilisateur consultable par l'Admin.
+- Journal d'activité Firestore + copie locale de secours.
+
+TEST RECOMMANDÉ AVANT PRODUCTION
+1. Connexion Admin
+2. Vérifier Employés et affectations chantier
+3. Ouvrir Pointage: tous les employés doivent apparaître
+4. Scanner un badge: le salarié doit passer Présent
+5. Tester correction manuelle P/A
+6. Connexion Gestionnaire / Technicien: vérifier accès Pointage
+7. Admin > Utilisateurs actifs > cliquer un utilisateur > vérifier historique
+
+IMPORTANT
+Conserver V4.6.1 et V4.7.0 comme sauvegardes. Tester V4.7.1 sur une copie avant remplacement de la production.
