@@ -1,0 +1,36 @@
+NYSOA ERP V4.7.0 — PRÉSENCE QR & MULTI-TECHNICIENS
+Base: V4.6.1 stable (correctif Gestionnaire cashTable conservé)
+
+NOUVEAUTÉS
+1. Présence par badge QR
+   - Badge QR unique par employé
+   - Scan caméra depuis téléphone/tablette/ordinateur
+   - Entrée / Sortie automatique
+   - Anti double-scan 30 secondes
+   - Contrôle du chantier affecté
+   - Historique des scans du jour
+   - Synchronisation automatique du jour présent dans le pointage hebdomadaire
+   - Mode de secours par saisie manuelle du code
+
+2. Multi-Techniciens
+   - Menu Admin « TECHNICIENS & ACCÈS »
+   - Création d’un compte Firebase indépendant par technicien
+   - Rôle CONTROLE (technicien contrôle & suivi)
+   - Mot de passe initial individuel
+   - Affectation à un ou plusieurs chantiers dans le profil Firestore
+   - Activation / désactivation du compte
+   - Envoi d’un e-mail de réinitialisation du mot de passe
+
+3. Stabilité
+   - Correctif cashTable V4.6.1 conservé
+   - Nouvelle collection cloud attendanceQR
+   - Les QR contiennent un ID + jeton aléatoire, pas le nom de l’employé
+   - Dépendances QR chargées via CDN versionnées (l’ERP utilisant déjà Internet/Firebase)
+
+INSTALLATION
+Remplacer dans le dépôt GitHub les fichiers app.js, index.html et styles.css par ceux de cette version.
+Conserver les autres fichiers. Faire Commit changes, attendre le déploiement, puis Cmd+Shift+R sur Mac.
+
+IMPORTANT FIREBASE
+Firebase Authentication > Sign-in method > Email/Password doit être activé.
+Les règles Firestore doivent autoriser les utilisateurs authentifiés à lire/écrire les collections employees, attendanceWeekly et attendanceQR selon votre politique.

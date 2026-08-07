@@ -149,7 +149,7 @@ function cleanupExpiredLocalPhotos(){const days=+(db.appSettings?.photoRetention
 
 
 function legacyUsernameForRole(role){
-  return role==="ADMIN"?"admin":role==="GESTIONNAIRE"?"gestionnaire":role==="CONTROLE"?"controle":"user";
+  return role==="ADMIN"?"admin":role==="GESTIONNAIRE"?"gestionnaire":role==="CONTROLE"?"controle":role==="TECHNICIEN"?"technicien":"user";
 }
 function cloudStatusText(text,kind="normal"){
   cloudState.status=text;
@@ -186,7 +186,7 @@ async function cloudLoadProfile(fbUser){
   if(!snap.exists)throw new Error("Profil Firestore introuvable pour cet utilisateur.");
   const profile=snap.data()||{};
   if(profile.active!==true)throw new Error("Ce compte est désactivé.");
-  if(!["ADMIN","GESTIONNAIRE","CONTROLE"].includes(profile.role))throw new Error("Rôle utilisateur non reconnu.");
+  if(!["ADMIN","GESTIONNAIRE","CONTROLE","TECHNICIEN"].includes(profile.role))throw new Error("Rôle utilisateur non reconnu.");
   return {
     uid:fbUser.uid,
     email:fbUser.email||"",
@@ -576,7 +576,7 @@ const ADMIN_FINANCE_MENU=[
  ["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],
  ["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],
  ["purchases","🛒","ACHATS"],["stock","📦","STOCK"],
- ["employees","👥","EMPLOYÉS"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],
+ ["employees","👥","EMPLOYÉS"],["qrPresence","▣","PRÉSENCE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],
  ["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES"],
  ["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],
  ["treasury","💰","TRÉSORERIE"],["reportsFinance","◔","RAPPORTS FINANCIERS"]
@@ -591,9 +591,10 @@ const ADMIN_TECH_MENU=[
 ];
 
 const menus={
- ADMIN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["situations","📊","SITUATION DE TRAVAUX"],["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],["fuel","⛽","CARBURANT"],["employees","👥","EMPLOYÉS"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],["treasury","💵","TRÉSORERIE"],["dailyReports","📝","RAPPORTS JOURNALIERS"],["reports","◔","RAPPORTS"],["adminValidations","✅","VALIDATIONS À PUBLIER"],["usageTime","⏱","TEMPS D’UTILISATION"],["trash","🗑","CORBEILLE"],["audit","📜","JOURNAL D’AUDIT"],["logicAudit","🧭","CONTRÔLE LOGIQUE ERP"],["presenceUsers","●","UTILISATEURS ACTIFS"],["settings","⚙","PARAMÈTRES"]],
- GESTIONNAIRE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["employees","👥","EMPLOYÉS"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","DEMANDE D'APPRO."],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS FINANCIERS"]],
- CONTROLE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["siteControls","📷","CONTRÔLE CHANTIER"],["attendance","◷","PRÉSENCE CHANTIER"],["situations","📊","SITUATION DE TRAVAUX"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
+ ADMIN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["situations","📊","SITUATION DE TRAVAUX"],["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],["fuel","⛽","CARBURANT"],["employees","👥","EMPLOYÉS"],["qrPresence","▣","PRÉSENCE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],["treasury","💵","TRÉSORERIE"],["dailyReports","📝","RAPPORTS JOURNALIERS"],["reports","◔","RAPPORTS"],["adminValidations","✅","VALIDATIONS À PUBLIER"],["usageTime","⏱","TEMPS D’UTILISATION"],["trash","🗑","CORBEILLE"],["audit","📜","JOURNAL D’AUDIT"],["logicAudit","🧭","CONTRÔLE LOGIQUE ERP"],["presenceUsers","●","UTILISATEURS ACTIFS"],["settings","⚙","PARAMÈTRES"]],
+ GESTIONNAIRE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["employees","👥","EMPLOYÉS"],["qrPresence","▣","PRÉSENCE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","DEMANDE D'APPRO."],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS FINANCIERS"]],
+ CONTROLE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["siteControls","📷","CONTRÔLE CHANTIER"],["qrPresence","▣","PRÉSENCE QR"],["attendance","◷","PRÉSENCE CHANTIER"],["situations","📊","SITUATION DE TRAVAUX"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]],
+ TECHNICIEN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","MES CHANTIERS"],["qrPresence","▣","SCAN BADGE QR"],["attendance","◷","PRÉSENCE CHANTIER"],["siteControls","📷","CONTRÔLE CHANTIER"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
 };
 
 function projectFinancialDetail(projectId){
@@ -717,7 +718,7 @@ function projectContextNotice(){
  return `<div class="project-context-note">🏗 Chantier sélectionné : <b>${esc(pr?.name||p)}</b> <button class="btn-xs" onclick="setGlobalProjectContext('')">Afficher tout</button></div>`;
 }
 
-function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,invoices:invoicesPage,clientReceipts:clientReceiptsPage,employees:employeesPage,payroll:payrollPage,expenses:expensesPage,appro:approPage,cash:cashPage,projects:projects,siteControls:siteControlsPage,reports:reports,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage,logicAudit:logicAuditPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
+function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,invoices:invoicesPage,clientReceipts:clientReceiptsPage,employees:employeesPage,payroll:payrollPage,expenses:expensesPage,appro:approPage,cash:cashPage,projects:projects,siteControls:siteControlsPage,reports:reports,attendance:attendance,qrPresence:qrPresencePage,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage,logicAudit:logicAuditPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
 function kpi(icon,color,title,value,note="",page=""){
  const routes={
   "CHANTIERS EN COURS":"projects","NOMBRE DE CHANTIERS":"projects",
@@ -938,13 +939,13 @@ function dashboard(){
  </div>
   ${cashTable()}`;return;
  }
- if(user.role==="CONTROLE"){
+ if(user.role==="CONTROLE"||user.role==="TECHNICIEN"){
   $("#content").innerHTML=`<div class="kpis">
     ${kpi("🏗","green","CHANTIERS EN COURS",db.projects.filter(x=>x.status==="En cours").length)}
     ${kpi("📊","blue","RAPPORTS TECHNIQUES",db.reports.length)}
     ${kpi("✅","orange","RAPPORTS VALIDÉS",db.reports.filter(x=>x.status==="Validé").length)}
     ${kpi("⚠","purple","NON-CONFORMITÉS",db.reports.filter(x=>x.conformity==="Non conforme").length)}
-    ${kpi("👷","teal","TECHNICIENS ACTIFS",user.role==="CONTROLE"?1:0)}
+    ${kpi("👷","teal","TECHNICIENS ACTIFS",1)}
   </div>${reportsTable()}`;return;
  }
  $("#content").innerHTML=`<div class="sync-guide">
@@ -1016,10 +1017,10 @@ function projects(){
              actions=`<button class="btn-xs btn-edit" onclick="projectForm('${p.id}')">Modifier</button>
                       <button class="btn-xs btn-delete" onclick="softDeleteRecord('projects','projects','${p.id}')">Supprimer</button>
                       <button class="btn-xs" onclick="showRecordHistory('projects','${p.id}')">Historique</button>`;
-             if(user.role==="CONTROLE"){
+             if(user.role==="CONTROLE"||user.role==="TECHNICIEN"){
                actions+=`<button class="btn-xs btn-edit" onclick="projectTechnicalForm('${p.id}')">Suivi technique</button>`;
              }
-           }else if(user.role==="CONTROLE"){
+           }else if(user.role==="CONTROLE"||user.role==="TECHNICIEN"){
              actions=`<button class="btn-xs btn-edit" onclick="projectTechnicalForm('${p.id}')">Modifier suivi</button>`;
            }else{
              actions="<span>Consultation</span>";
@@ -1042,7 +1043,7 @@ function projects(){
  </div>`;
 }
 function projectForm(id=""){
- if(user.role==="CONTROLE"){alert("La création/modification principale d’un chantier est réservée à l’Admin et au Gestionnaire. Utilisez le suivi technique.");return projects();}
+ if(user.role==="CONTROLE"||user.role==="TECHNICIEN"){alert("La création/modification principale d’un chantier est réservée à l’Admin et au Gestionnaire. Utilisez le suivi technique.");return projects();}
  let p=id?db.projects.find(x=>x.id===id):null;
  if(p && !canUserChange(p)){
    alert("Vous pouvez modifier uniquement les chantiers que vous avez créés.");
@@ -1230,7 +1231,8 @@ function userForm(username=""){
   <label>Nom d’utilisateur<input name="username" value="${esc(existing?.username||"")}" ${existing?"readonly":""} required></label>
   <label>Nom affiché<input name="label" value="${esc(existing?.label||"")}" required></label>
   <label>Rôle<select name="role">
-   <option value="CONTROLE" ${existing?.role==="CONTROLE"?"selected":""}>Technicien contrôle & suivi</option>
+   <option value="CONTROLE" ${existing?.role==="CONTROLE"?"selected":""}>Contrôle & suivi</option>
+   <option value="TECHNICIEN" ${existing?.role==="TECHNICIEN"?"selected":""}>Technicien chantier</option>
    <option value="GESTIONNAIRE" ${existing?.role==="GESTIONNAIRE"?"selected":""}>Gestionnaire</option>
    <option value="ADMIN" ${existing?.role==="ADMIN"?"selected":""}>Administrateur</option>
   </select></label>
@@ -1687,7 +1689,7 @@ function employeesPage(){
  <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Catégorie</th><th>Poste</th><th>Chantier</th><th>Mode de paie</th><th>Salaire de base</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
  ${rows.length?rows.map(e=>{
    const pr=(db.projects||[]).find(p=>String(p.id)===String(employeeProject(e)));
-   return `<tr><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeCategory(e))}</td><td>${esc(employeeRole(e))}</td><td>${esc(pr?.name||employeeProject(e)||"Non affecté")}</td><td>${esc(employeePayCycle(e))}</td><td>${money(employeeBaseSalary(e))}</td><td>${workflowBadge(e.workflow||"Actif")}</td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="employeeForm('${e.id}')">Modifier</button><button class="btn-xs" onclick="payrollForm('', '${e.id}')">Payer</button><button class="btn-xs btn-delete" onclick="deleteEmployee('${e.id}')">Supprimer</button></div></td></tr>`;
+   return `<tr><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeCategory(e))}</td><td>${esc(employeeRole(e))}</td><td>${esc(pr?.name||employeeProject(e)||"Non affecté")}</td><td>${esc(employeePayCycle(e))}</td><td>${money(employeeBaseSalary(e))}</td><td>${workflowBadge(e.workflow||"Actif")}</td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="employeeForm('${e.id}')">Modifier</button><button class="btn-xs" onclick="showEmployeeBadge('${e.id}')">Badge QR</button><button class="btn-xs" onclick="payrollForm('', '${e.id}')">Payer</button><button class="btn-xs btn-delete" onclick="deleteEmployee('${e.id}')">Supprimer</button></div></td></tr>`;
  }).join(""):`<tr><td colspan="8">Aucun employé.</td></tr>`}
  </tbody></table></div></div>`;
 }
@@ -3056,4 +3058,60 @@ function showGenericHistory(page,id){
  const record=(db.modules[page]||[]).find(x=>String(x.id)===String(id));if(!record)return;
  const rows=record.history||[];
  $("#content").innerHTML=`<div class="panel"><h3>HISTORIQUE — ${esc(id)}</h3><div class="panel-body"><button class="btn secondary" onclick="generic('${page}')">Retour</button></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Utilisateur</th><th>Action</th><th>Détails</th></tr></thead><tbody>${rows.length?rows.map(h=>`<tr><td>${new Date(h.date).toLocaleString("fr-FR")}</td><td>${esc(h.user)}</td><td>${esc(h.action)}</td><td>${esc(h.details||"")}</td></tr>`).join(""):`<tr><td colspan="4">Aucun historique.</td></tr>`}</tbody></table></div></div>`;
+}
+
+
+/* ===== NYSOA ERP V4.7 — PRÉSENCE QR + MULTI-TECHNICIENS ===== */
+function ensureV47Data(){
+ db.modules=db.modules||{};
+ db.modules.qrAttendance=Array.isArray(db.modules.qrAttendance)?db.modules.qrAttendance:[];
+ employeeRows().forEach(e=>{if(!e.qrCode)e.qrCode="NYSOA-EMP-"+String(e.id).replace(/[^A-Za-z0-9_-]/g,"");});
+ save();
+}
+function employeeQrCode(e){if(!e.qrCode)e.qrCode="NYSOA-EMP-"+String(e.id).replace(/[^A-Za-z0-9_-]/g,"");return e.qrCode;}
+function showEmployeeBadge(id){
+ ensureV47Data();const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return alert("Employé introuvable.");
+ const code=employeeQrCode(e),pr=(db.projects||[]).find(p=>String(p.id)===String(employeeProject(e)));
+ $("#content").innerHTML=`<div class="panel"><h3>BADGE QR — ${esc(employeeName(e))}</h3><div class="panel-body" style="text-align:center">
+ <div id="employeeQrBox" style="display:inline-block;background:#fff;padding:18px;border-radius:12px"></div>
+ <h2>${esc(employeeName(e))}</h2><p><b>${esc(employeeRole(e))}</b></p><p>${esc(pr?.name||"Multi-chantiers / Non affecté")}</p><p><small>${esc(code)}</small></p>
+ <button class="btn primary" onclick="window.print()">Imprimer le badge</button> <button class="btn secondary" onclick="employeesPage()">Retour</button></div></div>`;
+ if(window.QRCode)new QRCode(document.getElementById("employeeQrBox"),{text:code,width:220,height:220}); else document.getElementById("employeeQrBox").innerHTML="Bibliothèque QR indisponible.";
+ save();
+}
+function qrAttendanceRows(){ensureV47Data();return db.modules.qrAttendance.filter(x=>!x.deleted);}
+function lastQrForEmployee(empId,dateKey){return qrAttendanceRows().filter(x=>String(x.employeeId)===String(empId)&&String(x.date||"")===String(dateKey)).sort((a,b)=>String(b.timestamp||"").localeCompare(String(a.timestamp||"")))[0];}
+async function recordQrScan(decoded){
+ ensureV47Data();const code=String(decoded||"").trim();const e=employeeRows().find(x=>employeeQrCode(x)===code||String(x.id)===code);
+ if(!e)return alert("Badge QR inconnu. Aucun employé correspondant.");
+ const ctx=currentProjectContext(),empProject=employeeProject(e);let project=ctx||empProject||"";
+ if(ctx&&empProject&&String(ctx)!==String(empProject)&&user.role!=="ADMIN")return alert("Cet employé est affecté à un autre chantier.");
+ if(!project){const active=(db.projects||[]).filter(p=>!p.deleted&&p.status!=="Terminé");if(active.length===1)project=active[0].id;else return alert("Sélectionnez d’abord le chantier dans le filtre global.");}
+ const now=new Date(),date=now.toISOString().slice(0,10),last=lastQrForEmployee(e.id,date),action=last?.action==="ENTRÉE"?"SORTIE":"ENTRÉE";
+ const rec={id:"QR-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),employeeId:e.id,employeeName:employeeName(e),qrCode:code,project,action,date,time:now.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit",second:"2-digit"}),timestamp:now.toISOString(),scannedBy:user.username,scannedByLabel:user.label||user.username,workflow:"Validé"};
+ db.modules.qrAttendance.push(rec);save();
+ try{if(cloudReady&&fbStore)await fbStore.collection("qrAttendance").doc(rec.id).set(cloudSanitize(rec),{merge:true});}catch(err){console.warn("qrAttendance sync",err);}
+ alert(`${employeeName(e)} — ${action} enregistrée à ${rec.time}`);qrPresencePage();
+}
+let nysoaQrScanner=null;
+async function startQrScanner(){
+ const el=document.getElementById("qr-reader");if(!el)return;
+ if(!window.Html5Qrcode){alert("Module caméra QR indisponible. Vérifiez la connexion internet puis rechargez la page.");return;}
+ try{if(nysoaQrScanner)try{await nysoaQrScanner.stop()}catch(e){};nysoaQrScanner=new Html5Qrcode("qr-reader");
+ await nysoaQrScanner.start({facingMode:"environment"},{fps:10,qrbox:{width:250,height:250}},async text=>{try{await nysoaQrScanner.stop()}catch(e){};nysoaQrScanner=null;await recordQrScan(text);},()=>{});
+ }catch(e){console.error(e);alert("Impossible d’ouvrir la caméra. Autorisez l’accès caméra dans le navigateur.");}
+}
+async function stopQrScanner(){if(nysoaQrScanner){try{await nysoaQrScanner.stop()}catch(e){}nysoaQrScanner=null;}}
+function qrPresencePage(){
+ ensureV47Data();stopQrScanner();const ctx=currentProjectContext();const today=new Date().toISOString().slice(0,10);let rows=qrAttendanceRows().filter(r=>!ctx||String(r.project)===String(ctx));
+ rows=rows.sort((a,b)=>String(b.timestamp||"").localeCompare(String(a.timestamp||""))).slice(0,200);
+ $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>PRÉSENCE PAR BADGE QR</h3><div class="panel-body">
+ <button class="btn primary" onclick="startQrScanner()">📷 Scanner un badge</button> <button class="btn secondary" onclick="stopQrScanner()">Arrêter la caméra</button>
+ <div class="notice">1er scan du jour = ENTRÉE. Scan suivant = SORTIE. Le chantier actif est celui sélectionné en haut de l’ERP.</div>
+ <div id="qr-reader" style="max-width:520px;margin:14px auto"></div>
+ <label>Ou saisir le code du badge<input id="qrManualCode" placeholder="NYSOA-EMP-..."></label> <button class="btn primary" onclick="recordQrScan(document.getElementById('qrManualCode').value)">Valider</button>
+ </div></div>
+ <div class="panel"><h3>HISTORIQUE QR — ${today}</h3><div class="table-wrap"><table><thead><tr><th>Date</th><th>Heure</th><th>Employé</th><th>Chantier</th><th>Mouvement</th><th>Scanné par</th></tr></thead><tbody>
+ ${rows.length?rows.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(r.time||"")}</td><td><b>${esc(r.employeeName||"")}</b></td><td>${esc(projectLabel(r.project)||r.project||"")}</td><td>${workflowBadge(r.action||"")}</td><td>${esc(r.scannedByLabel||r.scannedBy||"")}</td></tr>`).join(""):`<tr><td colspan="6">Aucun scan enregistré.</td></tr>`}
+ </tbody></table></div></div>`;
 }
