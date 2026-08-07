@@ -1831,10 +1831,15 @@ function employeesPage(){
 
 function employeeForm(id=""){
  const e=id?employeeRows().find(x=>String(x.id)===String(id)):null;
- const category=e?.category||"Équipe terrain";
- const project=e?.project||currentProjectContext()||"";
+ // V4.7.4: always prefill edit form from both modern fields and legacy values[]
+ const existingName=e?employeeName(e):"";
+ const existingRole=e?employeeRole(e):"";
+ const existingPayCycle=e?employeePayCycle(e):"Hebdomadaire";
+ const existingBaseSalary=e?employeeBaseSalary(e):0;
+ const category=(e?employeeCategory(e):"")||"Équipe terrain";
+ const project=(e?employeeProject(e):"")||currentProjectContext()||"";
  $("#content").innerHTML=`<div class="panel"><h3>${e?"MODIFIER":"NOUVEL"} EMPLOYÉ</h3><form id="fEmployee" class="form-grid">
- <label>Nom et prénom<input name="name" value="${esc(e?.name||"")}" required></label>
+ <label>Nom et prénom<input name="name" value="${esc(existingName)}" required></label>
  <label>Matricule<input id="employeeMatriculePreview" value="${esc(employeeMatricule(e)||(e?nextEmployeeMatricule(employeeRole(e),e.id):"Généré après choix du poste"))}" readonly><small>Généré automatiquement selon la fonction et conservé définitivement.</small></label>
  <label>Photo employé (optionnel)<input name="photo" type="file" accept="image/*" capture="user"><small>${e?.photoData?"Photo enregistrée — choisir une nouvelle image pour la remplacer.":"Cadre photo vide si aucune image n’est choisie."}</small></label>
  <label>Catégorie<select name="category" id="employeeCategory" onchange="updateEmployeeRoleOptions()">
@@ -1844,22 +1849,22 @@ function employeeForm(id=""){
  <label>Poste<select name="jobTitle" id="employeeRole" onchange="updateEmployeeMatriculePreview()"></select></label>
  <label>Chantier<select name="project"><option value="">Non affecté / Multi-chantiers</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
  <label>Mode de paiement<select name="payCycle">
-   <option ${employeePayCycle(e)==="Hebdomadaire"?"selected":""}>Hebdomadaire</option>
-   <option ${employeePayCycle(e)==="Mensuel"?"selected":""}>Mensuel</option>
+   <option ${existingPayCycle==="Hebdomadaire"?"selected":""}>Hebdomadaire</option>
+   <option ${existingPayCycle==="Mensuel"?"selected":""}>Mensuel</option>
  </select></label>
- <label>Salaire de base (Ar)<input name="baseSalary" type="number" min="0" step="1" value="${employeeBaseSalary(e)||""}" required></label>
+ <label>Salaire de base (Ar)<input name="baseSalary" type="number" min="0" step="1" value="${existingBaseSalary||""}" required></label>
  <label>Date d'entrée<input name="startDate" type="date" value="${esc(e?.startDate||new Date().toISOString().slice(0,10))}"></label>
  <label>Statut<select name="workflow"><option ${e?.workflow==="Actif"?"selected":""}>Actif</option><option ${e?.workflow==="Inactif"?"selected":""}>Inactif</option></select></label>
  <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="employeesPage()">Annuler</button></div>
  </form></div>`;
  document.getElementById("fEmployee").dataset.employeeId=e?.id||"";
- updateEmployeeRoleOptions('${esc(e?.jobTitle||"")}');
+ updateEmployeeRoleOptions(existingRole);
  $("#fEmployee").onsubmit=async ev=>{
   ev.preventDefault();const f=new FormData(ev.target);const photoFile=f.get("photo");let photoData=e?.photoData||"";
   if(photoFile&&photoFile.size){try{photoData=await compressEmployeePhoto(photoFile);}catch(err){console.error(err);alert("Impossible de traiter la photo. Le badge sera créé sans nouvelle photo.");}}
   const selectedJob=f.get("jobTitle");
   const permanentMatricule=e?.matricule||nextEmployeeMatricule(selectedJob,e?.id||"");
-  const obj={id:e?.id||"EMP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),matricule:permanentMatricule,qrToken:e?.qrToken||("QR"+Date.now().toString(36)+Math.random().toString(36).slice(2,10)).toUpperCase(),name:f.get("name"),category:f.get("category"),jobTitle:selectedJob,project:f.get("project")||"",payCycle:f.get("payCycle"),baseSalary:+f.get("baseSalary")||0,startDate:f.get("startDate"),workflow:f.get("workflow"),owner:e?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString(),photoData:photoData};
+  const obj={...(e||{}),id:e?.id||"EMP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),matricule:permanentMatricule,qrToken:e?.qrToken||("QR"+Date.now().toString(36)+Math.random().toString(36).slice(2,10)).toUpperCase(),name:f.get("name"),category:f.get("category"),jobTitle:selectedJob,project:f.get("project")||"",payCycle:f.get("payCycle"),baseSalary:+f.get("baseSalary")||0,startDate:f.get("startDate")||e?.startDate||"",workflow:f.get("workflow")||e?.workflow||"Actif",owner:e?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString(),photoData:photoData};
   if(e)Object.assign(e,obj);else{obj.createdAt=new Date().toISOString();db.modules.employees.push(obj);}
   save();cloudWriteGeneric("employees",obj,e?"Modification employé":"Création employé");logUserActivity(e?"Employé modifié":"Employé créé","employés",obj.id,obj.name);employeeBadge(obj.id);
  };

@@ -1,0 +1,10 @@
+NYSOA ERP V4.7.4 — EMPLOYEE EDIT FIX
+
+Correction:
+- Le bouton Modifier préremplit désormais la fiche avec les données existantes.
+- Compatibilité avec les anciens employés stockés dans values[].
+- Conservation du matricule permanent, QR token, photo, identifiant et historique.
+- Une modification met à jour l'employé existant au lieu de repartir d'une fiche vide.
+- Les champs modernes sont enregistrés sans supprimer les anciennes données utiles.
+
+Base: V4.7.3.
