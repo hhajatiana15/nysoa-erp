@@ -1382,7 +1382,7 @@ function attendance(){
  const weekStart=mondayOf(selectedDate),project=sessionStorage.getItem("nysoa_attendance_project")||"";
  const days=["L","M","M","J","V","S","D"].map((label,i)=>({label,date:addDays(weekStart,i)}));
  let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);const entries=record?.entries||[];const keyOf=(r,i)=>r.id||r.values?.[0]||`EMP-${i+1}`;
- $("#content").innerHTML=`<div class="panel"><h3>POINTAGE DU PERSONNEL — LISTE COMPLÈTE</h3><div class="panel-body"><div class="form-grid"><label>Semaine contenant le<input id="attendanceDate" type="date" value="${selectedDate}"></label><label>Filtre chantier<select id="attendanceProject"><option value="">Tous les employés</option>${accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label><div class="form-actions full"><button class="btn primary" onclick="saveAttendance()">Enregistrer le pointage</button><button class="btn secondary" onclick="go('qrAttendance')">📷 Scanner les badges QR</button></div></div><div class="attendance-note">Tous les employés sont visibles, Actifs ou Passifs. Sans scan ou saisie manuelle, le jour est considéré <b>Absent</b>. Un scan QR met automatiquement le salarié <b>Présent</b>. Vous pouvez corriger manuellement.</div></div><div class="table-wrap"><table class="attendance-table weekly-attendance"><thead><tr><th>Matricule</th><th>Nom</th><th>Fonction</th><th>État employé</th><th>Affectation</th>${days.map(d=>`<th class="center">${d.label}<small>${d.date.slice(8,10)}</small></th>`).join("")}<th>Total P</th><th>Mode aujourd’hui</th></tr></thead><tbody>${employees.length?employees.map((r,i)=>{const key=keyOf(r,i),entry=entries.find(e=>e.employeeKey===key)||{},states=entry.states||{},assigned=employeeProject(r),show=!project||String(assigned||"")===String(project);if(!show)return "";const total=days.reduce((n,d)=>n+((states[d.date]||"A")==="P"?1:0),0);const qrToday=qrAttendanceRows().find(q=>q.employeeId===key&&q.date===selectedDate&&q.direction==="Entrée");return `<tr data-employee="${esc(key)}"><td>${esc(r.id||r.values?.[0]||"")}</td><td><b>${esc(employeeName(r))}</b></td><td>${esc(employeeRole(r))}</td><td>${employeeStatusLabel(r)==="Actif"?'<span class="qr-in">Actif</span>':'<span class="qr-out">Passif</span>'}</td><td>${esc(projectLabel(assigned)||"Non affecté")}</td>${days.map(d=>{const state=states[d.date]||"A";return `<td class="center"><label class="attendance-check"><input type="checkbox" class="att-present" data-key="${esc(key)}" data-date="${d.date}" ${state==="P"?"checked":""} onchange="setAttendanceCheck('${esc(key)}','${d.date}','P',this.checked)"> P</label><label class="attendance-check"><input type="checkbox" class="att-absent" data-key="${esc(key)}" data-date="${d.date}" ${state!=="P"?"checked":""} onchange="setAttendanceCheck('${esc(key)}','${d.date}','A',this.checked)"> A</label></td>`}).join("")}<td class="num attendance-total" data-key="${esc(key)}"><b>${total}</b></td><td>${qrToday?'<span class="qr-in">QR</span>':'<span>Manuel / défaut</span>'}</td></tr>`;}).join(""):'<tr><td colspan="14">Aucun employé enregistré.</td></tr>'}</tbody></table></div><div class="panel-body"><b>Semaine : ${weekStart} au ${addDays(weekStart,6)}</b> — ${employees.length} employé(s) enregistré(s)</div></div>`;
+ $("#content").innerHTML=`<div class="panel"><h3>POINTAGE DU PERSONNEL — LISTE COMPLÈTE</h3><div class="panel-body"><div class="form-grid"><label>Semaine contenant le<input id="attendanceDate" type="date" value="${selectedDate}"></label><label>Filtre chantier<select id="attendanceProject"><option value="">Tous les employés</option>${accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label><div class="form-actions full"><button class="btn primary" onclick="saveAttendance()">Enregistrer le pointage</button><button class="btn secondary" onclick="go('qrAttendance')">📷 Scanner les badges QR</button></div></div><div class="attendance-note">Tous les employés sont visibles, Actifs ou Passifs. Sans scan ou saisie manuelle, le jour est considéré <b>Absent</b>. Un scan QR met automatiquement le salarié <b>Présent</b>. Vous pouvez corriger manuellement.</div></div><div class="table-wrap"><table class="attendance-table weekly-attendance"><thead><tr><th>Matricule</th><th>Nom</th><th>Fonction</th><th>État employé</th><th>Affectation</th>${days.map(d=>`<th class="center">${d.label}<small>${d.date.slice(8,10)}</small></th>`).join("")}<th>Total P</th><th>Mode aujourd’hui</th></tr></thead><tbody>${employees.length?employees.map((r,i)=>{const key=keyOf(r,i),entry=entries.find(e=>e.employeeKey===key)||{},states=entry.states||{},assigned=employeeProject(r),show=!project||String(assigned||"")===String(project);if(!show)return "";const total=days.reduce((n,d)=>n+((states[d.date]||"A")==="P"?1:0),0);const qrToday=qrAttendanceRows().find(q=>q.employeeId===key&&q.date===selectedDate&&q.direction==="Entrée");return `<tr data-employee="${esc(key)}"><td>${esc(employeeMatricule(r)||r.id||r.values?.[0]||"")}</td><td><b>${esc(employeeName(r))}</b></td><td>${esc(employeeRole(r))}</td><td>${employeeStatusLabel(r)==="Actif"?'<span class="qr-in">Actif</span>':'<span class="qr-out">Passif</span>'}</td><td>${esc(projectLabel(assigned)||"Non affecté")}</td>${days.map(d=>{const state=states[d.date]||"A";return `<td class="center"><label class="attendance-check"><input type="checkbox" class="att-present" data-key="${esc(key)}" data-date="${d.date}" ${state==="P"?"checked":""} onchange="setAttendanceCheck('${esc(key)}','${d.date}','P',this.checked)"> P</label><label class="attendance-check"><input type="checkbox" class="att-absent" data-key="${esc(key)}" data-date="${d.date}" ${state!=="P"?"checked":""} onchange="setAttendanceCheck('${esc(key)}','${d.date}','A',this.checked)"> A</label></td>`}).join("")}<td class="num attendance-total" data-key="${esc(key)}"><b>${total}</b></td><td>${qrToday?'<span class="qr-in">QR</span>':'<span>Manuel / défaut</span>'}</td></tr>`;}).join(""):'<tr><td colspan="14">Aucun employé enregistré.</td></tr>'}</tbody></table></div><div class="panel-body"><b>Semaine : ${weekStart} au ${addDays(weekStart,6)}</b> — ${employees.length} employé(s) enregistré(s)</div></div>`;
  $("#attendanceDate").onchange=e=>{sessionStorage.setItem("nysoa_attendance_date",e.target.value);attendance();};$("#attendanceProject").onchange=e=>{sessionStorage.setItem("nysoa_attendance_project",e.target.value);attendance();};
 }
 function setAttendanceCheck(key,date,state,checked){
@@ -1420,7 +1420,7 @@ function employeeBadge(id){
    <div class="badge-top"><img src="assets/logo_nysoa_construct.png" class="badge-logo" alt="NYSOA"><div><div class="badge-brand">ENTREPRISE NYSOA CONSTRUCT</div><div class="badge-subtitle">CARTE PROFESSIONNELLE</div></div></div>
    <div class="badge-main">
      <div class="badge-photo">${photo?`<img src="${photo}" alt="Photo ${esc(employeeName(e))}">`:`<div class="badge-photo-empty"><span>PHOTO</span></div>`}</div>
-     <div class="badge-info"><h2>${esc(employeeName(e))}</h2><div class="badge-job">${esc(employeeRole(e))}</div><p><b>Matricule :</b> ${esc(e.id)}</p><p><b>Chantier :</b> ${esc(project)}</p><p><b>Statut :</b> ${esc(e.workflow||"Actif")}</p></div>
+     <div class="badge-info"><h2>${esc(employeeName(e))}</h2><div class="badge-job">${esc(employeeRole(e))}</div><p><b>Matricule :</b> ${esc(employeeMatricule(e)||e.id)}</p><p><b>Chantier :</b> ${esc(project)}</p><p><b>Statut :</b> ${esc(e.workflow||"Actif")}</p></div>
      <div class="badge-qr-col"><div id="employeeQrCanvas" class="qr-canvas"></div><small>SCAN PRÉSENCE</small></div>
    </div>
    <div class="badge-footer">Badge personnel • ENTREPRISE NYSOA CONSTRUCT</div>
@@ -1767,18 +1767,65 @@ function employeeRole(e){return e?.jobTitle||e?.values?.[2]||"";}
 function employeePayCycle(e){return e?.payCycle||e?.values?.[3]||"Hebdomadaire";}
 function employeeBaseSalary(e){return +(e?.baseSalary||e?.values?.[4]||0);}
 function employeeProject(e){return e?.project||e?.values?.[5]||"";}
+function employeeMatricule(e){return e?.matricule||e?.employeeNo||"";}
+const EMPLOYEE_JOB_CODES={
+ "Chef d’équipe":"CE",
+ "Chef de chantier":"CC",
+ "Maçon":"MC",
+ "Manœuvre":"MN",
+ "Ouvrier":"OV",
+ "Coffreur":"CF",
+ "Ferrailleur":"FR",
+ "Électricien":"EL",
+ "Plombier":"PL",
+ "Chauffeur":"CH",
+ "Magasinier":"MG",
+ "Technicien":"TC",
+ "Contrôleur":"CT",
+ "Gestionnaire":"GE",
+ "Commissionnaire":"CM"
+};
+function employeeJobCode(jobTitle){
+ const title=String(jobTitle||"").trim();
+ if(EMPLOYEE_JOB_CODES[title])return EMPLOYEE_JOB_CODES[title];
+ const normalized=title.normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^A-Za-z ]/g," ").trim();
+ const parts=normalized.split(/\s+/).filter(Boolean);
+ if(!parts.length)return "EM";
+ if(parts.length===1)return parts[0].slice(0,2).toUpperCase().padEnd(2,"X");
+ return (parts[0][0]+parts[1][0]).toUpperCase();
+}
+function nextEmployeeMatricule(jobTitle,excludeId=""){
+ const prefix=employeeJobCode(jobTitle);
+ let max=0;
+ employeeRows().forEach(emp=>{
+  if(excludeId&&String(emp.id)===String(excludeId))return;
+  const m=String(employeeMatricule(emp)||"").toUpperCase();
+  const hit=m.match(new RegExp("^"+prefix+"(\\d{3,})$"));
+  if(hit)max=Math.max(max,parseInt(hit[1],10)||0);
+ });
+ return prefix+String(max+1).padStart(3,"0");
+}
+function ensureEmployeeMatricules(){
+ const rows=employeeRows();
+ let changed=false;
+ rows.forEach(emp=>{
+  if(!employeeMatricule(emp)){emp.matricule=nextEmployeeMatricule(employeeRole(emp),emp.id);emp.updatedAt=new Date().toISOString();changed=true;cloudWriteGeneric("employees",emp,"Attribution matricule automatique");}
+ });
+ if(changed)save();
+}
 
 function employeesPage(){
+ ensureEmployeeMatricules();
  const ctx=currentProjectContext();
  const rows=employeeRows().filter(e=>!ctx||String(employeeProject(e))===String(ctx));
  $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>EMPLOYÉS</h3>
  <div class="panel-body"><button class="btn primary" onclick="employeeForm()">+ Nouvel employé</button>
  <div class="notice">Séparer clairement l’équipe terrain et le staff. Chaque employé peut être payé par semaine ou par mois.</div></div>
- <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Catégorie</th><th>Poste</th><th>Chantier</th><th>Mode de paie</th><th>Salaire de base</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
+ <div class="table-wrap"><table><thead><tr><th>Matricule</th><th>Nom</th><th>Catégorie</th><th>Poste</th><th>Chantier</th><th>Mode de paie</th><th>Salaire de base</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
  ${rows.length?rows.map(e=>{
    const pr=(db.projects||[]).find(p=>String(p.id)===String(employeeProject(e)));
-   return `<tr><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeCategory(e))}</td><td>${esc(employeeRole(e))}</td><td>${esc(pr?.name||employeeProject(e)||"Non affecté")}</td><td>${esc(employeePayCycle(e))}</td><td>${money(employeeBaseSalary(e))}</td><td>${workflowBadge(e.workflow||"Actif")}</td><td><div class="edit-actions"><button class="btn-xs" onclick="employeeBadge('${e.id}')">Badge QR</button><button class="btn-xs btn-edit" onclick="employeeForm('${e.id}')">Modifier</button><button class="btn-xs" onclick="payrollForm('', '${e.id}')">Payer</button><button class="btn-xs btn-delete" onclick="deleteEmployee('${e.id}')">Supprimer</button></div></td></tr>`;
- }).join(""):`<tr><td colspan="8">Aucun employé.</td></tr>`}
+   return `<tr><td><b>${esc(employeeMatricule(e))}</b></td><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeCategory(e))}</td><td>${esc(employeeRole(e))}</td><td>${esc(pr?.name||employeeProject(e)||"Non affecté")}</td><td>${esc(employeePayCycle(e))}</td><td>${money(employeeBaseSalary(e))}</td><td>${workflowBadge(e.workflow||"Actif")}</td><td><div class="edit-actions"><button class="btn-xs" onclick="employeeBadge('${e.id}')">Badge QR</button><button class="btn-xs btn-edit" onclick="employeeForm('${e.id}')">Modifier</button><button class="btn-xs" onclick="payrollForm('', '${e.id}')">Payer</button><button class="btn-xs btn-delete" onclick="deleteEmployee('${e.id}')">Supprimer</button></div></td></tr>`;
+ }).join(""):`<tr><td colspan="9">Aucun employé.</td></tr>`}
  </tbody></table></div></div>`;
 }
 
@@ -1788,12 +1835,13 @@ function employeeForm(id=""){
  const project=e?.project||currentProjectContext()||"";
  $("#content").innerHTML=`<div class="panel"><h3>${e?"MODIFIER":"NOUVEL"} EMPLOYÉ</h3><form id="fEmployee" class="form-grid">
  <label>Nom et prénom<input name="name" value="${esc(e?.name||"")}" required></label>
+ <label>Matricule<input id="employeeMatriculePreview" value="${esc(employeeMatricule(e)||(e?nextEmployeeMatricule(employeeRole(e),e.id):"Généré après choix du poste"))}" readonly><small>Généré automatiquement selon la fonction et conservé définitivement.</small></label>
  <label>Photo employé (optionnel)<input name="photo" type="file" accept="image/*" capture="user"><small>${e?.photoData?"Photo enregistrée — choisir une nouvelle image pour la remplacer.":"Cadre photo vide si aucune image n’est choisie."}</small></label>
  <label>Catégorie<select name="category" id="employeeCategory" onchange="updateEmployeeRoleOptions()">
    <option ${category==="Équipe terrain"?"selected":""}>Équipe terrain</option>
    <option ${category==="Staff"?"selected":""}>Staff</option>
  </select></label>
- <label>Poste<select name="jobTitle" id="employeeRole"></select></label>
+ <label>Poste<select name="jobTitle" id="employeeRole" onchange="updateEmployeeMatriculePreview()"></select></label>
  <label>Chantier<select name="project"><option value="">Non affecté / Multi-chantiers</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
  <label>Mode de paiement<select name="payCycle">
    <option ${employeePayCycle(e)==="Hebdomadaire"?"selected":""}>Hebdomadaire</option>
@@ -1804,19 +1852,30 @@ function employeeForm(id=""){
  <label>Statut<select name="workflow"><option ${e?.workflow==="Actif"?"selected":""}>Actif</option><option ${e?.workflow==="Inactif"?"selected":""}>Inactif</option></select></label>
  <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="employeesPage()">Annuler</button></div>
  </form></div>`;
+ document.getElementById("fEmployee").dataset.employeeId=e?.id||"";
  updateEmployeeRoleOptions('${esc(e?.jobTitle||"")}');
  $("#fEmployee").onsubmit=async ev=>{
   ev.preventDefault();const f=new FormData(ev.target);const photoFile=f.get("photo");let photoData=e?.photoData||"";
   if(photoFile&&photoFile.size){try{photoData=await compressEmployeePhoto(photoFile);}catch(err){console.error(err);alert("Impossible de traiter la photo. Le badge sera créé sans nouvelle photo.");}}
-  const obj={id:e?.id||"EMP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),qrToken:e?.qrToken||("QR"+Date.now().toString(36)+Math.random().toString(36).slice(2,10)).toUpperCase(),name:f.get("name"),category:f.get("category"),jobTitle:f.get("jobTitle"),project:f.get("project")||"",payCycle:f.get("payCycle"),baseSalary:+f.get("baseSalary")||0,startDate:f.get("startDate"),workflow:f.get("workflow"),owner:e?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString(),photoData:photoData};
+  const selectedJob=f.get("jobTitle");
+  const permanentMatricule=e?.matricule||nextEmployeeMatricule(selectedJob,e?.id||"");
+  const obj={id:e?.id||"EMP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),matricule:permanentMatricule,qrToken:e?.qrToken||("QR"+Date.now().toString(36)+Math.random().toString(36).slice(2,10)).toUpperCase(),name:f.get("name"),category:f.get("category"),jobTitle:selectedJob,project:f.get("project")||"",payCycle:f.get("payCycle"),baseSalary:+f.get("baseSalary")||0,startDate:f.get("startDate"),workflow:f.get("workflow"),owner:e?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString(),photoData:photoData};
   if(e)Object.assign(e,obj);else{obj.createdAt=new Date().toISOString();db.modules.employees.push(obj);}
   save();cloudWriteGeneric("employees",obj,e?"Modification employé":"Création employé");logUserActivity(e?"Employé modifié":"Employé créé","employés",obj.id,obj.name);employeeBadge(obj.id);
  };
 }
 function updateEmployeeRoleOptions(selected=""){
  const cat=document.getElementById("employeeCategory")?.value||"Équipe terrain",el=document.getElementById("employeeRole");if(!el)return;
- const opts=cat==="Staff"?["Contrôleur","Gestionnaire","Commissionnaire"]:["Chef de chantier","Chef d’équipe","Ouvrier","Manœuvre"];
+ const opts=cat==="Staff"?["Contrôleur","Gestionnaire","Commissionnaire","Technicien","Magasinier"]:["Chef de chantier","Chef d’équipe","Maçon","Ouvrier","Manœuvre","Coffreur","Ferrailleur","Électricien","Plombier","Chauffeur"];
  el.innerHTML=opts.map(x=>`<option ${x===selected?"selected":""}>${x}</option>`).join("");
+ updateEmployeeMatriculePreview();
+}
+function updateEmployeeMatriculePreview(){
+ const field=document.getElementById("employeeMatriculePreview"),role=document.getElementById("employeeRole");if(!field||!role)return;
+ const form=document.getElementById("fEmployee");
+ const editingId=form?.dataset?.employeeId||"";
+ const existing=editingId?employeeRows().find(x=>String(x.id)===String(editingId)):null;
+ field.value=employeeMatricule(existing)||nextEmployeeMatricule(role.value,editingId);
 }
 function deleteEmployee(id){
  const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return;

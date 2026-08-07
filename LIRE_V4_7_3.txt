@@ -1,0 +1,15 @@
+NYSOA ERP V4.7.3 — MATRICULE AUTOMATIQUE PAR FONCTION
+
+Base : V4.7.2 Badge QR Local + Photo.
+
+Ajouts :
+- Matricule professionnel automatique selon la fonction.
+- Exemples : Chef d’équipe CE001, Maçon MC001, Chef de chantier CC001.
+- Numérotation indépendante par fonction et incrément automatique.
+- Un matricule attribué reste permanent même si la fonction change ensuite.
+- Les matricules supprimés/passifs ne sont pas réutilisés.
+- Affichage du matricule dans la liste Employés, le Pointage et le Badge QR.
+- Attribution automatique d’un matricule aux employés existants qui n’en avaient pas.
+- Ajout de fonctions BTP courantes : Maçon, Coffreur, Ferrailleur, Électricien, Plombier, Chauffeur, Technicien, Magasinier.
+
+Important : le QR utilise toujours l’identifiant interne sécurisé + token. Le matricule est un identifiant RH lisible, séparé de l’ID technique afin de préserver l’historique et l’intégrité des données.
