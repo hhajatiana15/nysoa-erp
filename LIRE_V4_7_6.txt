@@ -1,0 +1,35 @@
+NYSOA ERP V4.7.6 — AUTO SYNCHRONISATION COMPLÈTE
+
+OBJECTIF
+Le fonctionnement normal ne nécessite plus de téléchargement/import de fichiers entre utilisateurs.
+
+FONCTIONNEMENT
+- Synchronisation Firebase automatique au démarrage.
+- Synchronisation automatique après toute sauvegarde locale.
+- Vérification automatique périodique toutes les 5 secondes.
+- Écoute temps réel Firebase pour les données métier.
+- Mise à jour automatique de l'écran actuellement ouvert lorsqu'une donnée distante change.
+- Protection des formulaires en cours de saisie : l'auto-rendu ne détruit pas un formulaire ouvert.
+- Reconnexion Internet : reprise automatique de la synchronisation.
+- Les validations, rapports, temps d'utilisation et données de chantier sont transmis par le Cloud sans fichier manuel.
+- Plusieurs utilisateurs/appareils peuvent travailler simultanément.
+
+COLLECTIONS MÉTIER COUVERTES
+Chantiers, devis, factures, encaissements clients, demandes, approvisionnements,
+dépenses, achats, stock, mouvements de stock, employés, paie, contrôles chantier,
+rapports techniques, rapports journaliers, pointages, scans QR et temps d'utilisation.
+
+INTERFACE
+Supprimés du workflow quotidien :
+- Télécharger la mise à jour
+- Actualiser les données par fichier
+- Publier / importer validations par fichier
+- Exporter / importer temps d'utilisation pour synchronisation
+- Envoyer / importer rapports pour synchronisation
+- Migrer V4.4 → Cloud
+
+Le bouton « Synchronisation de secours » reste disponible uniquement en cas de besoin exceptionnel.
+Les fonctions Export CSV, Import Excel/CSV et Sauvegarde complète restent disponibles comme outils métier/backup,
+et non comme mécanisme de synchronisation entre utilisateurs.
+
+Base : V4.7.5 Multi-Techniciens simultanés.

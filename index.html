@@ -76,16 +76,7 @@
           <button class="btn secondary" onclick="printCurrentView()">🖨 Impression directe</button>
           <button class="btn secondary" onclick="exportCurrentModuleCSV()">⬇ Exporter CSV</button>
           <button class="btn primary" onclick="openImportDialog()">⬆ Importer Excel / CSV</button>
-          <button id="sendUpdatesBtn" class="btn sync-send" onclick="exportMyUpdates()">⬇ Télécharger la mise à jour</button>
-          <button id="refreshAdminBtn" class="btn sync-refresh" onclick="openSyncImport()">🔄 Actualiser les données</button>
-          <button id="publishValidationBtn" class="btn primary" onclick="go('adminValidations')">✅ Publier les validations</button>
-          <button id="importValidationBtn" class="btn primary" onclick="openValidationImport()">⬆ Importer validation Admin</button>
-          <button id="exportUsageBtn" class="btn primary" onclick="exportUsageTime()">⏱ Exporter temps d’utilisation</button>
-          <button id="importUsageBtn" class="btn primary" onclick="openUsageImport()">⏱ Importer temps d’utilisation</button>
-          <button id="exportDailyReportsBtn" class="btn primary" onclick="exportDailyReports()">📝 Envoyer rapports</button>
-          <button id="importDailyReportsBtn" class="btn primary" onclick="openDailyReportImport()">📝 Importer rapports</button>
-          <button id="cloudSyncBtn" class="btn cloud-sync-btn" onclick="cloudSyncNow()">☁ Synchroniser maintenant</button>
-          <button id="cloudMigrateBtn" class="btn cloud-migrate-btn" onclick="cloudMigrationPhase1()">☁ Migrer V4.4 → Cloud</button>
+          <button id="cloudSyncBtn" class="btn cloud-sync-btn" onclick="cloudSyncNow()" title="Secours uniquement — la synchronisation normale est automatique">☁ Synchronisation de secours</button>
           <button class="btn secondary" onclick="exportBackup()">💾 Sauvegarde complète Admin</button>
           <input id="externalImportFile" type="file" accept=".xlsx,.xls,.csv,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/json" class="hidden" onchange="handleExternalImport(event)">
           <input id="syncImportFile" type="file" accept=".nysoa,application/octet-stream" class="hidden" onchange="handleSyncImport(event)">

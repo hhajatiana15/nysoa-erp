@@ -124,18 +124,20 @@ let presenceTimer=null;
 let adminNotifUnsub=null;
 let cloudAutoSyncTimer=null;
 
+const CLOUD_MODULE_COLLECTIONS=new Set(["attendanceWeekly","attendanceQR","employees","payroll","purchases","stock","stockMovements","invoices"]);
+const CLOUD_BUSINESS_COLLECTIONS=[
+ "projects","quotes","invoices","clientReceipts","requests","appro","expenses",
+ "purchases","stock","stockMovements","employees","payroll",
+ "siteControls","reports","dailyReports","attendanceWeekly","attendanceQR","usageSessions"
+];
 function cloudCollectionLocalRows(collection){
- if(collection==="attendanceWeekly")return db.modules?.attendanceWeekly||[];
- if(collection==="attendanceQR")return db.modules?.attendanceQR||[];
- if(collection==="employees")return db.modules?.employees||[];
+ if(CLOUD_MODULE_COLLECTIONS.has(collection))return db.modules?.[collection]||[];
  return Array.isArray(db[collection])?db[collection]:[];
 }
 function replaceCloudCollectionLocalRows(collection,rows){
- if(collection==="attendanceWeekly"){db.modules=db.modules||{};db.modules.attendanceWeekly=rows;}
- else if(collection==="attendanceQR"){db.modules=db.modules||{};db.modules.attendanceQR=rows;}
- else if(collection==="employees"){db.modules=db.modules||{};db.modules.employees=rows;}
+ if(CLOUD_MODULE_COLLECTIONS.has(collection)){db.modules=db.modules||{};db.modules[collection]=rows;}
  else db[collection]=rows;
- save();
+ saveLocalOnly();
 }
 let lastMeaningfulActivityAt=0;
 const REAL_ACTIVITY_WINDOW_MS=5*60*1000;
@@ -201,17 +203,94 @@ async function cloudWriteGeneric(collection,record,notifyTitle=""){
  if(!cloudReady)return;
  try{const payload=cloudSanitize({...record,cloudSyncedAt:new Date().toISOString()});await fbStore.collection(collection).doc(String(record.id)).set(payload,{merge:true});record.cloudSyncedAt=payload.cloudSyncedAt;if(notifyTitle&&!record.cloudNotifiedAt&&user.role!=="ADMIN"){await createAdminNotification(collection,notifyTitle,`${user.label||user.username} — ${record.project||record.id}`,record.id);record.cloudNotifiedAt=new Date().toISOString();}save();cloudMarkSynced();}catch(e){console.warn("cloud generic",collection,e);}
 }
+let cloudRealtimeRenderTimer=null;
+const cloudFingerprints=new Map();
+function recordFingerprint(r){
+ try{const x={...(r||{})};delete x.cloudSyncedAt;delete x.cloudNotifiedAt;return JSON.stringify(x);}catch(e){return String(r?.id||"");}
+}
+function rememberCollectionFingerprints(collection,rows){
+ (rows||[]).forEach(r=>{if(r?.id)cloudFingerprints.set(collection+"::"+String(r.id),recordFingerprint(r));});
+}
+function pageUsesCollection(page,collection){
+ const map={
+  projects:["projects","dashboard","dashboardFinance","dashboardTechnique"],
+  quotes:["quotes","dashboard","dashboardFinance"],
+  invoices:["invoices","dashboard","dashboardFinance"],
+  clientReceipts:["clientReceipts","dashboard","dashboardFinance"],
+  requests:["appro","dashboard"],
+  appro:["appro","cash","dashboard","dashboardFinance"],
+  expenses:["expenses","cash","dashboard","dashboardFinance"],
+  purchases:["purchases","dashboard","dashboardFinance"],
+  stock:["stock","dashboard"],
+  stockMovements:["stock","dashboard"],
+  employees:["employees","attendance","qrAttendance","payroll","dashboard"],
+  payroll:["payroll","dashboard","dashboardFinance"],
+  siteControls:["siteControls","dashboard","dashboardTechnique"],
+  reports:["reports","dashboard","dashboardTechnique"],
+  dailyReports:["dailyReports","dashboard","dashboardTechnique"],
+  attendanceWeekly:["attendance","dashboard","dashboardTechnique"],
+  attendanceQR:["qrAttendance","attendance","dashboard","dashboardTechnique"],
+  usageSessions:["usageTime","presenceUsers","dashboard"]
+ };
+ return (map[collection]||[]).includes(page);
+}
+function scheduleRealtimeRender(collection){
+ if(!pageUsesCollection(cloudCurrentPage,collection))return;
+ clearTimeout(cloudRealtimeRenderTimer);
+ cloudRealtimeRenderTimer=setTimeout(()=>{
+  const p=cloudCurrentPage;
+  // Do not destroy an open edit/create form while the user is typing.
+  if(document.querySelector("#content form"))return;
+  try{go(p);}catch(e){console.warn("auto-render",p,e);}
+ },180);
+}
 function startExtendedRealtimeListeners(){
  if(!cloudReady||!user)return;
- const collections=["requests","appro","expenses","siteControls","reports","attendanceWeekly","attendanceQR","employees"];
- collections.forEach(collection=>{try{cloudListeners.push(fbStore.collection(collection).onSnapshot(s=>{const remote=s.docs.map(d=>({id:d.id,...d.data()}));const local=cloudCollectionLocalRows(collection);const map=new Map(local.map(r=>[String(r.id),r]));remote.forEach(r=>{const l=map.get(String(r.id));if(!l){local.push(r);return;}const rt=Date.parse(r.updatedAt||r.cloudSyncedAt||r.createdAt||0)||0,lt=Date.parse(l.updatedAt||l.cloudSyncedAt||l.createdAt||0)||0;if(rt>=lt)Object.assign(l,r);});replaceCloudCollectionLocalRows(collection,local);},e=>console.warn("listener",collection,e)));}catch(e){console.warn(e);}});
+ CLOUD_BUSINESS_COLLECTIONS.filter(collection=>!["projects","dailyReports"].includes(collection)).forEach(collection=>{
+  try{
+   cloudListeners.push(fbStore.collection(collection).onSnapshot(s=>{
+    const remote=s.docs.map(d=>({id:d.id,...d.data()}));
+    const local=cloudCollectionLocalRows(collection);
+    const map=new Map(local.map(r=>[String(r.id),r]));
+    let changed=false;
+    remote.forEach(r=>{
+     const l=map.get(String(r.id));
+     if(!l){local.push(r);changed=true;return;}
+     const rt=Date.parse(r.updatedAt||r.cloudSyncedAt||r.createdAt||0)||0;
+     const lt=Date.parse(l.updatedAt||l.cloudSyncedAt||l.createdAt||0)||0;
+     if(rt>=lt && recordFingerprint(l)!==recordFingerprint(r)){Object.assign(l,r);changed=true;}
+    });
+    rememberCollectionFingerprints(collection,remote);
+    if(changed){replaceCloudCollectionLocalRows(collection,local);scheduleRealtimeRender(collection);}
+    cloudMarkSynced();
+   },e=>console.warn("listener",collection,e)));
+  }catch(e){console.warn("listener setup",collection,e);}
+ });
+}
+async function cloudAutoSyncAll(reason="auto"){
+ if(!cloudReady||!user||!navigator.onLine||cloudApplyingSnapshot)return;
+ for(const collection of CLOUD_BUSINESS_COLLECTIONS){
+  const rows=cloudCollectionLocalRows(collection);
+  for(const r of rows){
+   if(!r?.id)continue;
+   const key=collection+"::"+String(r.id),fp=recordFingerprint(r);
+   if(cloudFingerprints.get(key)===fp)continue;
+   try{
+    const payload=cloudSanitize({...r,cloudSyncedAt:new Date().toISOString()});
+    await fbStore.collection(collection).doc(String(r.id)).set(payload,{merge:true});
+    r.cloudSyncedAt=payload.cloudSyncedAt;
+    cloudFingerprints.set(key,recordFingerprint(r));
+   }catch(e){console.warn("auto sync",collection,r.id,e);}
+  }
+ }
+ saveLocalOnly();cloudMarkSynced();
 }
 function startCloudAutoSync(){
  clearInterval(cloudAutoSyncTimer);
- const run=async()=>{if(!cloudReady||!user||!navigator.onLine)return;const cfg=[
-  ["requests","Nouvelle demande d’approvisionnement"],["appro","Approvisionnement caisse validé"],["expenses","Nouvelle dépense"],["siteControls","Nouveau contrôle chantier"],["reports","Nouveau rapport technique"],["attendanceWeekly","Mise à jour présence chantier"],["attendanceQR","Scan badge QR"],["employees","Mise à jour personnel"]
- ];for(const [c,title] of cfg){for(const r of cloudCollectionLocalRows(c)){if(r.deleted)continue;const u=Date.parse(r.updatedAt||r.createdAt||0)||0,s=Date.parse(r.cloudSyncedAt||0)||0;if(u>s)await cloudWriteGeneric(c,r,title);}}};
- run();cloudAutoSyncTimer=setInterval(run,10000);
+ // Laisser d’abord les listeners Firebase charger/fusionner l’état Cloud,
+ // puis pousser uniquement les vraies modifications locales.
+ setTimeout(()=>cloudAutoSyncAll("startup"),2500);
+ cloudAutoSyncTimer=setInterval(()=>cloudAutoSyncAll("timer"),5000);
 }
 
 function cashTable(){
@@ -327,7 +406,7 @@ function cloudAttachPhase1Listeners(){
   cloudListeners.push(
     q.onSnapshot(snap=>{
       const rows=snap.docs.map(d=>({id:d.id,...d.data()}));
-      cloudMergeRemoteCollection("dailyReports",rows);
+      cloudMergeRemoteCollection("dailyReports",rows);rememberCollectionFingerprints("dailyReports",rows);scheduleRealtimeRender("dailyReports");
     },err=>{console.error(err);cloudStatusText("Erreur rapports","error");})
   );
 }
@@ -395,11 +474,12 @@ async function cloudSyncPendingPhase1(){
 }
 async function cloudSyncNow(){
   if(!cloudReady)return alert("Firebase n’est pas encore connecté.");
-  cloudStatusText("Synchronisation…","busy");
+  cloudStatusText("Synchronisation de secours…","busy");
   await cloudSyncPendingPhase1();
-  cloudAttachPhase1Listeners();
+  await cloudAutoSyncAll("manuel-secours");
+  cloudStopListeners();cloudAttachPhase1Listeners();startExtendedRealtimeListeners();
   cloudMarkSynced();
-  alert("Synchronisation Cloud Phase 1 terminée.");
+  alert("Synchronisation terminée. Le mode normal reste automatique.");
 }
 async function cloudMigrationPhase1(){
   if(!cloudReady||user?.role!=="ADMIN")return alert("Migration réservée à l’Admin.");
@@ -482,7 +562,7 @@ function initFirebaseCloud(){
     if(msg)msg.textContent="Connexion Firebase indisponible. Vérifiez Internet puis actualisez la page.";
   }
 }
-window.addEventListener("online",()=>{cloudStatusText("Reconnexion…","busy");if(user&&cloudReady){cloudSyncPendingPhase1();cloudAttachPhase1Listeners();}});
+window.addEventListener("online",()=>{cloudStatusText("Reconnexion…","busy");if(user&&cloudReady){cloudSyncPendingPhase1();cloudAutoSyncAll("reconnexion");cloudStopListeners();cloudAttachPhase1Listeners();startExtendedRealtimeListeners();}});
 window.addEventListener("offline",()=>cloudStatusText("Hors ligne","error"));
 
 const INIT={
@@ -509,7 +589,9 @@ let db=JSON.parse(localStorage.getItem("nysoa_stable_vide_db_v1")||"null")||stru
 let user=JSON.parse(sessionStorage.getItem("nysoa_v2_user")||"null");
 let adminWorkspace=sessionStorage.getItem("nysoa_admin_workspace")||"GENERAL";
 const $=s=>document.querySelector(s), money=n=>new Intl.NumberFormat("fr-FR").format(+n||0)+" Ar", sum=a=>a.reduce((x,y)=>x+(+y||0),0);
-const save=()=>localStorage.setItem("nysoa_stable_vide_db_v1",JSON.stringify(db));
+const saveLocalOnly=()=>localStorage.setItem("nysoa_stable_vide_db_v1",JSON.stringify(db));
+let cloudAutoSaveDebounce=null;
+const save=()=>{saveLocalOnly();if(cloudReady&&user){clearTimeout(cloudAutoSaveDebounce);cloudAutoSaveDebounce=setTimeout(()=>cloudAutoSyncAll("save"),350);}};
 if(!db.modules) db.modules={};
 if(!Array.isArray(db.clientReceipts)) db.clientReceipts=[];
 if(!Array.isArray(db.modules.stockMovements)) db.modules.stockMovements=[];
@@ -718,26 +800,10 @@ async function login(u,p){
   }
 }
 function boot(){ensureSecurityData();touchCurrentUser();if(user.role!=="ADMIN")startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");const actor=effectiveUserIdentity();$("#currentUserLabel").textContent=actor.label||user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");renderMenu();
-const sendBtn=document.getElementById("sendUpdatesBtn");
-const refreshBtn=document.getElementById("refreshAdminBtn");
-if(sendBtn)sendBtn.style.display=user.role==="ADMIN"?"none":"inline-flex";
-if(refreshBtn)refreshBtn.style.display=user.role==="ADMIN"?"inline-flex":"none";
-const publishBtn=document.getElementById("publishValidationBtn");
-const importValidationBtn=document.getElementById("importValidationBtn");
-if(publishBtn)publishBtn.style.display=user.role==="ADMIN"?"inline-flex":"none";
-if(importValidationBtn)importValidationBtn.style.display=user.role==="ADMIN"?"none":"inline-flex";
-const exportUsageBtn=document.getElementById("exportUsageBtn");
-const importUsageBtn=document.getElementById("importUsageBtn");
-if(exportUsageBtn)exportUsageBtn.style.display=user.role==="ADMIN"?"none":"inline-flex";
-if(importUsageBtn)importUsageBtn.style.display=user.role==="ADMIN"?"inline-flex":"none";
-const exportDailyReportsBtn=document.getElementById("exportDailyReportsBtn");
-const importDailyReportsBtn=document.getElementById("importDailyReportsBtn");
-if(exportDailyReportsBtn)exportDailyReportsBtn.style.display=user.role==="ADMIN"?"none":"inline-flex";
-if(importDailyReportsBtn)importDailyReportsBtn.style.display=user.role==="ADMIN"?"inline-flex":"none";
-const cloudMigrateBtn=document.getElementById("cloudMigrateBtn");
+const obsoleteManualButtons=["sendUpdatesBtn","refreshAdminBtn","publishValidationBtn","importValidationBtn","exportUsageBtn","importUsageBtn","exportDailyReportsBtn","importDailyReportsBtn","cloudMigrateBtn"];
+obsoleteManualButtons.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display="none";});
 const cloudSyncBtn=document.getElementById("cloudSyncBtn");
-if(cloudMigrateBtn)cloudMigrateBtn.style.display=user.role==="ADMIN"?"inline-flex":"none";
-if(cloudSyncBtn)cloudSyncBtn.style.display="inline-flex";
+if(cloudSyncBtn){cloudSyncBtn.style.display="inline-flex";cloudSyncBtn.title="Synchronisation de secours — le fonctionnement normal est automatique";}
 cloudStatusText(navigator.onLine?"Connecté":"Hors ligne",navigator.onLine?"ok":"error");
 if(user.role==="TECHNICIEN"&&!technicianSessionProfile())technicianIdentityGate();else if(user.role==="ADMIN"&&adminWorkspace==="FINANCE")go("dashboardFinance");else if(user.role==="ADMIN"&&adminWorkspace==="TECHNIQUE")go("dashboardTechnique");else go("dashboard")}
 function renderMenu(){
@@ -1036,7 +1102,7 @@ function dashboard(){
   </div>${reportsTable()}`;return;
  }
  $("#content").innerHTML=`<div class="sync-guide">
- <b>Synchronisation simple :</b> le Gestionnaire et le Technicien exportent leur fichier de mise à jour, puis l’Admin clique sur « Actualiser les données » pour l’importer.
+ <b>☁ Synchronisation automatique :</b> les données sont enregistrées dans le Cloud et mises à jour en temps réel sur les appareils connectés. Aucun fichier à télécharger ou importer.
 </div>
 <div class="kpis">
  ${kpi("📈","green","CHIFFRE D’AFFAIRES (TTC)",money(totalRevenue),"Calculé depuis les factures")}
@@ -2601,10 +2667,9 @@ function usageTimePage(){
   totals[key].seconds+=Number(s.activeSeconds)||0;totals[key].count++;
  });
  $("#content").innerHTML=`<div class="panel"><h3>TEMPS D’UTILISATION</h3>
- <div class="panel-body"><button class="btn primary" onclick="openUsageImport()">Importer temps d’utilisation</button>
- <button class="btn secondary" onclick="exportUsageCSV()">Exporter CSV</button>
- <span class="muted">Le fichier importé contient uniquement les sessions et les durées, sans achats, dépenses, chantiers ni rapports.</span></div>
- <div class="usage-summary">${Object.values(totals).map(t=>`<div class="usage-card"><b>${esc(t.label)}</b><span>${esc(t.role)}</span><strong>${secondsToDuration(t.seconds)}</strong><small>${t.count} connexion(s)</small></div>`).join("")||"<p>Aucune donnée importée.</p>"}</div>
+ <div class="panel-body"><button class="btn secondary" onclick="exportUsageCSV()">Exporter CSV</button>
+ <span class="muted">Les temps d’utilisation sont synchronisés automatiquement via le Cloud. Aucun import manuel n’est nécessaire.</span></div>
+ <div class="usage-summary">${Object.values(totals).map(t=>`<div class="usage-card"><b>${esc(t.label)}</b><span>${esc(t.role)}</span><strong>${secondsToDuration(t.seconds)}</strong><small>${t.count} connexion(s)</small></div>`).join("")||"<p>Aucune donnée disponible.</p>"}</div>
  <div class="table-wrap"><table><thead><tr><th>Utilisateur</th><th>Rôle</th><th>Date</th><th>Entrée</th><th>Dernière activité / sortie</th><th>Temps actif</th><th>Temps inactif</th><th>Appareil</th></tr></thead><tbody>
  ${sessions.length?sessions.map(s=>`<tr><td>${esc(s.label||s.username)}</td><td>${esc(s.role)}</td><td>${new Date(s.loginAt).toLocaleDateString("fr-FR")}</td><td>${new Date(s.loginAt).toLocaleTimeString("fr-FR")}</td><td>${new Date(s.logoutAt||s.lastSeenAt||s.loginAt).toLocaleTimeString("fr-FR")}</td><td><b>${secondsToDuration(s.activeSeconds)}</b></td><td>${secondsToDuration(s.idleSeconds)}</td><td class="device-cell">${esc(s.device||"")}</td></tr>`).join(""):`<tr><td colspan="8">Aucune session disponible.</td></tr>`}
  </tbody></table></div></div>`;
