@@ -1,0 +1,11 @@
+NYSOA ERP V4.7.8 — RESTORE REAL INVOICES
+
+Correction urgente après V4.7.7:
+- Les vraies factures FAC-... ne sont plus masquées même si elles proviennent d'une version antérieure avec certains champs incomplets.
+- Les factures réelles accidentellement mises en quarantaine par V4.7.7 sont restaurées automatiquement.
+- Seules les anciennes lignes GEN-... réellement vides/génériques restent isolées.
+- La page FACTURATION affiche toutes les factures par défaut (Tous les chantiers).
+- Les anciens montants de facture restent lisibles via les champs historiques si nécessaire.
+- Aucun enregistrement réel n'est supprimé.
+
+Base: V4.7.7.

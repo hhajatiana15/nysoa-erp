@@ -142,28 +142,36 @@ function replaceCloudCollectionLocalRows(collection,rows){
 let lastMeaningfulActivityAt=0;
 const REAL_ACTIVITY_WINDOW_MS=5*60*1000;
 async function updatePresence(status="auto"){
- if(!cloudReady||!user?.uid||!fbStore)return;
+ const actor=effectiveUserIdentity();
+ if(!cloudReady||!actor?.uid||!fbStore)return;
  const now=Date.now(),recent=lastMeaningfulActivityAt&&(now-lastMeaningfulActivityAt)<=REAL_ACTIVITY_WINDOW_MS;
  const realStatus=status==="offline"?"offline":(recent?"active":"inactive");
- try{await fbStore.collection("userPresence").doc(user.uid).set({
-  uid:user.uid,email:user.email||"",displayName:user.label||user.username||"",role:user.role,status:realStatus,
-  currentPage:cloudCurrentPage||"dashboard",lastSeen:new Date().toISOString(),lastActivityAt:lastMeaningfulActivityAt?new Date(lastMeaningfulActivityAt).toISOString():null,device:navigator.userAgent.slice(0,160)
+ try{await fbStore.collection("userPresence").doc(actor.uid).set({
+  uid:actor.uid,sharedUid:actor.sharedUid||user?.uid||"",email:user?.email||"",
+  displayName:actor.label||actor.username||user?.label||user?.username||"",role:actor.role||user?.role||"",
+  technicianId:actor.technicianId||"",status:realStatus,currentPage:cloudCurrentPage||"dashboard",
+  lastSeen:new Date().toISOString(),lastActivityAt:lastMeaningfulActivityAt?new Date(lastMeaningfulActivityAt).toISOString():null,
+  device:navigator.userAgent.slice(0,180)
  },{merge:true});}catch(e){console.warn("presence",e);}
 }
 async function logUserActivity(action,moduleName="",reference="",details=""){
  if(!user)return;
- const now=new Date();lastMeaningfulActivityAt=now.getTime();
- const rec={id:"ACT-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),uid:user.uid||"",username:user.username||user.email||"",label:user.label||user.username||user.email||"",role:user.role||"",module:moduleName||cloudCurrentPage||"dashboard",action:String(action||"Activité"),reference:String(reference||""),details:String(details||""),createdAt:now.toISOString()};
- db.userActivityLog=Array.isArray(db.userActivityLog)?db.userActivityLog:[];db.userActivityLog.unshift(rec);if(db.userActivityLog.length>5000)db.userActivityLog.length=5000;save();
- if(cloudReady&&fbStore&&actor.uid){try{await Promise.all([fbStore.collection("userActivity").doc(rec.id).set(cloudSanitize(rec)),updatePresence("active")]);}catch(e){console.warn("activity",e);}}
+ const actor=effectiveUserIdentity(),now=new Date();lastMeaningfulActivityAt=now.getTime();
+ const rec={id:"ACT-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
+  uid:actor.uid||user.uid||"",sharedUid:actor.sharedUid||user.uid||"",technicianId:actor.technicianId||"",
+  username:actor.username||user.username||user.email||"",label:actor.label||actor.username||user.label||user.email||"",
+  role:actor.role||user.role||"",module:moduleName||cloudCurrentPage||"dashboard",action:String(action||"Activité"),
+  reference:String(reference||""),details:String(details||""),createdAt:now.toISOString(),device:navigator.userAgent.slice(0,180)};
+ db.userActivityLog=Array.isArray(db.userActivityLog)?db.userActivityLog:[];db.userActivityLog.unshift(rec);if(db.userActivityLog.length>5000)db.userActivityLog.length=5000;saveLocalOnly();
+ if(cloudReady&&fbStore&&rec.uid){try{await Promise.all([fbStore.collection("userActivity").doc(rec.id).set(cloudSanitize(rec)),updatePresence("active")]);}catch(e){console.warn("activity",e);}}
 }
-function startPresence(){clearInterval(presenceTimer);lastMeaningfulActivityAt=Date.now();logUserActivity("Connexion ERP","session");presenceTimer=setInterval(()=>updatePresence("auto"),60000);}
-function stopPresence(){clearInterval(presenceTimer);presenceTimer=null;if(user?.uid){logUserActivity("Déconnexion ERP","session");updatePresence("offline");}}
+function startPresence(){clearInterval(presenceTimer);lastMeaningfulActivityAt=Date.now();logUserActivity("Connexion ERP","session","","Ouverture d’une session utilisateur");presenceTimer=setInterval(()=>updatePresence("auto"),60000);}
+function stopPresence(){clearInterval(presenceTimer);presenceTimer=null;if(user){logUserActivity("Déconnexion ERP","session","","Fermeture de session");updatePresence("offline");}}
 document.addEventListener("visibilitychange",()=>{if(user&&cloudReady)updatePresence("auto");});
 
 function adminPresencePage(){
  if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
- $("#content").innerHTML=`<div class="panel"><h3>ÉTAT RÉEL DES UTILISATEURS ERP</h3><div class="panel-body"><div class="notice">ACTIF = une action métier réelle a été effectuée dans les 5 dernières minutes. Un ERP simplement laissé ouvert reste INACTIF.</div><div id="presenceRows">Chargement…</div></div></div>`;
+ $("#content").innerHTML=`<div class="panel"><h3>ÉTAT RÉEL DES UTILISATEURS ERP</h3><div class="panel-body"><div class="notice">ACTIF = une action métier réelle a été effectuée dans les 5 dernières minutes. Un ERP simplement laissé ouvert reste INACTIF.</div><button class="btn secondary" onclick="adminLoginHistory()">Historique des connexions</button><div id="presenceRows">Chargement…</div></div></div>`;
  fbStore.collection("userPresence").onSnapshot(snap=>{
   const now=Date.now(),rows=snap.docs.map(d=>d.data()).sort((a,b)=>String(a.displayName||a.email).localeCompare(String(b.displayName||b.email)));
   const html=rows.map(r=>{const act=Date.parse(r.lastActivityAt||0)||0,mins=act?Math.floor(Math.max(0,now-act)/60000):null;let st=r.status==="offline"?"offline":(act&&now-act<=REAL_ACTIVITY_WINDOW_MS?"active":"inactive");let label=st==="active"?"ACTIF — travail détecté":st==="inactive"?`INACTIF${mins!==null?` — dernière action il y a ${mins} min`:""}`:"DÉCONNECTÉ";return `<button class="presence-row presence-click" onclick="userActivityHistory('${esc(r.uid||"")}','${esc(r.displayName||r.email||"")}')"><span class="presence-dot presence-${st==='active'?'online':st}"></span><div><b>${esc(r.displayName||r.email)}</b><small>${esc(r.role||"")} — ${label}</small><small>Dernière action : ${esc(r.currentPage||"dashboard")} ${r.lastActivityAt?"— "+new Date(r.lastActivityAt).toLocaleString("fr-FR"):""}</small></div><span>Historique ›</span></button>`;}).join("");
@@ -606,17 +614,15 @@ function ensureGovernanceData(){
 }
 function cloneRecord(v){return JSON.parse(JSON.stringify(v));}
 function audit(action,moduleName,reference,details="",before=null,after=null){
- ensureGovernanceData();
- db.auditLog.unshift({
-  id:"AUD-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
-  date:new Date().toISOString(),
-  user:user?.username||"système",
-  role:user?.role||"SYSTÈME",
-  action,module:moduleName,reference,details,
-  before:before?cloneRecord(before):null,
-  after:after?cloneRecord(after):null
- });
- save();
+ ensureGovernanceData();const actor=effectiveUserIdentity();
+ const rec={id:"AUD-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:new Date().toISOString(),
+  uid:actor.uid||user?.uid||"",sharedUid:actor.sharedUid||user?.uid||"",technicianId:actor.technicianId||"",
+  user:actor.label||actor.username||user?.label||user?.username||"système",username:actor.username||user?.username||"",
+  role:actor.role||user?.role||"SYSTÈME",action,module:moduleName,reference:String(reference||""),details:String(details||""),
+  before:before?cloneRecord(before):null,after:after?cloneRecord(after):null,device:navigator.userAgent.slice(0,180)};
+ db.auditLog.unshift(rec);if(db.auditLog.length>10000)db.auditLog.length=10000;saveLocalOnly();
+ if(cloudReady&&fbStore&&user)fbStore.collection("auditLog").doc(rec.id).set(cloudSanitize(rec)).catch(e=>console.warn("audit cloud",e));
+ logUserActivity(action,moduleName,reference,details);
 }
 function pushHistory(record,action,before=null,details=""){
  record.history=Array.isArray(record.history)?record.history:[];
@@ -710,14 +716,32 @@ function refreshModule(moduleName){
  const map={projects:"projects",expenses:"expenses",requests:"appro",reports:"reports"};
  go(map[moduleName]||moduleName);
 }
-function auditPage(){
+async function auditPage(){
  if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
  ensureGovernanceData();
- $("#content").innerHTML=`<div class="panel"><h3>JOURNAL D’AUDIT</h3>
- <div class="panel-body">Journal non modifiable des créations, modifications, suppressions, restaurations, validations et synchronisations.</div>
- <div class="table-wrap"><table><thead><tr><th>Date</th><th>Utilisateur</th><th>Rôle</th><th>Action</th><th>Module</th><th>Référence</th><th>Détails</th></tr></thead><tbody>
- ${db.auditLog.length?db.auditLog.map(a=>`<tr><td>${new Date(a.date).toLocaleString("fr-FR")}</td><td>${esc(a.user)}</td><td>${esc(a.role)}</td><td>${esc(a.action)}</td><td>${esc(a.module)}</td><td>${esc(a.reference)}</td><td>${esc(a.details||"")}</td></tr>`).join(""):`<tr><td colspan="7">Aucune opération enregistrée.</td></tr>`}
- </tbody></table></div></div>`;
+ $("#content").innerHTML=`<div class="panel"><h3>JOURNAL D’AUDIT CLOUD</h3><div class="panel-body">
+ <button class="btn secondary" onclick="adminLoginHistory()">Historique des connexions</button>
+ <span class="muted">Actions réelles de tous les utilisateurs et appareils, avec auteur et valeurs avant/après.</span></div>
+ <div id="auditCloudRows" class="table-wrap">Chargement…</div></div>`;
+ let rows=[];try{if(cloudReady&&fbStore){const s=await fbStore.collection("auditLog").get();rows=s.docs.map(d=>d.data());}else rows=db.auditLog||[];}catch(e){rows=db.auditLog||[];}
+ rows=rows.sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
+ document.getElementById("auditCloudRows").innerHTML=`<table><thead><tr><th>Date</th><th>Utilisateur</th><th>Rôle</th><th>Action</th><th>Module</th><th>Référence</th><th>Détails</th><th>Avant/Après</th></tr></thead><tbody>
+ ${rows.length?rows.map(a=>`<tr><td>${a.date?new Date(a.date).toLocaleString("fr-FR"):""}</td><td><b>${esc(a.user||a.username||"")}</b></td><td>${esc(a.role||"")}</td><td>${esc(a.action||"")}</td><td>${esc(a.module||"")}</td><td>${esc(a.reference||"")}</td><td>${esc(a.details||"")}</td><td>${(a.before||a.after)?`<button class="btn-xs" onclick="showAuditDiff('${esc(a.id)}')">Voir</button>`:"—"}</td></tr>`).join(""):'<tr><td colspan="8">Aucune opération enregistrée.</td></tr>'}</tbody></table>`;
+ db.auditLog=rows;saveLocalOnly();
+}
+async function adminLoginHistory(){
+ if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
+ $("#content").innerHTML=`<div class="panel"><h3>HISTORIQUE DES CONNEXIONS UTILISATEURS</h3><div class="panel-body"><button class="btn secondary" onclick="auditPage()">← Retour audit</button>
+ <div class="notice">Connexions/déconnexions Admin, Gestionnaire et identités Technicien, tous appareils confondus.</div></div><div id="loginHistoryRows" class="table-wrap">Chargement…</div></div>`;
+ let rows=[];try{if(cloudReady&&fbStore){const s=await fbStore.collection("userActivity").get();rows=s.docs.map(d=>d.data());}else rows=db.userActivityLog||[];}catch(e){rows=db.userActivityLog||[];}
+ rows=rows.filter(x=>["Connexion ERP","Déconnexion ERP","Identification technicien","Identification technicien créée"].includes(x.action)).sort((a,b)=>String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
+ document.getElementById("loginHistoryRows").innerHTML=`<table><thead><tr><th>Date/heure</th><th>Utilisateur</th><th>Rôle</th><th>Événement</th><th>Appareil</th></tr></thead><tbody>${rows.length?rows.map(x=>`<tr><td>${x.createdAt?new Date(x.createdAt).toLocaleString("fr-FR"):""}</td><td><b>${esc(x.label||x.username||"")}</b></td><td>${esc(x.role||"")}</td><td>${esc(x.action||"")}</td><td>${esc(x.device||"")}</td></tr>`).join(""):'<tr><td colspan="5">Aucune connexion enregistrée.</td></tr>'}</tbody></table>`;
+}
+async function showAuditDiff(id){
+ let a=(db.auditLog||[]).find(x=>String(x.id)===String(id));if(!a&&cloudReady&&fbStore){try{const d=await fbStore.collection("auditLog").doc(String(id)).get();if(d.exists)a=d.data();}catch(e){}}
+ if(!a)return alert("Entrée d’audit introuvable.");const pretty=v=>esc(JSON.stringify(v||{},null,2));
+ $("#content").innerHTML=`<div class="panel"><h3>DÉTAIL AUDIT — ${esc(a.reference||a.id)}</h3><div class="panel-body"><button class="btn secondary" onclick="auditPage()">← Retour</button><p><b>${esc(a.user||"")}</b> — ${esc(a.action||"")} — ${a.date?new Date(a.date).toLocaleString("fr-FR"):""}</p></div>
+ <div class="grid-2"><div class="panel"><h3>AVANT</h3><pre class="audit-json">${pretty(a.before)}</pre></div><div class="panel"><h3>APRÈS</h3><pre class="audit-json">${pretty(a.after)}</pre></div></div></div>`;
 }
 function trashPage(){
  if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
@@ -799,7 +823,7 @@ async function login(u,p){
     return false;
   }
 }
-function boot(){ensureSecurityData();touchCurrentUser();if(user.role!=="ADMIN")startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");const actor=effectiveUserIdentity();$("#currentUserLabel").textContent=actor.label||user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");renderMenu();
+function boot(){ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();if(user.role!=="ADMIN")startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");const actor=effectiveUserIdentity();$("#currentUserLabel").textContent=actor.label||user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");renderMenu();
 const obsoleteManualButtons=["sendUpdatesBtn","refreshAdminBtn","publishValidationBtn","importValidationBtn","exportUsageBtn","importUsageBtn","exportDailyReportsBtn","importDailyReportsBtn","cloudMigrateBtn"];
 obsoleteManualButtons.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display="none";});
 const cloudSyncBtn=document.getElementById("cloudSyncBtn");
@@ -2163,13 +2187,49 @@ function validateClientReceipt(id,accept){
 function acceptedQuotesForProject(projectId){
  return (db.quotes||[]).filter(q=>q.status==="Accepté"&&(!projectId||String(q.project)===String(projectId)));
 }
+function invoiceLegacyAmount(r){return +(r?.trancheAmount||r?.values?.[2]||0)||0;}
+function isClearlyGhostInvoice(r){
+ if(!r||r.deleted)return false;
+ const id=String(r.id||"").toUpperCase();
+ const isGeneric=id.startsWith("GEN-");
+ const hasStructuredIdentity=!!(r.date||r.project||r.client||r.quoteId||(+r.quoteAmount||0)>0||(+r.tranchePercent||0)>0||(+r.trancheAmount||0)>0);
+ return isGeneric&&!hasStructuredIdentity;
+}
+function isStructuredInvoice(r){
+ if(!r||r.deleted)return false;
+ if(isClearlyGhostInvoice(r))return false;
+ // A real invoice (especially FAC-...) must stay visible even if an older version
+ // did not yet contain every V4.7.x structured field.
+ const id=String(r.id||"").toUpperCase();
+ if(id.startsWith("FAC-"))return true;
+ return !!(r.project||r.date||r.client||r.quoteId||(+r.quoteAmount||0)>0||(+r.tranchePercent||0)>0||(+r.trancheAmount||0)>0);
+}
+function legacyInvoiceRows(){
+ db.modules.invoices=Array.isArray(db.modules.invoices)?db.modules.invoices:[];
+ return db.modules.invoices.filter(r=>!r.deleted&&isClearlyGhostInvoice(r));
+}
 function invoiceRows(){
  db.modules.invoices=Array.isArray(db.modules.invoices)?db.modules.invoices:[];
- return db.modules.invoices.filter(r=>!r.deleted);
+ return db.modules.invoices.filter(r=>isStructuredInvoice(r));
 }
+function quarantineLegacyInvoices(){
+ db.modules.invoices=Array.isArray(db.modules.invoices)?db.modules.invoices:[];
+ let changed=false;
+ db.modules.invoices.forEach(r=>{
+  if(isClearlyGhostInvoice(r)){
+   if(!r.legacyQuarantined){r.legacyQuarantined=true;r.legacyReason="Ancienne donnée générique vide — exclue des calculs de facturation";r.legacyQuarantinedAt=new Date().toISOString();changed=true;}
+  }else if(r.legacyQuarantined){
+   // Restore a real invoice accidentally quarantined by V4.7.7.
+   delete r.legacyQuarantined;delete r.legacyReason;delete r.legacyQuarantinedAt;changed=true;
+  }
+ });
+ if(changed){saveLocalOnly();setTimeout(()=>cloudAutoSyncAll("restore-real-invoices"),1500);}
+ return legacyInvoiceRows().length;
+}
+function legacyInvoiceReviewPage(){if(user.role!=="ADMIN")return;const rows=legacyInvoiceRows();$("#content").innerHTML=`<div class="panel"><h3>ANCIENNES DONNÉES DE FACTURATION À VÉRIFIER</h3><div class="panel-body"><button class="btn secondary" onclick="invoicesPage()">← Retour Facturation</button><div class="notice">Ces données sont isolées et ne participent plus aux totaux ni au reste à facturer.</div></div><div class="table-wrap"><table><thead><tr><th>Référence</th><th>Ancien montant</th><th>Raison</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc(r.id||"")}</td><td>${money(+(r.values?.[2]||r.trancheAmount||0))}</td><td>${esc(r.legacyReason||"Donnée incomplète")}</td></tr>`).join(""):'<tr><td colspan="3">Aucune ancienne donnée isolée.</td></tr>'}</tbody></table></div></div>`;}
 function invoicePaidForProject(projectId,excludeId=""){
  return invoiceRows().filter(r=>String(r.project)===String(projectId)&&String(r.id)!==String(excludeId))
-  .reduce((n,r)=>n+(+r.trancheAmount||+(r.values?.[2]||0)||0),0);
+  .reduce((n,r)=>n+invoiceLegacyAmount(r),0);
 }
 function validatedQuoteAmount(projectId,quoteId=""){
  const q=quoteId?(db.quotes||[]).find(x=>x.id===quoteId):acceptedQuotesForProject(projectId).slice(-1)[0];
@@ -2177,16 +2237,17 @@ function validatedQuoteAmount(projectId,quoteId=""){
 }
 function invoicesPage(){
  if(user.role!=="ADMIN")return generic("invoices");
- const ctx=currentProjectContext(),rows=invoiceRows().filter(r=>!ctx||String(r.project)===String(ctx));
+ const ctx="",rows=invoiceRows();
  $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>FACTURATION PAR CHANTIER</h3>
  <div class="panel-body"><button class="btn primary" onclick="invoiceForm()">+ Nouvelle tranche / facture</button>
+ ${legacyInvoiceRows().length?`<button class="btn secondary" onclick="legacyInvoiceReviewPage()">⚠ ${legacyInvoiceRows().length} ancienne(s) donnée(s) isolée(s)</button>`:""}
  <div class="notice">Chaque facture est rattachée à un chantier. Ici, le reste signifie « reste à facturer ». Les paiements réellement reçus sont enregistrés séparément dans ENCAISSEMENTS CLIENTS.</div></div>
  <div class="table-wrap"><table><thead><tr><th>N° facture</th><th>Date</th><th>Chantier</th><th>Client</th><th>Devis validé</th><th>Montant devis</th><th>Tranche</th><th>Montant tranche</th><th>Total facturé</th><th>Reste à facturer</th><th>Actions</th></tr></thead><tbody>
  ${rows.length?rows.map(r=>{
   const qa=+r.quoteAmount||validatedQuoteAmount(r.project,r.quoteId);
-  const paid=invoiceRows().filter(x=>String(x.project)===String(r.project)).reduce((n,x)=>n+(+x.trancheAmount||+(x.values?.[2]||0)||0),0);
+  const paid=invoiceRows().filter(x=>String(x.project)===String(r.project)).reduce((n,x)=>n+invoiceLegacyAmount(x),0);
   const remain=Math.max(0,qa-paid),pr=(db.projects||[]).find(p=>String(p.id)===String(r.project));
-  return `<tr><td><b>${esc(r.id)}</b></td><td>${esc(r.date||"")}</td><td>${esc(pr?.name||r.project||"")}</td><td>${esc(r.client||"")}</td><td>${esc(r.quoteId||"")}</td><td>${money(qa)}</td><td><b>${(+r.tranchePercent||0).toFixed(2)}%</b></td><td>${money(r.trancheAmount||0)}</td><td>${money(paid)}</td><td><b>${money(remain)}</b></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="invoiceForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="deleteInvoice('${r.id}')">Supprimer</button></div></td></tr>`;
+  return `<tr><td><b>${esc(r.id)}</b></td><td>${esc(r.date||"")}</td><td>${esc(pr?.name||r.project||"")}</td><td>${esc(r.client||r.values?.[1]||"")}</td><td>${esc(r.quoteId||"")}</td><td>${money(qa||(+r.quoteAmount||0))}</td><td><b>${(+r.tranchePercent||0).toFixed(2)}%</b></td><td>${money(invoiceLegacyAmount(r))}</td><td>${money(paid)}</td><td><b>${money(remain)}</b></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="invoiceForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="deleteInvoice('${r.id}')">Supprimer</button></div></td></tr>`;
  }).join(""):`<tr><td colspan="11">Aucune facture pour ce chantier.</td></tr>`}
  </tbody></table></div></div>`;
 }
@@ -2218,9 +2279,10 @@ function invoiceForm(id=""){
   if(!client)return alert("Veuillez renseigner le client.");
   if(amount<=0)return alert("Veuillez renseigner le montant du devis validé.");
   if(already+tranche>amount+0.01)return alert("Cette tranche dépasse le reste à payer.");
-  const obj={id:f.get("id"),date:f.get("date"),project,quoteId:quoteId||"",client,quoteAmount:amount,tranchePercent:pct,trancheAmount:tranche,note:f.get("note")||"",workflow:r?.workflow||"Validé",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
+  const before=r?cloneRecord(r):null,actor=effectiveUserIdentity();
+  const obj={id:f.get("id"),date:f.get("date"),project,quoteId:quoteId||"",client,quoteAmount:amount,tranchePercent:pct,trancheAmount:tranche,note:f.get("note")||"",workflow:r?.workflow||"Validé",owner:r?.owner||actor.username||user.username,updatedBy:actor.label||actor.username||user.username,updatedAt:new Date().toISOString()};
   if(r)Object.assign(r,obj);else{obj.createdAt=new Date().toISOString();db.modules.invoices.push(obj);}
-  save();invoicesPage();
+  audit(r?"Modification facture":"Création facture","invoices",obj.id,`${client} — ${money(tranche)}`,before,cloneRecord(obj));save();invoicesPage();
  };
 }
 function invoiceProjectChanged(projectId){
@@ -2244,7 +2306,8 @@ function deleteInvoice(id){
  if(user.role!=="ADMIN")return;
  const r=(db.modules.invoices||[]).find(x=>String(x.id)===String(id));if(!r)return;
  if(!confirm("Supprimer cette facture / tranche ?"))return;
- r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=user.username;save();invoicesPage();
+ const before=cloneRecord(r),actor=effectiveUserIdentity();r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=actor.label||actor.username||user.username;r.updatedAt=r.deletedAt;
+ audit("Suppression facture","invoices",r.id,"Facture/tranche supprimée",before,cloneRecord(r));save();invoicesPage();
 }
 
 

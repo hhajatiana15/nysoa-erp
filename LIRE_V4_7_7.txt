@@ -1,0 +1,9 @@
+NYSOA ERP V4.7.7 — STABLE AUDIT & GHOST INVOICE FIX
+
+- Correction du bug userActivity V4.7.6 : historique utilisateurs Firebase rétabli.
+- Connexion/déconnexion de l’Admin, Gestionnaire et identités Technicien enregistrées avec date/heure et appareil.
+- Journal d’audit Cloud centralisé : auteur réel, rôle, module, référence, détails, avant/après.
+- Facturation : les anciennes entrées génériques/incomplètes (ex. GEN-...) sont mises en quarantaine et exclues de tous les calculs.
+- Les anciennes données ne sont pas supprimées : bouton de consultation dans Facturation.
+- Création/modification/suppression de facture désormais auditées explicitement.
+- Auto-sync, QR et multi-techniciens de V4.7.6 conservés.
