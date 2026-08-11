@@ -851,8 +851,10 @@ function switchWorkspace(workspace){
  else go("dashboard");
 }
 
+const ALL_PROJECTS_CONTEXT="__ALL__";
 function currentProjectContext(){
- return sessionStorage.getItem("nysoa_project_context")||"";
+ const v=sessionStorage.getItem("nysoa_project_context");
+ return (!v||v===ALL_PROJECTS_CONTEXT)?"":v;
 }
 function userCanAccessProject(projectId){
  if(!user||user.role!=="CONTROLE")return true;
@@ -861,29 +863,29 @@ function userCanAccessProject(projectId){
 }
 function accessibleProjects(){return (db.projects||[]).filter(p=>!p.deleted&&userCanAccessProject(p.id));}
 function projectContextOptions(selected=currentProjectContext()){
- return `<option value="">Tous les chantiers</option>`+
+ return `<option value="${ALL_PROJECTS_CONTEXT}" ${!selected?"selected":""}>Tous les chantiers</option>`+
   accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${String(selected)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("");
 }
 function renderGlobalProjectSelector(){
  const el=document.getElementById("globalProjectFilter");
  if(!el)return;
- const selected=currentProjectContext();
- el.innerHTML=projectContextOptions(selected);
+ let selected=currentProjectContext();
  if(selected && !(db.projects||[]).some(p=>String(p.id)===String(selected)&&!p.deleted)){
-  sessionStorage.removeItem("nysoa_project_context");
-  el.value="";
+  sessionStorage.setItem("nysoa_project_context",ALL_PROJECTS_CONTEXT);selected="";
  }
+ el.innerHTML=projectContextOptions(selected);
+ el.value=selected||ALL_PROJECTS_CONTEXT;
 }
 function setGlobalProjectContext(projectId){
- const value=String(projectId||"").trim();
- if(value)sessionStorage.setItem("nysoa_project_context",value);
- else sessionStorage.removeItem("nysoa_project_context");
+ const raw=String(projectId??"").trim();
+ const isAll=!raw||raw===ALL_PROJECTS_CONTEXT;
+ const value=isAll?"":raw;
+ sessionStorage.setItem("nysoa_project_context",isAll?ALL_PROJECTS_CONTEXT:value);
  const el=document.getElementById("globalProjectFilter");
- if(el)el.value=value;
- // Re-render current module immediately with the new filter.
- if((cloudCurrentPage||"")==="invoices")invoicesPage();
- else go(cloudCurrentPage||"dashboard");
- setTimeout(renderGlobalProjectSelector,0);
+ if(el)el.value=isAll?ALL_PROJECTS_CONTEXT:value;
+ // One single source of truth for every module: blank currentProjectContext() means ALL.
+ go(cloudCurrentPage||"dashboard");
+ requestAnimationFrame(renderGlobalProjectSelector);
 }
 function matchesProjectContext(record){
  const p=currentProjectContext();
@@ -2123,6 +2125,7 @@ function deletePayroll(id){
 
 // ===== ENCAISSEMENTS CLIENTS V4.6.0 =====
 function clientReceiptsPage(){
+ sessionStorage.removeItem("nysoa_receipt_form_project");
  const ctx=currentProjectContext();
  const rows=receiptRows().filter(r=>!ctx||String(r.project)===String(ctx)).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
  const received=rows.filter(r=>r.status==="Validé").reduce((n,r)=>n+(+r.amount||0),0);
@@ -2145,9 +2148,9 @@ function clientReceiptsPage(){
  </div></td></tr>`).join(""):`<tr><td colspan="9">Aucun encaissement.</td></tr>`}
  </tbody></table></div></div>`;
 }
-function clientReceiptForm(id=""){
+function clientReceiptForm(id="",projectOverride=""){
  const r=id?receiptRows().find(x=>String(x.id)===String(id)):null;
- const project=r?.project||currentProjectContext()||"";
+ const project=r?.project||projectOverride||sessionStorage.getItem("nysoa_receipt_form_project")||currentProjectContext()||"";
  const inv=invoiceRows().filter(x=>!project||String(x.project)===String(project));
  $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEL"} ENCAISSEMENT CLIENT</h3><form id="fReceipt" class="form-grid">
  <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
@@ -2158,7 +2161,7 @@ function clientReceiptForm(id=""){
  <label>Mode<select name="paymentMode">${["Espèces","Virement","Mobile Money","Chèque","Autre"].map(x=>`<option ${r?.paymentMode===x?"selected":""}>${x}</option>`).join("")}</select></label>
  <label>Référence / reçu<input name="reference" value="${esc(r?.reference||"")}" required></label>
  <label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label>
- <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="clientReceiptsPage()">Annuler</button></div></form></div>`;
+ <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="sessionStorage.removeItem('nysoa_receipt_form_project');clientReceiptsPage()">Annuler</button></div></form></div>`;
  $("#fReceipt").onsubmit=e=>{
   e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString();
   const project=f.get("project"),amount=+f.get("amount")||0;
@@ -2171,8 +2174,8 @@ function clientReceiptForm(id=""){
  };
 }
 function receiptProjectChanged(projectId){
- if(projectId)sessionStorage.setItem("nysoa_project_context",projectId);else sessionStorage.removeItem("nysoa_project_context");
- clientReceiptForm();
+ sessionStorage.setItem("nysoa_receipt_form_project",String(projectId||""));
+ clientReceiptForm("",String(projectId||""));
 }
 function receiptInvoiceChanged(id){
  const inv=invoiceRows().find(x=>String(x.id)===String(id));
@@ -2245,6 +2248,7 @@ function validatedQuoteAmount(projectId,quoteId=""){
  return q?quoteFinancials(q).ttc:0;
 }
 function invoicesPage(){
+ sessionStorage.removeItem("nysoa_invoice_form_project");
  if(user.role!=="ADMIN")return generic("invoices");
  const ctx=currentProjectContext();
  const rows=invoiceRows().filter(r=>!ctx||String(r.project||"")===String(ctx));
