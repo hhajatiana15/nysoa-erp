@@ -1,0 +1,24 @@
+NYSOA ERP V4.8.2 — DATA INTEGRITY STABLE
+
+CORRECTION DE FOND
+- cloudSyncedAt n'est plus utilisé pour décider quelle donnée métier est la plus récente.
+- Un cache local ancien ne peut plus écraser une donnée Cloud plus récente.
+- Un ancien cache ne recrée plus automatiquement un document absent du Cloud au démarrage.
+- En cas de version ambiguë, aucun écrasement silencieux : conflit signalé.
+- Avant qu'une version Cloud remplace une version locale différente, une copie est conservée dans syncRecovery.
+
+FACTURATION
+- ID interne unique (INV-UUID / INV-timestamp) séparé du N° facture visible.
+- Évite les collisions de documents entre appareils.
+- Création/modification de facture envoyée explicitement au Cloud.
+- Le changement de chantier dans le formulaire ne recharge plus le formulaire et ne perd plus les champs saisis.
+- Centre « Historique / récupération » : local, Cloud, audit et backups de conflit.
+- Une restauration crée une copie sûre et n'écrase jamais la version existante.
+
+FILTRE
+- Tous les chantiers __ALL__ conservé.
+
+TESTS
+- JavaScript node --check : OK.
+- Régression sync : stale local / newer cloud / égalité / cache ancien absent Cloud : OK.
+- ZIP integrity : vérifiée.

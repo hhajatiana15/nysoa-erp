@@ -124,17 +124,8 @@ let presenceTimer=null;
 let adminNotifUnsub=null;
 let cloudAutoSyncTimer=null;
 
-const CLOUD_MODULE_COLLECTIONS=new Set([
- "attendanceWeekly","attendanceQR","employees","payroll","purchases","stock","stockMovements","invoices",
- "clients","suppliers","bank","accounting","treasury","planning","situations","technicalFollowup","quality",
- "nonConformities","equipment","vehicles","fuel"
-]);
-const CLOUD_BUSINESS_COLLECTIONS=[
- "projects","quotes","invoices","clientReceipts","requests","appro","expenses","purchases","stock","stockMovements",
- "employees","payroll","siteControls","reports","dailyReports","attendanceWeekly","attendanceQR","usageSessions",
- "clients","suppliers","bank","accounting","treasury","planning","situations","technicalFollowup","quality",
- "nonConformities","equipment","vehicles","fuel"
-];
+const CLOUD_MODULE_COLLECTIONS=new Set(["attendanceWeekly","attendanceQR","employees","payroll","purchases","stock","stockMovements","invoices","clients","suppliers","bank","accounting","treasury","planning","situations","technicalFollowup","quality","nonConformities","equipment","vehicles","fuel","cashEntries","employeeAdvances"]);
+const CLOUD_BUSINESS_COLLECTIONS=["projects","quotes","invoices","clientReceipts","requests","appro","expenses","purchases","stock","stockMovements","employees","payroll","siteControls","reports","dailyReports","attendanceWeekly","attendanceQR","usageSessions","clients","suppliers","bank","accounting","treasury","planning","situations","technicalFollowup","quality","nonConformities","equipment","vehicles","fuel","cashEntries","employeeAdvances"];
 function cloudCollectionLocalRows(collection){
  if(CLOUD_MODULE_COLLECTIONS.has(collection))return db.modules?.[collection]||[];
  return Array.isArray(db[collection])?db[collection]:[];
@@ -214,15 +205,60 @@ async function cloudWriteGeneric(collection,record,notifyTitle=""){
  if(!user||!record?.id)return;
  logUserActivity(notifyTitle||"Enregistrement / modification",collection,record.id,record.project||record.employeeName||"");
  if(!cloudReady)return;
- try{const payload=cloudSanitize({...record,cloudSyncedAt:new Date().toISOString()});await fbStore.collection(collection).doc(String(record.id)).set(payload,{merge:true});record.cloudSyncedAt=payload.cloudSyncedAt;if(notifyTitle&&!record.cloudNotifiedAt&&user.role!=="ADMIN"){await createAdminNotification(collection,notifyTitle,`${user.label||user.username} — ${record.project||record.id}`,record.id);record.cloudNotifiedAt=new Date().toISOString();}save();cloudMarkSynced();}catch(e){console.warn("cloud generic",collection,e);}
+ try{
+ const payload=cloudSanitize({...record,cloudSyncedAt:new Date().toISOString()});delete payload.__syncConflict;
+ await fbStore.collection(collection).doc(String(record.id)).set(payload,{merge:true});
+ record.cloudSyncedAt=payload.cloudSyncedAt;
+ const key=collection+"::"+String(record.id);
+ cloudFingerprints.set(key,recordFingerprint(record));cloudRemoteVersions.set(key,businessTimestamp(record));
+ if(notifyTitle&&!record.cloudNotifiedAt&&user.role!=="ADMIN"){
+  await createAdminNotification(collection,notifyTitle,`${user.label||user.username} — ${record.project||record.id}`,record.id);
+  record.cloudNotifiedAt=new Date().toISOString();
+ }
+ saveLocalOnly();cloudMarkSynced();
+}catch(e){console.warn("cloud generic",collection,e);}
 }
 let cloudRealtimeRenderTimer=null;
 const cloudFingerprints=new Map();
+const cloudRemoteVersions=new Map();
+const cloudSessionStartedAt=Date.now();
+
 function recordFingerprint(r){
- try{const x={...(r||{})};delete x.cloudSyncedAt;delete x.cloudNotifiedAt;return JSON.stringify(x);}catch(e){return String(r?.id||"");}
+ try{
+  const x={...(r||{})};
+  delete x.cloudSyncedAt;delete x.cloudNotifiedAt;delete x.__syncConflict;
+  return JSON.stringify(x);
+ }catch(e){return String(r?.id||"");}
+}
+function businessTimestamp(r){
+ // CRITICAL: cloudSyncedAt is transport metadata, never a business version.
+ // Only real create/update times are allowed to decide which data is newer.
+ return Date.parse(r?.updatedAt||r?.createdAt||0)||0;
 }
 function rememberCollectionFingerprints(collection,rows){
- (rows||[]).forEach(r=>{if(r?.id)cloudFingerprints.set(collection+"::"+String(r.id),recordFingerprint(r));});
+ (rows||[]).forEach(r=>{
+  if(!r?.id)return;
+  const key=collection+"::"+String(r.id);
+  cloudFingerprints.set(key,recordFingerprint(r));
+  cloudRemoteVersions.set(key,businessTimestamp(r));
+ });
+}
+function ensureSyncBackupData(){
+ db.syncRecovery=Array.isArray(db.syncRecovery)?db.syncRecovery:[];
+}
+function backupBeforeRemoteOverwrite(collection,localRecord,remoteRecord,reason="remote_newer"){
+ ensureSyncBackupData();
+ const fpLocal=recordFingerprint(localRecord),fpRemote=recordFingerprint(remoteRecord);
+ if(fpLocal===fpRemote)return;
+ db.syncRecovery.unshift({
+  id:"REC-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),
+  collection,recordId:String(localRecord?.id||remoteRecord?.id||""),
+  reason,createdAt:new Date().toISOString(),
+  localSnapshot:JSON.parse(JSON.stringify(localRecord||{})),
+  remoteSnapshot:JSON.parse(JSON.stringify(remoteRecord||{}))
+ });
+ if(db.syncRecovery.length>1500)db.syncRecovery.length=1500;
+ saveLocalOnly();
 }
 function pageUsesCollection(page,collection){
  const map={
@@ -233,7 +269,9 @@ function pageUsesCollection(page,collection){
   requests:["appro","dashboard"],
   appro:["appro","cash","dashboard","dashboardFinance"],
   expenses:["expenses","cash","dashboard","dashboardFinance"],
-  purchases:["purchases","dashboard","dashboardFinance"],
+  cashEntries:["cash","dashboard","dashboardFinance"],
+  employeeAdvances:["payroll","cash","dashboard","dashboardFinance"],
+  purchases:["purchases","stock","expenses","cash","dashboard","dashboardFinance"],
   stock:["stock","dashboard"],
   stockMovements:["stock","dashboard"],
   employees:["employees","attendance","qrAttendance","payroll","dashboard"],
@@ -266,13 +304,47 @@ function startExtendedRealtimeListeners(){
   try{
    cloudListeners.push(fbStore.collection(collection).onSnapshot(s=>{
     let local=cloudCollectionLocalRows(collection);
-    const removed=new Set(s.docChanges().filter(c=>c.type==="removed").map(c=>String(c.doc.id)));
-    if(removed.size){local=local.filter(r=>!removed.has(String(r.id)));replaceCloudCollectionLocalRows(collection,local);}
     const remote=s.docs.map(d=>({id:d.id,...d.data()}));
-    const map=new Map(local.map(r=>[String(r.id),r]));let changed=removed.size>0;
-    remote.forEach(r=>{const l=map.get(String(r.id));if(!l){local.push(r);changed=true;return;}const rt=Date.parse(r.updatedAt||r.cloudSyncedAt||r.createdAt||0)||0,lt=Date.parse(l.updatedAt||l.cloudSyncedAt||l.createdAt||0)||0;if(rt>=lt&&recordFingerprint(l)!==recordFingerprint(r)){Object.assign(l,r);changed=true;}});
+    const map=new Map(local.map(r=>[String(r.id),r]));
+    let changed=false;
+
+    // Explicit Firestore deletion is authoritative.
+    const removed=new Set(s.docChanges().filter(c=>c.type==="removed").map(c=>String(c.doc.id)));
+    if(removed.size){
+     removed.forEach(id=>{
+      const existing=map.get(id);
+      if(existing)backupBeforeRemoteOverwrite(collection,existing,{id,deleted:true},"remote_delete");
+     });
+     local=local.filter(r=>!removed.has(String(r.id)));
+     changed=true;
+    }
+
+    remote.forEach(r=>{
+     const key=collection+"::"+String(r.id);
+     const l=local.find(x=>String(x.id)===String(r.id));
+     const rt=businessTimestamp(r),lt=businessTimestamp(l);
+     cloudRemoteVersions.set(key,rt);
+
+     if(!l){
+      local.push(r);changed=true;return;
+     }
+     if(recordFingerprint(l)===recordFingerprint(r))return;
+
+     // Remote wins only when its BUSINESS update time is truly newer.
+     // Equal/ambiguous versions never overwrite silently.
+     if(rt>lt || (rt===0 && lt===0)){
+      backupBeforeRemoteOverwrite(collection,l,r,rt>lt?"remote_newer":"ambiguous_remote_preferred");
+      Object.keys(l).forEach(k=>delete l[k]);Object.assign(l,r);changed=true;
+     }else if(rt===lt){
+      l.__syncConflict=true;
+      console.warn("NYSOA sync conflict (same timestamp)",collection,r.id);
+     }
+     // If local is newer, keep it. Safe auto-sync will push it later.
+    });
+
     rememberCollectionFingerprints(collection,remote);
-    if(changed){replaceCloudCollectionLocalRows(collection,local);scheduleRealtimeRender(collection);}
+    if(changed)replaceCloudCollectionLocalRows(collection,local);
+    if(changed)scheduleRealtimeRender(collection);
     cloudMarkSynced();
    },e=>console.warn("listener",collection,e)));
   }catch(e){console.warn("listener setup",collection,e);}
@@ -283,25 +355,38 @@ async function cloudAutoSyncAll(reason="auto"){
  for(const collection of CLOUD_BUSINESS_COLLECTIONS){
   const rows=cloudCollectionLocalRows(collection);
   for(const r of rows){
-   if(!r?.id)continue;
-   const key=collection+"::"+String(r.id),fp=recordFingerprint(r);
-   if(cloudFingerprints.get(key)===fp)continue;
+   if(!r?.id||r.__syncConflict)continue;
+   const key=collection+"::"+String(r.id);
+   const fp=recordFingerprint(r),remoteFp=cloudFingerprints.get(key);
+   if(remoteFp===fp)continue;
+
+   const localTs=businessTimestamp(r);
+   const remoteTs=cloudRemoteVersions.get(key);
+
+   // Existing cloud record: local may push ONLY if its real updatedAt is newer.
+   if(remoteTs!==undefined && localTs<=remoteTs)continue;
+
+   // Record absent from cloud: auto-create only if created/modified during this session.
+   // This prevents an old browser cache from resurrecting deleted/stale records.
+   if(remoteTs===undefined && (!localTs || localTs < cloudSessionStartedAt-30000))continue;
+
    try{
     const payload=cloudSanitize({...r,cloudSyncedAt:new Date().toISOString()});
+    delete payload.__syncConflict;
     await fbStore.collection(collection).doc(String(r.id)).set(payload,{merge:true});
     r.cloudSyncedAt=payload.cloudSyncedAt;
     cloudFingerprints.set(key,recordFingerprint(r));
-   }catch(e){console.warn("auto sync",collection,r.id,e);}
+    cloudRemoteVersions.set(key,localTs);
+   }catch(e){console.warn("safe auto sync",collection,r.id,e);}
   }
  }
  saveLocalOnly();cloudMarkSynced();
 }
 function startCloudAutoSync(){
  clearInterval(cloudAutoSyncTimer);
- // Laisser d’abord les listeners Firebase charger/fusionner l’état Cloud,
- // puis pousser uniquement les vraies modifications locales.
- setTimeout(()=>cloudAutoSyncAll("startup"),2500);
- cloudAutoSyncTimer=setInterval(()=>cloudAutoSyncAll("timer"),5000);
+ // Listeners establish the cloud baseline first. No blind startup push.
+ setTimeout(()=>cloudAutoSyncAll("startup-safe"),3500);
+ cloudAutoSyncTimer=setInterval(()=>cloudAutoSyncAll("timer-safe"),7000);
 }
 
 function cashTable(){
@@ -605,6 +690,8 @@ const save=()=>{saveLocalOnly();if(cloudReady&&user){clearTimeout(cloudAutoSaveD
 if(!db.modules) db.modules={};
 if(!Array.isArray(db.clientReceipts)) db.clientReceipts=[];
 if(!Array.isArray(db.modules.stockMovements)) db.modules.stockMovements=[];
+if(!Array.isArray(db.modules.cashEntries)) db.modules.cashEntries=[];
+if(!Array.isArray(db.modules.employeeAdvances)) db.modules.employeeAdvances=[];
 const canEditRecord=(r)=>user.role==="ADMIN" || ((user.role==="GESTIONNAIRE"||user.role==="CONTROLE") && r.owner===user.username && (r.workflow||"Brouillon")!=="Validé");
 const workflowBadge=(w)=>`<span class="badge ${w==="Validé"?"b-green":w==="À corriger"?"b-orange":"b-blue"}">${w||"Brouillon"}</span>`;
 
@@ -899,7 +986,7 @@ function projectContextNotice(){
  return `<div class="project-context-note">🏗 Chantier sélectionné : <b>${esc(pr?.name||p)}</b> <button class="btn-xs" onclick="setGlobalProjectContext('')">Afficher tout</button></div>`;
 }
 
-function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,invoices:invoicesPage,clientReceipts:clientReceiptsPage,employees:employeesPage,qrAttendance:qrAttendancePage,technicianMyIdentity:technicianMyIdentity,technicians:techniciansPage,payroll:payrollPage,expenses:expensesPage,appro:approPage,cash:cashPage,projects:projects,siteControls:siteControlsPage,reports:reports,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage,logicAudit:logicAuditPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
+function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,invoices:invoicesPage,clientReceipts:clientReceiptsPage,employees:employeesPage,qrAttendance:qrAttendancePage,technicianMyIdentity:technicianMyIdentity,technicians:techniciansPage,payroll:payrollPage,expenses:expensesPage,appro:approPage,cash:cashPage,projects:projects,siteControls:siteControlsPage,reports:reports,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,stock:stockPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage,logicAudit:logicAuditPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
 function kpi(icon,color,title,value,note="",page=""){
  const routes={
   "CHANTIERS EN COURS":"projects","NOMBRE DE CHANTIERS":"projects",
@@ -942,37 +1029,10 @@ function moduleExpenseAmount(r){
  return 0;
 }
 function totalOperatingExpenses(projectId=""){
- const direct=(db.expenses||[]).filter(x=>!x.deleted&&(!projectId||String(x.project)===String(projectId))).reduce((n,x)=>n+(+x.amount||0),0);
+ const manual=manualExpenseRows().filter(x=>x.status!=="En attente"&&(!projectId||String(x.project)===String(projectId))).reduce((n,x)=>n+(+x.amount||0),0);
+ const purchases=(db.modules?.purchases||[]).filter(x=>!x.deleted&&x.paymentStatus==="Payé"&&(!projectId||String(x.project)===String(projectId))).reduce((n,x)=>n+(+x.amount||0),0);
  const generic=(db.modules?.expenses||[]).filter(x=>!x.deleted&&(!projectId||String(x.project)===String(projectId))).reduce((n,x)=>n+moduleExpenseAmount(x),0);
- return direct+generic+payrollExpenseTotal(projectId);
-}
-
-
-// ===== V4.6.0 — LOGIQUE FINANCIÈRE STANDARDISÉE =====
-function acceptedQuoteRows(projectId=""){
- return (db.quotes||[]).filter(q=>!q.deleted&&q.status==="Accepté"&&(!projectId||String(q.project)===String(projectId)));
-}
-function totalValidatedQuotes(projectId=""){
- return acceptedQuoteRows(projectId).reduce((n,q)=>n+quoteFinancials(q).ttc,0);
-}
-function totalInvoiced(projectId=""){
- return invoiceRows().filter(x=>!projectId||String(x.project)===String(projectId))
-  .reduce((n,x)=>n+(+x.trancheAmount||+(x.values?.[2]||0)||0),0);
-}
-function receiptRows(){
- db.clientReceipts=Array.isArray(db.clientReceipts)?db.clientReceipts:[];
- return db.clientReceipts.filter(r=>!r.deleted);
-}
-function totalClientReceipts(projectId="",onlyValidated=true){
- return receiptRows()
-  .filter(r=>(!projectId||String(r.project)===String(projectId))&&(!onlyValidated||r.status==="Validé"))
-  .reduce((n,r)=>n+(+r.amount||0),0);
-}
-function outstandingReceivables(projectId=""){
- return Math.max(0,totalInvoiced(projectId)-totalClientReceipts(projectId,true));
-}
-function remainingToInvoice(projectId=""){
- return Math.max(0,totalValidatedQuotes(projectId)-totalInvoiced(projectId));
+ return manual+purchases+generic+payrollExpenseTotal(projectId);
 }
 function committedPurchases(projectId=""){
  const rows=(db.modules?.purchases||[]).filter(r=>!r.deleted&&(!projectId||String(r.project)===String(projectId)));
@@ -1077,6 +1137,8 @@ function dashboardTechnique(){
  </div>`;
 }
 
+function dashboardAutoCharts(){const projects=(db.projects||[]).filter(p=>!p.deleted),data=projects.map(p=>({label:p.name||p.id,rev:totalInvoiced(p.id),dep:totalOperatingExpenses(p.id)})),mx=Math.max(1,...data.flatMap(x=>[x.rev,x.dep]));const bars=data.length?data.map(x=>`<div class="auto-chart-row"><b>${esc(x.label)}</b><div><div class="auto-chart-track"><div class="auto-chart-bar revenue" style="width:${Math.min(100,x.rev/mx*100)}%"></div></div><small>CA ${money(x.rev)}</small><div class="auto-chart-track"><div class="auto-chart-bar expense" style="width:${Math.min(100,x.dep/mx*100)}%"></div></div><small>Dép. ${money(x.dep)}</small></div></div>`).join(""):'<div class="empty-state">Aucune donnée.</div>';const cats={};unifiedExpenseJournalRows().forEach(r=>{const k=r.category||r.source||"Autre";cats[k]=(cats[k]||0)+(+r.amount||0)});const cm=Math.max(1,...Object.values(cats)),cb=Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="auto-chart-row"><b>${esc(k)}</b><div><div class="auto-chart-track"><div class="auto-chart-bar expense" style="width:${Math.min(100,v/cm*100)}%"></div></div><small>${money(v)}</small></div></div>`).join("")||'<div class="empty-state">Aucune dépense.</div>';return`<div class="grid-2 auto-dashboard-charts"><div class="panel"><h3>📊 CA / DÉPENSES PAR CHANTIER</h3><div class="panel-body">${bars}</div></div><div class="panel"><h3>📉 DÉPENSES PAR CATÉGORIE</h3><div class="panel-body">${cb}</div></div></div>`;}
+
 function dashboard(){
  let totalBudget=sum(db.projects.map(x=>x.budget));
  let totalApp=sum(db.appro.filter(x=>x.status==="Validée").map(x=>x.amount));
@@ -1118,7 +1180,7 @@ function dashboard(){
   <div class="notice">
  Les données enregistrées apparaissent immédiatement. Le montant « Approvisionnements saisis » comprend les approvisionnements validés et les demandes envoyées. Le solde caisse compte uniquement les entrées réellement validées.
  </div>
-  ${cashTable()}`;return;
+  ${cashTable()}${dashboardAutoCharts()}`;return;
  }
  if(user.role==="CONTROLE"){
   $("#content").innerHTML=`<div class="kpis">
@@ -1524,34 +1586,12 @@ function mondayOf(dateStr){
 function addDays(dateStr,n){const d=new Date(dateStr+"T12:00:00");d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);}
 function employeeStatusLabel(e){return (e.workflow==="Inactif"||e.active===false)?"Passif":"Actif";}
 function attendance(){
- ensureSecurityData();
- const employees=(db.modules.employees||[]).filter(r=>!r.deleted);
- const today=new Date().toISOString().slice(0,10),selectedDate=sessionStorage.getItem("nysoa_attendance_date")||today;
- const weekStart=mondayOf(selectedDate),project=sessionStorage.getItem("nysoa_attendance_project")||"";
- const days=["L","M","M","J","V","S","D"].map((label,i)=>({label,date:addDays(weekStart,i)}));
- let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);const entries=record?.entries||[];const keyOf=(r,i)=>r.id||r.values?.[0]||`EMP-${i+1}`;
- $("#content").innerHTML=`<div class="panel"><h3>POINTAGE DU PERSONNEL — LISTE COMPLÈTE</h3><div class="panel-body"><div class="form-grid"><label>Semaine contenant le<input id="attendanceDate" type="date" value="${selectedDate}"></label><label>Filtre chantier<select id="attendanceProject"><option value="">Tous les employés</option>${accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label><div class="form-actions full"><button class="btn primary" onclick="saveAttendance()">Enregistrer le pointage</button><button class="btn secondary" onclick="go('qrAttendance')">📷 Scanner les badges QR</button></div></div><div class="attendance-note">Tous les employés sont visibles, Actifs ou Passifs. Sans scan ou saisie manuelle, le jour est considéré <b>Absent</b>. Un scan QR met automatiquement le salarié <b>Présent</b>. Vous pouvez corriger manuellement.</div></div><div class="table-wrap"><table class="attendance-table weekly-attendance"><thead><tr><th>Matricule</th><th>Nom</th><th>Fonction</th><th>État employé</th><th>Affectation</th>${days.map(d=>`<th class="center">${d.label}<small>${d.date.slice(8,10)}</small></th>`).join("")}<th>Total P</th><th>Mode aujourd’hui</th></tr></thead><tbody>${employees.length?employees.map((r,i)=>{const key=keyOf(r,i),entry=entries.find(e=>e.employeeKey===key)||{},states=entry.states||{},assigned=employeeProject(r),show=!project||String(assigned||"")===String(project);if(!show)return "";const total=days.reduce((n,d)=>n+((states[d.date]||"A")==="P"?1:0),0);const qrToday=qrAttendanceRows().find(q=>q.employeeId===key&&q.date===selectedDate&&q.direction==="Entrée");return `<tr data-employee="${esc(key)}"><td>${esc(employeeMatricule(r)||r.id||r.values?.[0]||"")}</td><td><b>${esc(employeeName(r))}</b></td><td>${esc(employeeRole(r))}</td><td>${employeeStatusLabel(r)==="Actif"?'<span class="qr-in">Actif</span>':'<span class="qr-out">Passif</span>'}</td><td>${esc(projectLabel(assigned)||"Non affecté")}</td>${days.map(d=>{const state=states[d.date]||"A";return `<td class="center"><label class="attendance-check"><input type="checkbox" class="att-present" data-key="${esc(key)}" data-date="${d.date}" ${state==="P"?"checked":""} onchange="setAttendanceCheck('${esc(key)}','${d.date}','P',this.checked)"> P</label><label class="attendance-check"><input type="checkbox" class="att-absent" data-key="${esc(key)}" data-date="${d.date}" ${state!=="P"?"checked":""} onchange="setAttendanceCheck('${esc(key)}','${d.date}','A',this.checked)"> A</label></td>`}).join("")}<td class="num attendance-total" data-key="${esc(key)}"><b>${total}</b></td><td>${qrToday?'<span class="qr-in">QR</span>':'<span>Manuel / défaut</span>'}</td></tr>`;}).join(""):'<tr><td colspan="14">Aucun employé enregistré.</td></tr>'}</tbody></table></div><div class="panel-body"><b>Semaine : ${weekStart} au ${addDays(weekStart,6)}</b> — ${employees.length} employé(s) enregistré(s)</div></div>`;
- $("#attendanceDate").onchange=e=>{sessionStorage.setItem("nysoa_attendance_date",e.target.value);attendance();};$("#attendanceProject").onchange=e=>{sessionStorage.setItem("nysoa_attendance_project",e.target.value);attendance();};
+ ensureSecurityData();const employees=(db.modules.employees||[]).filter(r=>!r.deleted);const today=new Date().toISOString().slice(0,10),selectedDate=sessionStorage.getItem("nysoa_attendance_date")||today,weekStart=mondayOf(selectedDate),project=sessionStorage.getItem("nysoa_attendance_project")||"";const days=["L","M","M","J","V","S","D"].map((label,i)=>({label,date:addDays(weekStart,i)}));let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);const entries=record?.entries||[],keyOf=(r,i)=>r.id||r.values?.[0]||`EMP-${i+1}`,projects=accessibleProjects();
+ $("#content").innerHTML=`<div class="panel"><h3>POINTAGE — AFFECTATION PAR JOUR</h3><div class="panel-body"><div class="form-grid"><label>Semaine contenant le<input id="attendanceDate" type="date" value="${selectedDate}"></label><label>Filtre chantier<select id="attendanceProject"><option value="">Tous les employés</option>${projects.map(p=>`<option value="${esc(p.id)}" ${project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label><div class="form-actions full"><button class="btn primary" onclick="saveAttendance()">Enregistrer</button><button class="btn secondary" onclick="go('qrAttendance')">📷 Scanner QR</button></div></div><div class="attendance-note">Par jour : <b>Absent</b>, <b>½ journée</b> ou <b>Présent</b>. L’affectation peut changer chaque jour et peut être choisie ou saisie manuellement.</div></div><datalist id="attendanceChantiers">${projects.map(p=>`<option value="${esc(p.id)}">${esc(p.name||"")}</option><option value="${esc(p.name||"")}"></option>`).join("")}</datalist><div class="table-wrap"><table class="attendance-table weekly-attendance"><thead><tr><th>Matricule</th><th>Nom</th><th>Fonction</th><th>État</th>${days.map(d=>`<th class="center">${d.label}<small>${d.date.slice(8,10)}</small><br><small>Présence / Affectation</small></th>`).join("")}<th>Total jours</th></tr></thead><tbody>${employees.length?employees.map((e,i)=>{const key=keyOf(e,i),entry=entries.find(x=>x.employeeKey===key)||{},states=entry.states||{},assign=entry.assignments||{},def=employeeProject(e)||"",show=!project||Object.values(assign).includes(project)||String(def)===String(project);if(!show)return"";const total=days.reduce((n,d)=>n+(states[d.date]==="P"?1:states[d.date]==="H"?0.5:0),0);return`<tr><td>${esc(employeeMatricule(e)||e.id||"")}</td><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeRole(e))}</td><td>${employeeStatusLabel(e)==="Actif"?'<span class="qr-in">Actif</span>':'<span class="qr-out">Passif</span>'}</td>${days.map(d=>{const st=states[d.date]||"A",af=assign[d.date]??def;return`<td class="center"><select class="att-state" data-key="${esc(key)}" data-date="${d.date}" onchange="refreshAttendanceRow('${esc(key)}')"><option value="A" ${st==="A"?"selected":""}>Absent</option><option value="H" ${st==="H"?"selected":""}>½ journée</option><option value="P" ${st==="P"?"selected":""}>Présent</option></select><input class="att-assignment" data-key="${esc(key)}" data-date="${d.date}" list="attendanceChantiers" value="${esc(af||"")}" placeholder="Chantier / lieu"></td>`}).join("")}<td class="attendance-total" data-key="${esc(key)}"><b>${total.toFixed(1)}</b></td></tr>`}).join(""):'<tr><td colspan="12">Aucun employé.</td></tr>'}</tbody></table></div></div>`;$("#attendanceDate").onchange=e=>{sessionStorage.setItem("nysoa_attendance_date",e.target.value);attendance()};$("#attendanceProject").onchange=e=>{sessionStorage.setItem("nysoa_attendance_project",e.target.value);attendance()};
 }
-function setAttendanceCheck(key,date,state,checked){
- const p=document.querySelector(`.att-present[data-key="${CSS.escape(key)}"][data-date="${date}"]`),a=document.querySelector(`.att-absent[data-key="${CSS.escape(key)}"][data-date="${date}"]`);
- if(state==="P"){if(checked){if(a)a.checked=false;}else if(a)a.checked=true;}else{if(checked){if(p)p.checked=false;}else if(p)p.checked=true;}refreshAttendanceRow(key);
-}
-function refreshAttendanceRow(key){const states=[...document.querySelectorAll(`.att-present[data-key="${CSS.escape(key)}"]`)];const total=states.filter(x=>x.checked).length;const t=document.querySelector(`.attendance-total[data-key="${CSS.escape(key)}"]`);if(t)t.innerHTML=`<b>${total}</b>`;}
-function saveAttendance(){
- const selectedDate=$("#attendanceDate")?.value,project=$("#attendanceProject")?.value||"";if(!selectedDate)return alert("Choisissez une date.");
- const weekStart=mondayOf(selectedDate),employees=(db.modules.employees||[]).filter(r=>!r.deleted);let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);
- if(!record){record={id:"ATTW-"+Date.now(),weekStart,project,entries:[],owner:user.username,updatedAt:new Date().toISOString(),updatedBy:user.username};db.modules.attendanceWeekly.push(record);}record.entries=record.entries||[];
- employees.forEach((e,i)=>{const key=e.id||e.values?.[0]||`EMP-${i+1}`;if(project&&String(employeeProject(e)||"")!==String(project))return;let entry=record.entries.find(x=>x.employeeKey===key);if(!entry){entry={employeeKey:key,states:{},paid:false,paidAt:""};record.entries.push(entry);}entry.states=entry.states||{};document.querySelectorAll(`.att-present[data-key="${CSS.escape(key)}"]`).forEach(el=>{entry.states[el.dataset.date]=el.checked?"P":"A";});});
- record.updatedAt=new Date().toISOString();record.updatedBy=user.username;save();logUserActivity("Pointage manuel enregistré","pointage",record.id,project?projectLabel(project):"Tous les employés");cloudWriteGeneric("attendanceWeekly",record,"Pointage du personnel");alert("Pointage enregistré. Les salariés non présents restent Absent.");attendance();
-}
-function clearAttendanceEmployee(key){
- document.querySelectorAll(`.attendance-state[data-key="${CSS.escape(key)}"]`).forEach(x=>x.value="");
- const paid=document.querySelector(`.attendance-paid[data-key="${CSS.escape(key)}"]`);if(paid)paid.checked=false;
- refreshAttendanceRow(key);
-}
-
-
+function refreshAttendanceRow(key){const ss=[...document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`)];const total=ss.reduce((n,s)=>n+(s.value==="P"?1:s.value==="H"?0.5:0),0),t=document.querySelector(`.attendance-total[data-key="${CSS.escape(key)}"]`);if(t)t.innerHTML=`<b>${total.toFixed(1)}</b>`;}
+function saveAttendance(){const selectedDate=$("#attendanceDate")?.value,project=$("#attendanceProject")?.value||"";if(!selectedDate)return alert("Choisissez une date.");const weekStart=mondayOf(selectedDate),employees=(db.modules.employees||[]).filter(r=>!r.deleted);let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);if(!record){record={id:"ATTW-"+Date.now()+"-"+Math.random().toString(36).slice(2,5),weekStart,project,entries:[],owner:user.username,createdAt:new Date().toISOString()};db.modules.attendanceWeekly.push(record)}record.entries=record.entries||[];employees.forEach((e,i)=>{const key=e.id||e.values?.[0]||`EMP-${i+1}`;let en=record.entries.find(x=>x.employeeKey===key);if(!en){en={employeeKey:key,states:{},assignments:{}};record.entries.push(en)}en.states=en.states||{};en.assignments=en.assignments||{};document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`).forEach(x=>en.states[x.dataset.date]=x.value||"A");document.querySelectorAll(`.att-assignment[data-key="${CSS.escape(key)}"]`).forEach(x=>en.assignments[x.dataset.date]=String(x.value||"").trim())});record.updatedAt=new Date().toISOString();record.updatedBy=user.username;saveLocalOnly();cloudWriteGeneric("attendanceWeekly",record,"Pointage");logUserActivity("Pointage enregistré","pointage",record.id,"Affectations journalières");attendance();}
+function clearAttendanceEmployee(key){document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`).forEach(x=>x.value="A");document.querySelectorAll(`.att-assignment[data-key="${CSS.escape(key)}"]`).forEach(x=>x.value="");refreshAttendanceRow(key);}
 // ===== V4.7 — PRÉSENCE QR & MULTI-TECHNICIENS =====
 let activeQrScanner=null;
 function employeeQrCode(e){return `NYSOA-EMP|${e.id}|${e.qrToken||""}`;}
@@ -1561,14 +1601,14 @@ function ensureEmployeeQrToken(e){
 }
 function employeeBadge(id){
  const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return alert("Employé introuvable.");
- ensureEmployeeQrToken(e);const project=projectLabel(employeeProject(e))||"Multi-chantiers / Non affecté";
+ ensureEmployeeQrToken(e);const project="";
  const photo=e.photoData||"";
  $("#content").innerHTML=`<div class="panel badge-screen"><h3 class="no-print">BADGE PROFESSIONNEL — EMPLOYÉ</h3>
  <div class="badge-qr-wrap"><div class="employee-badge employee-badge-v472" id="employeeBadgePrint">
    <div class="badge-top"><img src="assets/logo_nysoa_construct.png" class="badge-logo" alt="NYSOA"><div><div class="badge-brand">ENTREPRISE NYSOA CONSTRUCT</div><div class="badge-subtitle">CARTE PROFESSIONNELLE</div></div></div>
    <div class="badge-main">
      <div class="badge-photo">${photo?`<img src="${photo}" alt="Photo ${esc(employeeName(e))}">`:`<div class="badge-photo-empty"><span>PHOTO</span></div>`}</div>
-     <div class="badge-info"><h2>${esc(employeeName(e))}</h2><div class="badge-job">${esc(employeeRole(e))}</div><p><b>Matricule :</b> ${esc(employeeMatricule(e)||e.id)}</p><p><b>Chantier :</b> ${esc(project)}</p><p><b>Statut :</b> ${esc(e.workflow||"Actif")}</p></div>
+     <div class="badge-info"><h2>${esc(employeeName(e))}</h2><div class="badge-job">${esc(employeeRole(e))}</div><p><b>Matricule :</b> ${esc(employeeMatricule(e)||e.id)}</p><p><b>Chantier :</b>&nbsp;</p><p><b>Statut :</b> ${esc(e.workflow||"Actif")}</p></div>
      <div class="badge-qr-col"><div id="employeeQrCanvas" class="qr-canvas"></div><small>SCAN PRÉSENCE</small></div>
    </div>
    <div class="badge-footer">Badge personnel • ENTREPRISE NYSOA CONSTRUCT</div>
@@ -1613,7 +1653,6 @@ async function processBadgeScan(code){
  const parts=code.split("|");if(parts.length!==3||parts[0]!=="NYSOA-EMP")return showQrResult("Badge QR invalide.",false);
  const [,id,token]=parts,e=employeeRows().find(x=>String(x.id)===String(id));
  if(!e||!e.qrToken||String(e.qrToken)!==String(token)||e.workflow==="Inactif")return showQrResult("Badge inconnu, expiré ou employé inactif.",false);
- const assigned=employeeProject(e);if(assigned&&String(assigned)!==String(project)){return showQrResult(`Ce salarié est affecté à ${projectLabel(assigned)}, pas à ${projectLabel(project)}.`,false);}
  const now=new Date(),date=now.toISOString().slice(0,10),same=qrAttendanceRows().filter(r=>r.employeeId===e.id&&r.project===project&&r.date===date).sort((a,b)=>String(b.timestamp).localeCompare(String(a.timestamp)));
  const last=same[0];if(last&&now-new Date(last.timestamp)<30000)return showQrResult(`Double scan ignoré — ${employeeName(e)}.`,false);
  const direction=last?.direction==="Entrée"?"Sortie":"Entrée";
@@ -1626,7 +1665,7 @@ function syncQrPresenceToWeekly(e,project,date){
  const weekStart=mondayOf(date);let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);
  if(!record){record={id:"ATTW-"+Date.now(),weekStart,project,entries:[],owner:user.username,updatedAt:new Date().toISOString(),updatedBy:user.username};db.modules.attendanceWeekly.push(record);}
  const key=e.id;let entry=record.entries.find(x=>x.employeeKey===key);if(!entry){entry={employeeKey:key,states:{},dailySalary:employeePayCycle(e)==="Hebdomadaire"?Math.round(employeeBaseSalary(e)/6):0,paid:false,paidAt:""};record.entries.push(entry);}
- entry.states=entry.states||{};entry.states[date]="P";record.updatedAt=new Date().toISOString();record.updatedBy=user.username;save();cloudWriteGeneric("attendanceWeekly",record,"Présence QR synchronisée");
+ entry.states=entry.states||{};entry.assignments=entry.assignments||{};entry.states[date]="P";entry.assignments[date]=project;record.updatedAt=new Date().toISOString();record.updatedBy=user.username;saveLocalOnly();cloudWriteGeneric("attendanceWeekly",record,"Présence QR synchronisée");
 }
 async function techniciansPage(){
  if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
@@ -1648,20 +1687,53 @@ async function adminMiniTechnicianForm(id=""){
 async function adminMiniTechnicianToggle(id,active){if(user.role!=="ADMIN")return;const rows=await loadTechnicianMiniProfiles(),t=rows.find(x=>String(x.id)===String(id));if(!t)return;t.active=!!active;t.updatedAt=new Date().toISOString();await saveTechnicianMiniProfile(t);audit(active?"Activation technicien":"Désactivation technicien","technicianMiniProfiles",id,t.name);techniciansPage();}
 
 
+// ===== STOCK PROFESSIONNEL V4.8.4 =====
+function stockItems(){db.modules.stock=Array.isArray(db.modules.stock)?db.modules.stock:[];return db.modules.stock.filter(x=>!x.deleted);}
+function stockMovementRows(){db.modules.stockMovements=Array.isArray(db.modules.stockMovements)?db.modules.stockMovements:[];return db.modules.stockMovements.filter(x=>!x.deleted);}
+function stockItemName(i){return i?.article||i?.name||i?.values?.[0]||"";}
+function stockItemUnit(i){return i?.unit||i?.values?.[2]||"Unité";}
+function stockOpeningQty(i){return +(i?.openingQty??i?.values?.[1]??0)||0;}
+function stockOpeningValue(i){return +(i?.openingUnitValue??i?.unitPrice??0)||0;}
+function stockSnapshot(item){
+ let qty=stockOpeningQty(item),value=qty*stockOpeningValue(item);
+ stockMovementRows().filter(m=>String(m.itemId)===String(item.id)).sort((a,b)=>String(a.createdAt||a.date||"").localeCompare(String(b.createdAt||b.date||""))).forEach(m=>{
+  const q=+m.qty||0;
+  if(m.type==="Entrée"){qty+=q;value+=q*(+m.unitValue||0);}
+  else{const avg=qty>0?value/qty:stockOpeningValue(item);qty-=q;value-=q*avg;}
+ });
+ qty=Math.max(0,qty);value=Math.max(0,value);return{qty,value,avg:qty>0?value/qty:stockOpeningValue(item)};
+}
+function stockTotalValue(){return stockItems().reduce((n,i)=>n+stockSnapshot(i).value,0);}
+function stockPage(){
+ const ctx=currentProjectContext(),items=stockItems();
+ const moves=stockMovementRows().filter(m=>!ctx||!m.project||String(m.project)===String(ctx)).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
+ const ins=moves.filter(x=>x.type==="Entrée"),outs=moves.filter(x=>x.type==="Sortie");
+ $("#content").innerHTML=`${projectContextNotice()}<div class="kpis">${kpi("📦","blue","VALEUR DU STOCK",money(stockTotalValue()),"Calcul automatique")}${kpi("⬇","green","ENTRÉES STOCK",ins.length)}${kpi("⬆","orange","SORTIES STOCK",outs.length)}</div>
+ <div class="panel"><h3>STOCK — ÉTAT ACTUEL</h3><div class="panel-body"><button class="btn primary" onclick="stockItemForm()">+ Article</button> <button class="btn secondary" onclick="stockMovementForm('Entrée')">+ Entrée</button> <button class="btn secondary" onclick="stockMovementForm('Sortie')">− Sortie</button></div><div class="table-wrap"><table><thead><tr><th>Article</th><th>Unité</th><th>Quantité en stock</th><th>Valeur unitaire moyenne</th><th>Valeur du stock</th><th>Action</th></tr></thead><tbody>${items.length?items.map(i=>{const s=stockSnapshot(i);return`<tr><td><b>${esc(stockItemName(i))}</b></td><td>${esc(stockItemUnit(i))}</td><td><b>${s.qty.toFixed(2)}</b></td><td>${money(s.avg)}</td><td><b>${money(s.value)}</b></td><td><button class="btn-xs btn-edit" onclick="stockItemForm('${i.id}')">Modifier</button></td></tr>`}).join(""):'<tr><td colspan="6">Aucun article.</td></tr>'}</tbody></table></div></div>
+ <div class="panel" style="margin-top:12px"><h3>ENTRÉES</h3><div class="table-wrap"><table><thead><tr><th>Date</th><th>Article</th><th>Qté</th><th>PU</th><th>Valeur</th><th>Chantier</th><th>Référence</th></tr></thead><tbody>${ins.length?ins.map(m=>`<tr><td>${esc(m.date||"")}</td><td>${esc(m.itemName||"")}</td><td>${m.qty} ${esc(m.unit||"")}</td><td>${money(m.unitValue)}</td><td>${money((+m.qty||0)*(+m.unitValue||0))}</td><td>${esc(projectLabel(m.project)||"")}</td><td>${esc(m.reference||"")}</td></tr>`).join(""):'<tr><td colspan="7">Aucune entrée.</td></tr>'}</tbody></table></div></div>
+ <div class="panel" style="margin-top:12px"><h3>SORTIES</h3><div class="table-wrap"><table><thead><tr><th>Date</th><th>Article</th><th>Qté</th><th>Chantier / destination</th><th>Référence</th><th>Observation</th></tr></thead><tbody>${outs.length?outs.map(m=>`<tr><td>${esc(m.date||"")}</td><td>${esc(m.itemName||"")}</td><td>${m.qty} ${esc(m.unit||"")}</td><td>${esc(projectLabel(m.project)||m.project||"")}</td><td>${esc(m.reference||"")}</td><td>${esc(m.note||"")}</td></tr>`).join(""):'<tr><td colspan="6">Aucune sortie.</td></tr>'}</tbody></table></div></div>`;
+}
+function stockItemForm(id=""){
+ const r=id?stockItems().find(x=>String(x.id)===String(id)):null;$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEL"} ARTICLE</h3><form id="fStockItem" class="form-grid"><label>Article<input name="article" value="${esc(stockItemName(r))}" required></label><label>Unité<input name="unit" value="${esc(stockItemUnit(r))}" required></label><label>Stock initial<input name="openingQty" type="number" min="0" step="0.01" value="${stockOpeningQty(r)}"></label><label>Valeur unitaire initiale (Ar)<input name="openingUnitValue" type="number" min="0" step="0.01" value="${stockOpeningValue(r)}"></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="stockPage()">Annuler</button></div></form></div>`;
+ $("#fStockItem").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),obj={...(r||{}),id:r?.id||"STK-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),article:f.get("article"),unit:f.get("unit"),openingQty:+f.get("openingQty")||0,openingUnitValue:+f.get("openingUnitValue")||0,updatedAt:now,updatedBy:user.username};const before=r?cloneRecord(r):null;if(r)Object.assign(r,obj);else{obj.createdAt=now;db.modules.stock.push(obj);}audit(r?"Modification article stock":"Création article stock","stock",obj.id,obj.article,before,cloneRecord(obj));saveLocalOnly();cloudWriteGeneric("stock",obj,"Stock article");stockPage();};
+}
+function stockMovementForm(type){
+ const items=stockItems();$("#content").innerHTML=`<div class="panel"><h3>${type.toUpperCase()} STOCK</h3><form id="fStockMove" class="form-grid"><label>Date<input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label>Article<select name="itemId" required><option value="">Choisir</option>${items.map(i=>`<option value="${esc(i.id)}">${esc(stockItemName(i))} — ${stockSnapshot(i).qty.toFixed(2)} ${esc(stockItemUnit(i))}</option>`).join("")}</select></label><label>Quantité<input name="qty" type="number" min="0.01" step="0.01" required></label>${type==="Entrée"?'<label>Valeur unitaire (Ar)<input name="unitValue" type="number" min="0" step="0.01" required></label>':""}<label>Chantier / destination<select name="project"><option value="">Non affecté</option>${accessibleProjects().map(p=>`<option value="${esc(p.id)}">${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label><label>Référence<input name="reference"></label><label class="full">Observation<textarea name="note"></textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="stockPage()">Annuler</button></div></form></div>`;
+ $("#fStockMove").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),item=items.find(i=>String(i.id)===String(f.get("itemId")));if(!item)return;const qty=+f.get("qty")||0,s=stockSnapshot(item);if(type==="Sortie"&&qty>s.qty+0.0001)return alert("Stock insuffisant.");const uv=type==="Entrée"?(+f.get("unitValue")||0):s.avg,now=new Date().toISOString(),m={id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),type,itemId:item.id,itemName:stockItemName(item),unit:stockItemUnit(item),qty,unitValue:uv,project:f.get("project")||"",reference:f.get("reference")||"",note:f.get("note")||"",owner:user.username,createdAt:now,updatedAt:now};db.modules.stockMovements.push(m);audit(type+" stock","stockMovements",m.id,`${m.itemName} — ${qty}`,null,m);saveLocalOnly();cloudWriteGeneric("stockMovements",m,type+" stock");stockPage();};
+}
+
 const PURCHASE_STATUSES=["Demandé","Approuvé","Effectué","Livré","Refusé","Annulé"];
 function purchaseBadge(status){
  const cls=status==="Livré"?"b-green":status==="Approuvé"||status==="Effectué"?"b-blue":status==="Refusé"||status==="Annulé"?"b-orange":"b-blue";
  return `<span class="badge ${cls}">${esc(status||"Demandé")}</span>`;
 }
-function purchaseCanEdit(record){
- return user.role==="GESTIONNAIRE" && record.owner===user.username && !record.deleted;
-}
+function purchaseCanEdit(record){if(!record||record.deleted)return false;if(user.role==="ADMIN")return true;return user.role==="GESTIONNAIRE"&&record.owner===user.username;}
 function purchasesPage(){
  db.modules.purchases=Array.isArray(db.modules.purchases)?db.modules.purchases:[];
  const rows=db.modules.purchases.filter(x=>!x.deleted);
  $("#content").innerHTML=`<div class="panel"><h3>ACHATS</h3>
  <div class="panel-body">
- ${user.role==="GESTIONNAIRE"?`<button class="btn primary" onclick="purchaseForm()">+ Nouvel achat</button>`:""}
+ ${["ADMIN","GESTIONNAIRE"].includes(user.role)?`<button class="btn primary" onclick="purchaseForm()">+ Nouvel achat</button>`:""}
  <span class="muted">Workflow : Demandé → Approuvé → Effectué → Livré</span>
  </div>
  <div class="table-wrap"><table><thead><tr>
@@ -1684,7 +1756,7 @@ function purchasesPage(){
  </tbody></table></div></div>`;
 }
 function purchaseForm(id=""){
- if(user.role!=="GESTIONNAIRE")return alert("La saisie des achats est réservée au Gestionnaire.");
+ if(!["ADMIN","GESTIONNAIRE"].includes(user.role))return alert("Accès achat non autorisé.");
  db.modules.purchases=Array.isArray(db.modules.purchases)?db.modules.purchases:[];
  const r=id?db.modules.purchases.find(x=>String(x.id)===String(id)):null;
  if(r&&!purchaseCanEdit(r))return alert("Cet achat ne vous appartient pas.");
@@ -1699,7 +1771,7 @@ function purchaseForm(id=""){
  <label>Quantité<input name="quantity" type="number" step="0.01" value="${esc(r?.quantity||"")}" required></label>
  <label>Unité<input name="unit" value="${esc(r?.unit||"Unité")}" required></label>
  <label>Montant total<input name="amount" type="number" step="0.01" value="${esc(r?.amount||"")}" required></label>
- <label>Situation<select name="status">${PURCHASE_STATUSES.map(s=>`<option ${r?.status===s?"selected":""}>${s}</option>`).join("")}</select></label><label>État paiement<select name="paymentStatus"><option ${r?.paymentStatus==="Non payé"?"selected":""}>Non payé</option><option ${r?.paymentStatus==="Payé"?"selected":""}>Payé</option></select></label>
+ <label>Situation<select name="status">${PURCHASE_STATUSES.map(s=>`<option ${r?.status===s?"selected":""}>${s}</option>`).join("")}</select></label><label>État paiement<select name="paymentStatus"><option ${r?.paymentStatus==="Non payé"?"selected":""}>Non payé</option><option ${r?.paymentStatus==="Payé"?"selected":""}>Payé</option></select></label><label>Source des fonds<select name="fundSource"><option ${r?.fundSource==="Caisse Gestionnaire"||(!r&&user.role==="GESTIONNAIRE")?"selected":""}>Caisse Gestionnaire</option><option ${r?.fundSource==="Admin"||(!r&&user.role==="ADMIN")?"selected":""}>Admin</option></select></label>
  <label class="full">Observation<input name="observation" value="${esc(r?.observation||"")}" placeholder="Ex. Validation téléphonique Admin"></label>
  <div id="approvalFields" class="approval-fields full">
  <label>Approuvé par<input name="approvedBy" value="${esc(r?.approvedBy||"Admin / Direction")}"></label>
@@ -1721,7 +1793,7 @@ function purchaseForm(id=""){
    id:(f.get("reference")||"").trim()||r?.id||"ACH-"+String(db.modules.purchases.length+1).padStart(4,"0"),
    date:f.get("date"),project:f.get("project"),designation:f.get("designation"),
    supplier:f.get("supplier"),quantity:+f.get("quantity"),unit:f.get("unit"),
-   amount:+f.get("amount"),status:newStatus,workflow:newStatus,paymentStatus:f.get("paymentStatus")||"Non payé",
+   amount:+f.get("amount"),status:newStatus,workflow:newStatus,paymentStatus:f.get("paymentStatus")||"Non payé",fundSource:f.get("fundSource")||((user.role==="GESTIONNAIRE")?"Caisse Gestionnaire":"Admin"),
    observation:f.get("observation"),owner:r?.owner||user.username,
    updatedBy:user.username,updatedAt:now,
    approvedBy:newStatus==="Approuvé"?(f.get("approvedBy")||"Admin / Direction"):r?.approvedBy||"",
@@ -1739,11 +1811,17 @@ function purchaseForm(id=""){
    db.modules.purchases.push(obj);audit("Création","purchases",obj.id,`Achat créé — ${newStatus}`,null,obj);
   }
   const saved=r||obj;
-  if(saved.paymentStatus==="Payé"&&!saved.linkedExpenseId){
-   const exp={id:"DEP-ACH-"+saved.id,date:saved.date,project:saved.project,category:"Achats",label:`Achat ${saved.designation}`,amount:+saved.amount||0,paymentMode:"À préciser",reference:saved.id,status:"Payée",note:`Généré automatiquement depuis achat ${saved.id}`,owner:user.username,createdAt:now,updatedAt:now,sourcePurchaseId:saved.id};
-   db.expenses.push(exp);saved.linkedExpenseId=exp.id;
+  // V4.8.3: no duplicate expense record is created.
+  // The unified expense journal reads paid purchases directly from PURCHASES.
+  if(saved.linkedExpenseId){
+   const legacyExp=(db.expenses||[]).find(e=>String(e.id)===String(saved.linkedExpenseId));
+   if(legacyExp&&!legacyExp.legacyLinkedArchived){
+    legacyExp.legacyLinkedArchived=true;legacyExp.legacyLinkedArchivedAt=now;
+   }
   }
-  save();purchasesPage();
+  saveLocalOnly();
+  if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("purchases",saved,r?"Achat modifié":"Nouvel achat");
+  purchasesPage();
  };
 }
 function softDeletePurchase(id){
@@ -1751,7 +1829,7 @@ function softDeletePurchase(id){
  if(!r||!purchaseCanEdit(r))return;
  const reason=prompt("Motif de suppression :");if(reason===null)return;
  const before=cloneRecord(r);r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=user.username;r.deleteReason=reason||"Erreur de saisie";
- pushHistory(r,"Suppression logique",before,r.deleteReason);audit("Suppression logique","purchases",id,r.deleteReason,before,r);save();purchasesPage();
+ pushHistory(r,"Suppression logique",before,r.deleteReason);audit("Suppression logique","purchases",id,r.deleteReason,before,r);saveLocalOnly();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("purchases",r,"Achat supprimé");purchasesPage();
 }
 function purchaseHistory(id){
  const r=(db.modules.purchases||[]).find(x=>String(x.id)===String(id));if(!r)return;
@@ -1771,140 +1849,26 @@ function projectLabel(id){
  const p=(db.projects||[]).find(x=>String(x.id)===String(id));
  return p?.name||id||"Non affecté";
 }
-function expenseRows(){
- db.expenses=Array.isArray(db.expenses)?db.expenses:[];
- return db.expenses.filter(x=>!x.deleted);
-}
-function expensesPage(){
- const ctx=currentProjectContext();
- const rows=expenseRows().filter(x=>!ctx||String(x.project)===String(ctx));
- $("#content").innerHTML=`${caisseNav("expenses")}${projectContextNotice()}<div class="panel"><h3>DÉPENSES (JOURNAL)</h3>
- <div class="panel-body"><button class="btn primary" onclick="expenseForm()">+ Nouvelle dépense</button>
- <div class="notice">Une dépense est une sortie réelle de caisse. Chaque saisie doit être rattachée à un chantier.</div></div>
- <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Catégorie</th><th>Libellé</th><th>Montant</th><th>Mode</th><th>Référence</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
- ${rows.length?rows.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(r.category||"")}</td><td>${esc(r.label||r.note||"")}</td><td><b>${money(r.amount||0)}</b></td><td>${esc(r.paymentMode||"")}</td><td>${esc(r.reference||"")}</td><td>${workflowBadge(r.status||"Payée")}</td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="expenseForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="deleteExpense('${r.id}')">Supprimer</button></div></td></tr>`).join(""):`<tr><td colspan="9">Aucune dépense.</td></tr>`}
- </tbody></table></div></div>`;
-}
-function expenseForm(id=""){
- const r=id?expenseRows().find(x=>String(x.id)===String(id)):null;
- const project=r?.project||currentProjectContext()||"";
- $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} DÉPENSE</h3><form id="fExpense" class="form-grid">
- <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
- <label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
- <label>Catégorie<select name="category"><option>Achats</option><option>Carburant</option><option>Transport</option><option>Main-d’œuvre externe</option><option>Matériels</option><option>Frais chantier</option><option>Autre</option></select></label>
- <label>Libellé<input name="label" value="${esc(r?.label||"")}" required></label>
- <label>Montant (Ar)<input name="amount" type="number" min="1" step="1" value="${+r?.amount||""}" required></label>
- <label>Mode de paiement<select name="paymentMode">${["Espèces","Virement","Mobile Money","Chèque","Autre"].map(x=>`<option ${r?.paymentMode===x?"selected":""}>${x}</option>`).join("")}</select></label>
- <label>Référence<input name="reference" value="${esc(r?.reference||"")}"></label>
- <label>Statut<select name="status"><option ${r?.status==="Payée"?"selected":""}>Payée</option><option ${r?.status==="En attente"?"selected":""}>En attente</option></select></label>
- <label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label>
- <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="expensesPage()">Annuler</button></div></form></div>`;
- $("#fExpense").onsubmit=e=>{
-  e.preventDefault();const f=new FormData(e.target);
-  const obj={id:r?.id||"DEP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),category:f.get("category"),label:f.get("label"),amount:+f.get("amount")||0,paymentMode:f.get("paymentMode"),reference:f.get("reference")||"",status:f.get("status"),note:f.get("note")||"",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
-  const before=r?cloneRecord(r):null;if(r)Object.assign(r,obj);else{obj.createdAt=new Date().toISOString();db.expenses.push(obj);}
-  audit(r?"Modification dépense":"Création dépense","expenses",obj.id,`${obj.label} — ${money(obj.amount)}`,before,cloneRecord(obj));save();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("expenses",obj,"Nouvelle dépense");expensesPage();
- };
-}
-function deleteExpense(id){
- const r=expenseRows().find(x=>String(x.id)===String(id));if(!r)return;
- if(!confirm("Supprimer cette dépense ?"))return;
- const before=cloneRecord(r),actor=effectiveUserIdentity();r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=actor.label||actor.username||user.username;r.updatedAt=r.deletedAt;audit("Suppression dépense","expenses",r.id,r.label||"",before,cloneRecord(r));save();expensesPage();
-}
-
-function caisseNav(active="journal"){
- const btn=(key,label,fn)=>`<button class="btn ${active===key?"primary":"secondary"}" onclick="${fn}">${label}</button>`;
- return `<div class="panel caisse-hub"><h3>💵 MODULE CAISSE</h3><div class="panel-body form-actions">${btn("journal","Vue générale / Journal","cashPage()")}${btn("appro","Demandes & Approvisionnements","approPage()")}${btn("expenses","Dépenses caisse","expensesPage()")}${btn("treasury","Trésorerie","cashTreasuryPage()")}</div></div>`;
-}
+function expenseRows(){db.expenses=Array.isArray(db.expenses)?db.expenses:[];return db.expenses.filter(x=>!x.deleted);}
+function manualExpenseRows(){return expenseRows().filter(x=>!x.sourcePurchaseId&&!x.sourcePayrollId);}
+function paidPurchaseJournalRows(projectId=""){return (db.modules?.purchases||[]).filter(p=>!p.deleted&&p.paymentStatus==="Payé"&&(!projectId||String(p.project)===String(projectId))).map(p=>({id:"JRN-ACH-"+p.id,date:p.paymentDate||p.date||"",project:p.project,category:"Achats",label:`Achat ${p.designation||p.id}`,amount:+p.amount||0,paymentMode:p.paymentMode||"À préciser",fundSource:p.fundSource||"Admin",reference:p.id,status:"Payée",source:"Achat",readonly:true}));}
+function payrollActualMovements(projectId=""){const out=[];(db.modules?.payroll||[]).filter(p=>!p.deleted&&(!projectId||String(p.project)===String(projectId))).forEach(p=>{const legacy=p.advancePaid===undefined&&p.balancePaid===undefined;if(legacy){if(p.workflow!=="En attente"){const amt=+p.netPaid||+p.grossAmount||0;if(amt)out.push({date:p.date||p.createdAt?.slice(0,10)||"",project:p.project,type:"Sortie",source:"Paie",label:`Salaire ${p.employeeName||""} — ${p.periodLabel||""}`,amount:amt,reference:p.id,fundSource:p.fundSource||"Caisse Gestionnaire"})}return}if(p.advancePaid&&+p.advanceAmount>0)out.push({date:p.advanceDate||p.date||"",project:p.project,type:"Sortie",source:"Avance salaire",label:`Avance ${p.employeeName||""} — ${p.periodLabel||""}`,amount:+p.advanceAmount,reference:p.id,fundSource:p.fundSource||"Caisse Gestionnaire"});if(p.balancePaid&&+p.balanceAmount>0)out.push({date:p.balanceDate||p.date||"",project:p.project,type:"Sortie",source:"Solde salaire",label:`Solde ${p.employeeName||""} — ${p.periodLabel||""}`,amount:+p.balanceAmount,reference:p.id,fundSource:p.fundSource||"Caisse Gestionnaire"})});return out;}
+function payrollExpenseJournalRows(projectId=""){return payrollActualMovements(projectId).map(m=>({id:"JRN-PAY-"+m.reference+"-"+m.source,date:m.date,project:m.project,category:"Salaires",label:m.label,amount:m.amount,paymentMode:"Paie",fundSource:m.fundSource,reference:m.reference,status:"Payée",source:m.source,readonly:true}));}
+function unifiedExpenseJournalRows(projectId=""){const direct=manualExpenseRows().filter(e=>e.status!=="En attente"&&(!projectId||String(e.project)===String(projectId))).map(e=>({...e,source:"Dépense",fundSource:e.fundSource||"Admin",readonly:false}));return[...direct,...paidPurchaseJournalRows(projectId),...payrollExpenseJournalRows(projectId)].sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));}
+function unifiedExpenseTotal(projectId=""){return unifiedExpenseJournalRows(projectId).reduce((n,r)=>n+(+r.amount||0),0);}
+function expensesPage(){const ctx=currentProjectContext(),rows=unifiedExpenseJournalRows(ctx),total=rows.reduce((n,r)=>n+(+r.amount||0),0);$("#content").innerHTML=`${caisseNav("expenses")}${projectContextNotice()}<div class="kpis">${kpi("📒","orange","TOTAL DÉPENSES",money(total),"Journal général")}</div><div class="panel"><h3>DÉPENSES — JOURNAL GÉNÉRAL</h3><div class="panel-body"><button class="btn primary" onclick="expenseForm()">+ Nouvelle dépense</button><div class="notice">Tous les achats payés, salaires payés et autres dépenses apparaissent ici. <b>Source des fonds</b> distingue Caisse Gestionnaire et Admin.</div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Source</th><th>Catégorie</th><th>Libellé</th><th>Montant</th><th>Source des fonds</th><th>Référence</th><th>Action</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(r.source||"")}</td><td>${esc(r.category||"")}</td><td>${esc(r.label||"")}</td><td><b>${money(r.amount)}</b></td><td><b>${esc(r.fundSource||"Admin")}</b></td><td>${esc(r.reference||"")}</td><td>${r.readonly?'<span class="muted">Automatique</span>':`<button class="btn-xs btn-edit" onclick="expenseForm('${r.id}')">Modifier</button> <button class="btn-xs btn-delete" onclick="deleteExpense('${r.id}')">Supprimer</button>`}</td></tr>`).join(""):'<tr><td colspan="9">Aucune dépense.</td></tr>'}</tbody></table></div></div>`;}
+function expenseForm(id=""){const r=id?expenseRows().find(x=>String(x.id)===String(id)):null,project=r?.project||currentProjectContext()||"";$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} DÉPENSE</h3><form id="fExpense" class="form-grid"><label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label><label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label><label>Catégorie<select name="category">${["Achats","Carburant","Transport","Main-d’œuvre externe","Matériels","Frais chantier","Autre"].map(x=>`<option ${r?.category===x?"selected":""}>${x}</option>`).join("")}</select></label><label>Libellé<input name="label" value="${esc(r?.label||"")}" required></label><label>Montant<input name="amount" type="number" min="1" value="${+r?.amount||""}" required></label><label>Mode<select name="paymentMode">${["Espèces","Virement","Mobile Money","Chèque","Autre"].map(x=>`<option ${r?.paymentMode===x?"selected":""}>${x}</option>`).join("")}</select></label><label>Source des fonds<select name="fundSource"><option ${r?.fundSource==="Caisse Gestionnaire"||(!r&&user.role==="GESTIONNAIRE")?"selected":""}>Caisse Gestionnaire</option><option ${r?.fundSource==="Admin"||(!r&&user.role==="ADMIN")?"selected":""}>Admin</option></select></label><label>Référence<input name="reference" value="${esc(r?.reference||"")}"></label><label>Statut<select name="status"><option ${r?.status==="Payée"?"selected":""}>Payée</option><option ${r?.status==="En attente"?"selected":""}>En attente</option></select></label><label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="expensesPage()">Annuler</button></div></form></div>`;$("#fExpense").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),obj={id:r?.id||"DEP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),category:f.get("category"),label:f.get("label"),amount:+f.get("amount")||0,paymentMode:f.get("paymentMode"),fundSource:f.get("fundSource")||"Admin",reference:f.get("reference")||"",status:f.get("status"),note:f.get("note")||"",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};const before=r?cloneRecord(r):null;if(r)Object.assign(r,obj);else{obj.createdAt=now;db.expenses.push(obj)}audit(r?"Modification dépense":"Création dépense","expenses",obj.id,`${obj.label} — ${money(obj.amount)} — ${obj.fundSource}`,before,obj);saveLocalOnly();cloudWriteGeneric("expenses",obj,"Dépense");expensesPage()};}
+function deleteExpense(id){const r=expenseRows().find(x=>String(x.id)===String(id));if(!r||!confirm("Supprimer cette dépense ?"))return;const before=cloneRecord(r);r.deleted=true;r.deletedAt=new Date().toISOString();r.updatedAt=r.deletedAt;audit("Suppression dépense","expenses",r.id,r.label,before,r);saveLocalOnly();cloudWriteGeneric("expenses",r,"Dépense supprimée");expensesPage();}
+function caisseNav(active="journal"){const b=(k,l,f)=>`<button class="btn ${active===k?"primary":"secondary"}" onclick="${f}">${l}</button>`;return`<div class="panel caisse-hub"><h3>💵 MODULE CAISSE</h3><div class="panel-body form-actions">${b("journal","Journal caisse","cashPage()")}${b("appro","Demandes appro","approPage()")}${b("expenses","Dépenses","expensesPage()")}${b("treasury","Trésorerie","cashTreasuryPage()")}</div></div>`;}
+function cashEntryRows(){db.modules.cashEntries=Array.isArray(db.modules.cashEntries)?db.modules.cashEntries:[];return db.modules.cashEntries.filter(x=>!x.deleted);}
+function cashEntryForm(){$("#content").innerHTML=`<div class="panel"><h3>ENTRÉE CAISSE MANUELLE</h3><div class="notice">Montant réellement remis à la caisse Gestionnaire. Indépendant de la demande d’approvisionnement.</div><form id="fCashEntry" class="form-grid"><label>Date<input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label>Montant<input name="amount" type="number" min="1" required></label><label>Chantier<select name="project"><option value="">Caisse générale</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}">${esc(p.name||p.id)}</option>`).join("")}</select></label><label>Référence<input name="reference"></label><label class="full">Observation<textarea name="note"></textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="cashPage()">Annuler</button></div></form></div>`;$("#fCashEntry").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),a=effectiveUserIdentity(),o={id:"CIN-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),amount:+f.get("amount")||0,project:f.get("project")||"",reference:f.get("reference")||"",note:f.get("note")||"",enteredBy:a.label||a.username||user.username,createdAt:now,updatedAt:now};db.modules.cashEntries.push(o);audit("Entrée caisse","cashEntries",o.id,money(o.amount),null,o);saveLocalOnly();cloudWriteGeneric("cashEntries",o,"Entrée caisse");cashPage()};}
 function cashTreasuryPage(){generic("treasury");const c=document.getElementById("content");if(c)c.innerHTML=caisseNav("treasury")+c.innerHTML;}
-function approPage(){
- db.requests=Array.isArray(db.requests)?db.requests:[];
- db.appro=Array.isArray(db.appro)?db.appro:[];
- const ctx=currentProjectContext();
- const req=db.requests.filter(x=>!x.deleted&&(!ctx||String(x.project)===String(ctx))).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
- const aps=db.appro.filter(x=>!x.deleted&&x.status==="Validée"&&(!ctx||String(x.project)===String(ctx))).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
- $("#content").innerHTML=`${caisseNav("appro")}${projectContextNotice()}<div class="panel"><h3>${user.role==="ADMIN"?"APPROVISIONNEMENT CAISSE":"DEMANDE D’APPROVISIONNEMENT"}</h3>
- <div class="panel-body"><button class="btn primary" onclick="approForm()">+ ${user.role==="ADMIN"?"Nouvel approvisionnement":"Nouvelle demande"}</button>
- <div class="notice">APPRO. CAISSE = entrée de fonds destinée au fonctionnement d’un chantier. Ce n’est pas une dépense.</div></div>
- <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Montant</th><th>Motif</th><th>Mode</th><th>Référence</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
- ${req.length?req.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td><b>${money(r.amount||0)}</b></td><td>${esc(r.purpose||r.note||"")}</td><td>${esc(r.paymentMode||"")}</td><td>${esc(r.reference||"")}</td><td>${workflowBadge(r.status||"En attente")}</td><td><div class="edit-actions">${user.role==="ADMIN"&&r.status==="En attente"?`<button class="btn-xs btn-edit" onclick="validateApproRequest('${r.id}',true)">Valider</button><button class="btn-xs btn-delete" onclick="validateApproRequest('${r.id}',false)">Rejeter</button>`:r.status==="En attente"?`<button class="btn-xs btn-edit" onclick="approForm('${r.id}')">Modifier</button>`:""}</div></td></tr>`).join(""):`<tr><td colspan="8">Aucune demande.</td></tr>`}
- </tbody></table></div></div>
- ${user.role==="ADMIN"?`<div class="panel" style="margin-top:12px"><h3>APPROVISIONNEMENTS VALIDÉS</h3><div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Montant</th><th>Motif</th><th>Mode</th><th>Référence</th></tr></thead><tbody>${aps.length?aps.map(a=>`<tr><td>${esc(a.date||"")}</td><td>${esc(projectLabel(a.project))}</td><td><b>${money(a.amount||0)}</b></td><td>${esc(a.purpose||a.note||"")}</td><td>${esc(a.paymentMode||"")}</td><td>${esc(a.reference||"")}</td></tr>`).join(""):`<tr><td colspan="6">Aucun approvisionnement validé.</td></tr>`}</tbody></table></div></div>`:""}`;
-}
-function approForm(id=""){
- const r=id?(db.requests||[]).find(x=>String(x.id)===String(id)):null;
- const project=r?.project||currentProjectContext()||"";
- $("#content").innerHTML=`<div class="panel"><h3>${user.role==="ADMIN"?"NOUVEL APPROVISIONNEMENT":"DEMANDE D’APPROVISIONNEMENT"}</h3><form id="fAppro" class="form-grid">
- <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
- <label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
- <label>Montant (Ar)<input name="amount" type="number" min="1" step="1" value="${+r?.amount||""}" required></label>
- <label>Motif<input name="purpose" value="${esc(r?.purpose||r?.note||"")}" required></label>
- <label>Mode<select name="paymentMode">${["Espèces","Virement","Mobile Money","Chèque","Autre"].map(x=>`<option ${r?.paymentMode===x?"selected":""}>${x}</option>`).join("")}</select></label>
- <label>Référence<input name="reference" value="${esc(r?.reference||"")}"></label>
- <label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label>
- <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="approPage()">Annuler</button></div></form></div>`;
- $("#fAppro").onsubmit=e=>{
-  e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString();
-  if(user.role==="ADMIN"){
-   const obj={id:"APP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),amount:+f.get("amount")||0,purpose:f.get("purpose"),paymentMode:f.get("paymentMode"),reference:f.get("reference")||"",note:f.get("note")||"",status:"Validée",owner:user.username,createdAt:now,updatedAt:now};
-   db.appro.push(obj);audit("Création approvisionnement caisse","appro",obj.id,`${projectLabel(obj.project)} — ${money(obj.amount)}`,null,obj);save();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("appro",obj);approPage();return;
-  }
-  const obj={id:r?.id||"DEM-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),amount:+f.get("amount")||0,purpose:f.get("purpose"),paymentMode:f.get("paymentMode"),reference:f.get("reference")||"",note:f.get("note")||"",status:r?.status||"En attente",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};
-  const before=r?cloneRecord(r):null;if(r)Object.assign(r,obj);else{obj.createdAt=now;db.requests.push(obj);}
-  audit(r?"Modification demande approvisionnement":"Création demande approvisionnement","requests",obj.id,`${projectLabel(obj.project)} — ${money(obj.amount)}`,before,obj);save();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("requests",obj,"Nouvelle demande d’approvisionnement");approPage();
- };
-}
-function validateApproRequest(id,accept){
- if(user.role!=="ADMIN")return;
- const r=(db.requests||[]).find(x=>String(x.id)===String(id));if(!r)return;
- const now=new Date().toISOString();
- if(accept){
-  r.status="Validée";r.validatedAt=now;r.validatedBy=user.username;r.updatedAt=now;
-  if(!r.linkedApproId){
-   const a={id:"APP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:r.date,project:r.project,amount:+r.amount||0,purpose:r.purpose||r.note||"",paymentMode:r.paymentMode||"",reference:r.reference||"",note:r.note||"",status:"Validée",sourceRequestId:r.id,owner:user.username,createdAt:now,updatedAt:now};
-   r.linkedApproId=a.id;db.appro.push(a);if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("appro",a);
-  }
- }else{r.status="Rejetée";r.rejectedAt=now;r.rejectedBy=user.username;r.updatedAt=now;}
- audit(accept?"Validation demande approvisionnement":"Rejet demande approvisionnement","requests",r.id,`${projectLabel(r.project)} — ${money(r.amount)}`,null,cloneRecord(r));save();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("requests",r);approPage();
-}
+function approPage(){db.requests=Array.isArray(db.requests)?db.requests:[];const ctx=currentProjectContext(),req=db.requests.filter(x=>!x.deleted&&(!ctx||String(x.project)===String(ctx))).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));$("#content").innerHTML=`${caisseNav("appro")}${projectContextNotice()}<div class="panel"><h3>DEMANDES D’APPROVISIONNEMENT</h3><div class="panel-body">${user.role!=="ADMIN"?'<button class="btn primary" onclick="approForm()">+ Nouvelle demande</button>':""}<div class="notice">Validation Admin simple : <b>OK</b> ou <b>Non</b>. Une validation ne crédite jamais automatiquement la caisse.</div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Montant</th><th>Motif</th><th>Statut</th><th>Action</th></tr></thead><tbody>${req.length?req.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td><b>${money(r.amount)}</b></td><td>${esc(r.purpose||r.note||"")}</td><td>${workflowBadge(r.status||"En attente")}</td><td>${user.role==="ADMIN"&&r.status==="En attente"?`<button class="btn-xs btn-edit" onclick="validateApproRequest('${r.id}',true)">OK</button> <button class="btn-xs btn-delete" onclick="validateApproRequest('${r.id}',false)">Non</button>`:r.status==="En attente"?`<button class="btn-xs btn-edit" onclick="approForm('${r.id}')">Modifier</button>`:""}</td></tr>`).join(""):'<tr><td colspan="6">Aucune demande.</td></tr>'}</tbody></table></div></div>`;}
+function approForm(id=""){const r=id?(db.requests||[]).find(x=>String(x.id)===String(id)):null,project=r?.project||currentProjectContext()||"";$("#content").innerHTML=`<div class="panel"><h3>DEMANDE D’APPROVISIONNEMENT</h3><form id="fAppro" class="form-grid"><label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label><label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label><label>Montant<input name="amount" type="number" min="1" value="${+r?.amount||""}" required></label><label>Motif<input name="purpose" value="${esc(r?.purpose||"")}" required></label><label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label><div class="form-actions full"><button class="btn primary">Envoyer</button><button type="button" class="btn secondary" onclick="approPage()">Annuler</button></div></form></div>`;$("#fAppro").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),o={id:r?.id||"DEM-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),amount:+f.get("amount")||0,purpose:f.get("purpose"),note:f.get("note")||"",status:r?.status||"En attente",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};const before=r?cloneRecord(r):null;if(r)Object.assign(r,o);else{o.createdAt=now;db.requests.push(o)}audit(r?"Modification demande appro":"Création demande appro","requests",o.id,`${projectLabel(o.project)} — ${money(o.amount)}`,before,o);saveLocalOnly();cloudWriteGeneric("requests",o,"Demande appro");approPage()};}
+function validateApproRequest(id,accept){if(user.role!=="ADMIN")return;const r=(db.requests||[]).find(x=>String(x.id)===String(id));if(!r)return;const now=new Date().toISOString(),before=cloneRecord(r);r.status=accept?"Validée":"Rejetée";r.updatedAt=now;if(accept){r.validatedAt=now;r.validatedBy=user.username}else{r.rejectedAt=now;r.rejectedBy=user.username}audit(accept?"Validation demande appro":"Rejet demande appro","requests",r.id,accept?"OK":"Non",before,r);saveLocalOnly();cloudWriteGeneric("requests",r,"Décision appro");approPage();}
+function cashMovements(projectId=""){const rows=[];cashEntryRows().filter(a=>!projectId||!a.project||String(a.project)===String(projectId)).forEach(a=>rows.push({date:a.date,project:a.project,type:"Entrée",source:"Entrée caisse manuelle",label:a.note||"Entrée caisse",amount:+a.amount||0,reference:a.reference||a.id}));unifiedExpenseJournalRows(projectId).filter(e=>(e.fundSource||"Admin")==="Caisse Gestionnaire").forEach(e=>rows.push({date:e.date,project:e.project,type:"Sortie",source:e.source||"Dépense",label:e.label||e.category||"Dépense",amount:+e.amount||0,reference:e.reference||e.id}));return rows.sort((a,b)=>String(a.date||"").localeCompare(String(b.date||"")));}
+function cashPage(){const ctx=currentProjectContext(),rows=cashMovements(ctx);let running=0;const rendered=rows.map(r=>{running+=r.type==="Entrée"?+r.amount:-r.amount;return{...r,balance:running}}),ins=rows.filter(r=>r.type==="Entrée").reduce((n,r)=>n+r.amount,0),outs=rows.filter(r=>r.type==="Sortie").reduce((n,r)=>n+r.amount,0);$("#content").innerHTML=`${caisseNav("journal")}${projectContextNotice()}<div class="kpis">${kpi("⬇","green","ENTRÉES CAISSE",money(ins))}${kpi("⬆","orange","SORTIES CAISSE",money(outs))}${kpi("💵","blue","SOLDE CAISSE",money(ins-outs))}</div><div class="panel"><h3>JOURNAL CAISSE GESTIONNAIRE</h3><div class="panel-body"><button class="btn primary" onclick="cashEntryForm()">+ Entrée caisse manuelle</button><div class="notice">La caisse est indépendante des demandes appro. Seules les dépenses marquées <b>Caisse Gestionnaire</b> diminuent ce solde. Les dépenses Admin restent dans le Journal général sans diminuer cette caisse.</div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Type</th><th>Source</th><th>Libellé</th><th>Entrée</th><th>Sortie</th><th>Solde</th><th>Référence</th></tr></thead><tbody>${rendered.length?rendered.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${r.type}</td><td>${esc(r.source)}</td><td>${esc(r.label)}</td><td>${r.type==="Entrée"?money(r.amount):""}</td><td>${r.type==="Sortie"?money(r.amount):""}</td><td><b>${money(r.balance)}</b></td><td>${esc(r.reference||"")}</td></tr>`).join(""):'<tr><td colspan="9">Aucun mouvement.</td></tr>'}</tbody></table></div></div>`;}
 
-function payrollActualMovements(projectId=""){
- const out=[];
- (db.modules?.payroll||[]).filter(p=>!p.deleted&&(!projectId||String(p.project)===String(projectId))).forEach(p=>{
-  const legacy=(p.advancePaid===undefined&&p.balancePaid===undefined);
-  if(legacy){
-   if(p.workflow!=="En attente"){
-    const amt=+p.netPaid||+p.grossAmount||0;
-    if(amt)out.push({date:p.date||p.createdAt?.slice(0,10)||"",project:p.project,type:"Sortie",source:"Paie",label:`Salaire ${p.employeeName||""} — ${p.periodLabel||""}`,amount:amt,reference:p.id});
-   }
-   return;
-  }
-  if(p.advancePaid&&+p.advanceAmount>0)out.push({date:p.advanceDate||p.date||"",project:p.project,type:"Sortie",source:"Avance salaire",label:`Avance ${p.employeeName||""} — ${p.periodLabel||""}`,amount:+p.advanceAmount,reference:p.id});
-  if(p.balancePaid&&+p.balanceAmount>0)out.push({date:p.balanceDate||p.date||"",project:p.project,type:"Sortie",source:"Solde salaire",label:`Solde ${p.employeeName||""} — ${p.periodLabel||""}`,amount:+p.balanceAmount,reference:p.id});
- });
- return out;
-}
-function cashMovements(projectId=""){
- const rows=[];
- (db.appro||[]).filter(a=>!a.deleted&&a.status==="Validée"&&(!projectId||String(a.project)===String(projectId))).forEach(a=>rows.push({date:a.date||"",project:a.project,type:"Entrée",source:"Appro caisse",label:a.purpose||a.note||"Approvisionnement",amount:+a.amount||0,reference:a.reference||a.id}));
- expenseRows().filter(e=>e.status!=="En attente"&&(!projectId||String(e.project)===String(projectId))).forEach(e=>rows.push({date:e.date||"",project:e.project,type:"Sortie",source:"Dépense",label:e.label||e.category||"Dépense",amount:+e.amount||0,reference:e.reference||e.id}));
- rows.push(...payrollActualMovements(projectId));
- return rows.sort((a,b)=>String(a.date).localeCompare(String(b.date)));
-}
-function cashPage(){
- const ctx=currentProjectContext(),rows=cashMovements(ctx);
- let running=0;
- const rendered=rows.map(r=>{running+=r.type==="Entrée"?+r.amount:-r.amount;return {...r,balance:running};});
- const totalIn=rows.filter(r=>r.type==="Entrée").reduce((n,r)=>n+r.amount,0),totalOut=rows.filter(r=>r.type==="Sortie").reduce((n,r)=>n+r.amount,0);
- $("#content").innerHTML=`${caisseNav("journal")}${projectContextNotice()}<div class="kpis">${kpi("⬇","green","ENTRÉES CAISSE",money(totalIn))}${kpi("⬆","orange","SORTIES CAISSE",money(totalOut))}${kpi("💵","blue","SOLDE CAISSE",money(totalIn-totalOut))}</div>
- <div class="panel"><h3>CAISSE — JOURNAL DES MOUVEMENTS</h3><div class="notice">La caisse est calculée automatiquement à partir des approvisionnements validés, dépenses payées et paiements de personnel.</div>
- <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Type</th><th>Source</th><th>Libellé</th><th>Entrée</th><th>Sortie</th><th>Solde progressif</th><th>Référence</th></tr></thead><tbody>
- ${rendered.length?rendered.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${r.type}</td><td>${esc(r.source)}</td><td>${esc(r.label)}</td><td>${r.type==="Entrée"?money(r.amount):""}</td><td>${r.type==="Sortie"?money(r.amount):""}</td><td><b>${money(r.balance)}</b></td><td>${esc(r.reference||"")}</td></tr>`).join(""):`<tr><td colspan="9">Aucun mouvement de caisse.</td></tr>`}
- </tbody></table></div></div>`;
-}
-
-
-// ===== EMPLOYÉS & PAIE V4.5.5 =====
 function employeeRows(){
  db.modules.employees=Array.isArray(db.modules.employees)?db.modules.employees:[];
  return db.modules.employees.filter(r=>!r.deleted);
@@ -1935,7 +1899,19 @@ const EMPLOYEE_JOB_CODES={
  "Technicien":"TC",
  "Contrôleur":"CT",
  "Gestionnaire":"GE",
- "Commissionnaire":"CM"
+ "Commissionnaire":"CM",
+ "Aide-maçon":"AM",
+ "Carreleur":"CR",
+ "Peintre":"PE",
+ "Soudeur":"SO",
+ "Menuisier":"ME",
+ "Charpentier":"CHP",
+ "Conducteur d’engins":"CD",
+ "Gardien":"GA",
+ "Comptable":"CP",
+ "Assistant administratif":"AA",
+ "Responsable logistique":"RL",
+ "Responsable QHSE":"QH"
 };
 function employeeJobCode(jobTitle){
  const title=String(jobTitle||"").trim();
@@ -2024,10 +2000,9 @@ function employeeForm(id=""){
  };
 }
 function updateEmployeeRoleOptions(selected=""){
- const cat=document.getElementById("employeeCategory")?.value||"Équipe terrain",el=document.getElementById("employeeRole");if(!el)return;
- const opts=cat==="Staff"?["Contrôleur","Gestionnaire","Commissionnaire","Technicien","Magasinier"]:["Chef de chantier","Chef d’équipe","Maçon","Ouvrier","Manœuvre","Coffreur","Ferrailleur","Électricien","Plombier","Chauffeur"];
- el.innerHTML=opts.map(x=>`<option ${x===selected?"selected":""}>${x}</option>`).join("");
- updateEmployeeMatriculePreview();
+ const el=document.getElementById("employeeRole");if(!el)return;
+ const opts=["Chef de chantier","Chef d’équipe","Maçon","Aide-maçon","Ouvrier","Manœuvre","Coffreur","Ferrailleur","Électricien","Plombier","Carreleur","Peintre","Soudeur","Menuisier","Charpentier","Conducteur d’engins","Chauffeur","Gardien","Magasinier","Technicien","Contrôleur","Gestionnaire","Commissionnaire","Comptable","Assistant administratif","Responsable logistique","Responsable QHSE"];
+ el.innerHTML=opts.map(x=>`<option ${x===selected?"selected":""}>${x}</option>`).join("");updateEmployeeMatriculePreview();
 }
 function updateEmployeeMatriculePreview(){
  const field=document.getElementById("employeeMatriculePreview"),role=document.getElementById("employeeRole");if(!field||!role)return;
@@ -2042,85 +2017,20 @@ function deleteEmployee(id){
  e.deleted=true;e.deletedAt=new Date().toISOString();e.deletedBy=actor.label||actor.username||user.username;e.updatedAt=e.deletedAt;audit("Suppression employé","employees",e.id,e.name||"",before,cloneRecord(e));save();employeesPage();
 }
 
-function employeeAdvancesTotal(employeeId,excludePayrollId=""){
- return payrollRows().filter(p=>String(p.employeeId)===String(employeeId)&&String(p.id)!==String(excludePayrollId)&&!p.deleted)
-  .reduce((n,p)=>n+(p.advancePaid?+p.advanceAmount||0:0),0);
-}
-function payrollPage(){
- const ctx=currentProjectContext();
- const rows=payrollRows().filter(p=>!ctx||String(p.project)===String(ctx));
- $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>PAIE</h3>
- <div class="panel-body"><button class="btn primary" onclick="payrollForm()">+ Nouvelle période de paie</button>
- <div class="notice">L’avance et le solde sont deux sorties distinctes. Une avance déjà versée ne doit jamais être comptée une deuxième fois au paiement final.</div></div>
- <div class="table-wrap"><table><thead><tr><th>Employé</th><th>Poste</th><th>Chantier</th><th>Période</th><th>Salaire dû</th><th>Avance versée</th><th>Solde payé</th><th>Total payé</th><th>Reste</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
- ${rows.length?rows.map(p=>{
-  const e=employeeRows().find(x=>String(x.id)===String(p.employeeId)),gross=+p.grossAmount||0;
-  const legacy=(p.advancePaid===undefined&&p.balancePaid===undefined);
-  const adv=legacy?0:(p.advancePaid?+p.advanceAmount||0:0);
-  const bal=legacy?(p.workflow!=="En attente"?+p.netPaid||gross:0):(p.balancePaid?+p.balanceAmount||0:0);
-  const paid=adv+bal,remain=Math.max(0,gross-paid);
-  return `<tr><td><b>${esc(employeeName(e)||p.employeeName||"")}</b></td><td>${esc(employeeRole(e)||p.jobTitle||"")}</td><td>${esc(projectLabel(p.project))}</td><td>${esc(p.periodLabel||p.payCycle||"")}</td><td>${money(gross)}</td><td>${money(adv)}</td><td>${money(bal)}</td><td><b>${money(paid)}</b></td><td>${money(remain)}</td><td>${workflowBadge(p.workflow||"En attente")}</td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="payrollForm('${p.id}','${p.employeeId}')">Modifier</button><button class="btn-xs btn-delete" onclick="deletePayroll('${p.id}')">Supprimer</button></div></td></tr>`;
- }).join(""):`<tr><td colspan="11">Aucune paie enregistrée.</td></tr>`}
- </tbody></table></div></div>`;
-}
-function payrollForm(id="",employeeId=""){
- const p=id?payrollRows().find(x=>String(x.id)===String(id)):null;
- const eid=p?.employeeId||employeeId||"",e=employeeRows().find(x=>String(x.id)===String(eid));
- const payCycle=p?.payCycle||employeePayCycle(e)||"Hebdomadaire",salary=+p?.grossAmount||employeeBaseSalary(e)||0;
- const project=p?.project||employeeProject(e)||currentProjectContext()||"";
- const legacy=p&&(p.advancePaid===undefined&&p.balancePaid===undefined);
- const legacyBalance=legacy&&p.workflow!=="En attente"?(+p.netPaid||salary):0;
- $("#content").innerHTML=`<div class="panel"><h3>${p?"MODIFIER":"NOUVELLE"} PAIE</h3><form id="fPayroll" class="form-grid">
- <label>Employé<select name="employeeId" id="payEmployee" required onchange="payrollEmployeeChanged(this.value)"><option value="">Choisir</option>${employeeRows().filter(x=>x.workflow!=="Inactif").map(x=>`<option value="${esc(x.id)}" ${String(eid)===String(x.id)?"selected":""}>${esc(employeeName(x))} — ${esc(employeeRole(x))}</option>`).join("")}</select></label>
- <label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(x=>!x.deleted).map(x=>`<option value="${esc(x.id)}" ${String(project)===String(x.id)?"selected":""}>${esc(x.id)} — ${esc(x.name||"")}</option>`).join("")}</select></label>
- <label>Catégorie<input id="payCategory" value="${esc(employeeCategory(e)||"")}" readonly></label>
- <label>Poste<input id="payRole" value="${esc(employeeRole(e)||"")}" readonly></label>
- <label>Mode de paiement<input name="payCycle" id="payCycle" value="${esc(payCycle)}" readonly></label>
- <label>Période<select name="periodType" id="periodType"><option value="Semaine" ${payCycle==="Hebdomadaire"?"selected":""}>Semaine</option><option value="Mois" ${payCycle==="Mensuel"?"selected":""}>Mois</option></select></label>
- <label>Libellé période<input name="periodLabel" value="${esc(p?.periodLabel||"")}" placeholder="${payCycle==="Hebdomadaire"?"Ex: Semaine 30 / 2026":"Ex: Juillet 2026"}" required></label>
- <label>Salaire dû pour la période (Ar)<input name="grossAmount" id="grossAmount" type="number" min="0" value="${salary||""}" oninput="recalcPayrollV456()" required></label>
- <label class="checkline"><input name="advancePaid" id="advancePaid" type="checkbox" ${p?.advancePaid?"checked":""} onchange="recalcPayrollV456()"> Avance déjà versée</label>
- <label>Date avance<input name="advanceDate" type="date" value="${esc(p?.advanceDate||"")}"></label>
- <label>Montant avance (Ar)<input name="advanceAmount" id="advanceAmount" type="number" min="0" value="${+p?.advanceAmount||0}" oninput="recalcPayrollV456()"></label>
- <label class="checkline"><input name="balancePaid" id="balancePaid" type="checkbox" ${(p?.balancePaid||legacyBalance>0)?"checked":""} onchange="recalcPayrollV456()"> Solde payé</label>
- <label>Date paiement solde<input name="balanceDate" type="date" value="${esc(p?.balanceDate||p?.date||"")}"></label>
- <label>Montant solde payé (Ar)<input name="balanceAmount" id="balanceAmount" type="number" min="0" value="${+p?.balanceAmount||legacyBalance||0}" oninput="recalcPayrollV456()"></label>
- <label>Total réellement payé<input id="payrollTotalPaid" value="0" readonly></label>
- <label>Reste salaire<input id="payrollRemaining" value="0" readonly></label>
- <label>Statut<input id="payrollStatus" value="" readonly></label>
- <label class="full">Observation<textarea name="note">${esc(p?.note||"")}</textarea></label>
- <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="payrollPage()">Annuler</button></div></form></div>`;
- recalcPayrollV456();
- $("#fPayroll").onsubmit=ev=>{
-  ev.preventDefault();const f=new FormData(ev.target),emp=employeeRows().find(x=>String(x.id)===String(f.get("employeeId")));if(!emp)return alert("Choisir un employé.");
-  const gross=+f.get("grossAmount")||0,advancePaid=!!f.get("advancePaid"),balancePaid=!!f.get("balancePaid"),advance=advancePaid?(+f.get("advanceAmount")||0):0,balance=balancePaid?(+f.get("balanceAmount")||0):0;
-  if(advance+balance>gross+0.01)return alert("Avance + solde ne peut pas dépasser le salaire dû.");
-  if(advancePaid&&!f.get("advanceDate"))return alert("Veuillez renseigner la date de l’avance.");
-  if(balancePaid&&!f.get("balanceDate"))return alert("Veuillez renseigner la date du paiement du solde.");
-  const paid=advance+balance,remain=Math.max(0,gross-paid),workflow=paid<=0?"En attente":remain<=0.01?"Payé":"Partiel";
-  const obj={id:p?.id||"PAY-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),employeeId:emp.id,employeeName:employeeName(emp),category:employeeCategory(emp),jobTitle:employeeRole(emp),project:f.get("project"),payCycle:employeePayCycle(emp),periodType:f.get("periodType"),periodLabel:f.get("periodLabel"),grossAmount:gross,advancePaid,advanceDate:f.get("advanceDate")||"",advanceAmount:advance,balancePaid,balanceDate:f.get("balanceDate")||"",balanceAmount:balance,totalPaid:paid,remainingSalary:remain,workflow,note:f.get("note")||"",owner:p?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
-  if(p)Object.assign(p,obj);else{obj.createdAt=new Date().toISOString();db.modules.payroll.push(obj);}
-  save();payrollPage();
- };
-}
-function payrollEmployeeChanged(id){
- const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return;
- document.getElementById("payCategory").value=employeeCategory(e);document.getElementById("payRole").value=employeeRole(e);document.getElementById("payCycle").value=employeePayCycle(e);document.getElementById("grossAmount").value=employeeBaseSalary(e);
- const pt=document.getElementById("periodType");if(pt)pt.value=employeePayCycle(e)==="Mensuel"?"Mois":"Semaine";recalcPayrollV456();
-}
-function recalcPayrollV456(){
- const gross=+document.getElementById("grossAmount")?.value||0;
- const adv=document.getElementById("advancePaid")?.checked?(+document.getElementById("advanceAmount")?.value||0):0;
- const bal=document.getElementById("balancePaid")?.checked?(+document.getElementById("balanceAmount")?.value||0):0;
- const paid=adv+bal,remain=Math.max(0,gross-paid);
- const t=document.getElementById("payrollTotalPaid"),r=document.getElementById("payrollRemaining"),s=document.getElementById("payrollStatus");
- if(t)t.value=paid.toFixed(0);if(r)r.value=remain.toFixed(0);if(s)s.value=paid<=0?"En attente":remain<=0.01?"Payé":"Partiel";
-}
-function deletePayroll(id){
- const p=payrollRows().find(x=>String(x.id)===String(id));if(!p)return;
- if(!confirm("Supprimer cette paie ?"))return;p.deleted=true;p.deletedAt=new Date().toISOString();p.deletedBy=user.username;save();payrollPage();
-}
-
+function employeeAdvanceRows(){db.modules.employeeAdvances=Array.isArray(db.modules.employeeAdvances)?db.modules.employeeAdvances:[];return db.modules.employeeAdvances.filter(x=>!x.deleted);}
+function advanceRepaid(a){return(a.repayments||[]).reduce((n,r)=>n+(+r.amount||0),0);}
+function advanceBalance(a){return Math.max(0,(+a.amount||0)-advanceRepaid(a));}
+function employeeAdvanceBalance(employeeId){return employeeAdvanceRows().filter(a=>String(a.employeeId)===String(employeeId)).reduce((n,a)=>n+advanceBalance(a),0);}
+function advanceForm(employeeId=""){const e=employeeRows().find(x=>String(x.id)===String(employeeId));if(!e)return alert("Choisissez un employé.");$("#content").innerHTML=`<div class="panel"><h3>NOUVELLE AVANCE — ${esc(employeeName(e))}</h3><form id="fAdvance" class="form-grid"><label>Date avance<input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label>Montant à rembourser<input name="amount" type="number" min="1" required></label><label>Première date remboursement<input name="firstDueDate" type="date" required></label><label>Nombre de tranches prévues<input name="plannedInstallments" type="number" min="1" value="1" required></label><label class="full">Observation<textarea name="note"></textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="payrollPage()">Annuler</button></div></form></div>`;$("#fAdvance").onsubmit=e2=>{e2.preventDefault();const f=new FormData(e2.target),now=new Date().toISOString(),o={id:"ADV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),employeeId:e.id,employeeName:employeeName(e),date:f.get("date"),amount:+f.get("amount")||0,firstDueDate:f.get("firstDueDate"),plannedInstallments:+f.get("plannedInstallments")||1,repayments:[],note:f.get("note")||"",status:"À rembourser",createdAt:now,updatedAt:now,updatedBy:user.username};db.modules.employeeAdvances.push(o);audit("Nouvelle avance","employeeAdvances",o.id,`${o.employeeName} — ${money(o.amount)}`,null,o);saveLocalOnly();cloudWriteGeneric("employeeAdvances",o,"Avance employé");advanceHistoryPage(e.id)};}
+function advanceHistoryPage(employeeId){const e=employeeRows().find(x=>String(x.id)===String(employeeId)),rows=employeeAdvanceRows().filter(a=>String(a.employeeId)===String(employeeId));$("#content").innerHTML=`<div class="panel"><h3>AVANCES / REMBOURSEMENTS — ${esc(employeeName(e)||"")}</h3><div class="panel-body"><button class="btn primary" onclick="advanceForm('${employeeId}')">+ Nouvelle avance</button> <button class="btn secondary" onclick="payrollPage()">Retour</button></div><div class="table-wrap"><table><thead><tr><th>Date avance</th><th>Montant</th><th>1re échéance</th><th>Tranches prévues</th><th>Remboursé</th><th>Reste</th><th>Détail remboursements</th></tr></thead><tbody>${rows.length?rows.map(a=>`<tr><td>${esc(a.date||"")}</td><td>${money(a.amount)}</td><td>${esc(a.firstDueDate||"")}</td><td>${a.plannedInstallments||1}</td><td>${money(advanceRepaid(a))}</td><td><b>${money(advanceBalance(a))}</b></td><td>${(a.repayments||[]).length?a.repayments.map(r=>`${esc(r.date||"")} : ${money(r.amount)}`).join("<br>"):"Aucun"}</td></tr>`).join(""):'<tr><td colspan="7">Aucune avance.</td></tr>'}</tbody></table></div></div>`;}
+function removePayrollAdvanceRepayments(payrollId){employeeAdvanceRows().forEach(a=>{const old=(a.repayments||[]).length;a.repayments=(a.repayments||[]).filter(r=>String(r.payrollId)!==String(payrollId));if(old!==a.repayments.length){a.status=advanceBalance(a)<=.01?"Remboursée":advanceRepaid(a)>0?"Partiel":"À rembourser";a.updatedAt=new Date().toISOString();cloudWriteGeneric("employeeAdvances",a,"Correction remboursement")}});}
+function applyAdvanceRepayment(employeeId,amount,date,payrollId){let remaining=+amount||0;const rows=employeeAdvanceRows().filter(a=>String(a.employeeId)===String(employeeId)&&advanceBalance(a)>0).sort((a,b)=>String(a.date).localeCompare(String(b.date)));for(const a of rows){if(remaining<=0)break;const part=Math.min(remaining,advanceBalance(a));a.repayments=Array.isArray(a.repayments)?a.repayments:[];a.repayments.push({id:"REP-"+Date.now()+"-"+Math.random().toString(36).slice(2,5),date,amount:part,payrollId});remaining-=part;a.status=advanceBalance(a)<=.01?"Remboursée":"Partiel";a.updatedAt=new Date().toISOString();cloudWriteGeneric("employeeAdvances",a,"Remboursement avance")}}
+function employeeAdvancesTotal(employeeId,excludePayrollId=""){return employeeAdvanceBalance(employeeId);}
+function payrollPage(){const ctx=currentProjectContext(),rows=payrollRows().filter(p=>!ctx||String(p.project)===String(ctx));$("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>PAIE</h3><div class="panel-body"><button class="btn primary" onclick="payrollForm()">+ Nouvelle période de paie</button><div class="notice">Suivi complet des avances et remboursements partiels. La déduction d’avance réduit la dette mais n’est pas une nouvelle sortie de caisse.</div></div><div class="table-wrap"><table><thead><tr><th>Employé</th><th>Période</th><th>Salaire dû</th><th>Payé</th><th>Déduction avance</th><th>Reste salaire</th><th>Dette avance</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${rows.length?rows.map(p=>{const gross=+p.grossAmount||0,adv=p.advancePaid?+p.advanceAmount||0:0,bal=p.balancePaid?+p.balanceAmount||0:0,ded=+p.advanceDeduction||0,paid=adv+bal,remain=Math.max(0,gross-paid-ded);return`<tr><td><b>${esc(p.employeeName||employeeName(employeeRows().find(e=>e.id===p.employeeId))||"")}</b></td><td>${esc(p.periodLabel||"")}</td><td>${money(gross)}</td><td>${money(paid)}</td><td>${money(ded)}</td><td>${money(remain)}</td><td><b>${money(employeeAdvanceBalance(p.employeeId))}</b></td><td>${workflowBadge(p.workflow||"En attente")}</td><td><button class="btn-xs btn-edit" onclick="payrollForm('${p.id}','${p.employeeId}')">Modifier</button> <button class="btn-xs" onclick="advanceHistoryPage('${p.employeeId}')">Avances</button> <button class="btn-xs btn-delete" onclick="deletePayroll('${p.id}')">Supprimer</button></td></tr>`}).join(""):'<tr><td colspan="9">Aucune paie.</td></tr>'}</tbody></table></div></div>`;}
+function payrollForm(id="",employeeId=""){const p=id?payrollRows().find(x=>String(x.id)===String(id)):null,eid=p?.employeeId||employeeId||"",e=employeeRows().find(x=>String(x.id)===String(eid)),cycle=p?.payCycle||employeePayCycle(e)||"Hebdomadaire",salary=+p?.grossAmount||employeeBaseSalary(e)||0,project=p?.project||employeeProject(e)||currentProjectContext()||"";$("#content").innerHTML=`<div class="panel"><h3>${p?"MODIFIER":"NOUVELLE"} PAIE</h3><form id="fPayroll" class="form-grid"><label>Employé<select name="employeeId" id="payEmployee" required onchange="payrollEmployeeChanged(this.value)"><option value="">Choisir</option>${employeeRows().filter(x=>x.workflow!=="Inactif").map(x=>`<option value="${esc(x.id)}" ${String(eid)===String(x.id)?"selected":""}>${esc(employeeName(x))} — ${esc(employeeRole(x))}</option>`).join("")}</select></label><label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(x=>!x.deleted).map(x=>`<option value="${esc(x.id)}" ${String(project)===String(x.id)?"selected":""}>${esc(x.id)} — ${esc(x.name||"")}</option>`).join("")}</select></label><label>Poste<input id="payRole" value="${esc(employeeRole(e)||"")}" readonly></label><label>Mode<input id="payCycle" value="${esc(cycle)}" readonly></label><label>Période<input name="periodLabel" value="${esc(p?.periodLabel||"")}" required></label><label>Salaire dû<input name="grossAmount" id="grossAmount" type="number" min="0" value="${salary||""}" oninput="recalcPayrollV456()" required></label><label class="checkline"><input name="advancePaid" id="advancePaid" type="checkbox" ${p?.advancePaid?"checked":""} onchange="recalcPayrollV456()"> Avance salaire versée</label><label>Date avance<input name="advanceDate" type="date" value="${esc(p?.advanceDate||"")}"></label><label>Montant avance salaire<input name="advanceAmount" id="advanceAmount" type="number" min="0" value="${+p?.advanceAmount||0}" oninput="recalcPayrollV456()"></label><label class="checkline"><input name="balancePaid" id="balancePaid" type="checkbox" ${p?.balancePaid?"checked":""} onchange="recalcPayrollV456()"> Solde payé</label><label>Date solde<input name="balanceDate" type="date" value="${esc(p?.balanceDate||"")}"></label><label>Montant solde<input name="balanceAmount" id="balanceAmount" type="number" min="0" value="${+p?.balanceAmount||0}" oninput="recalcPayrollV456()"></label><label>Dette avance à rembourser<input id="advanceDebtOutstanding" value="${employeeAdvanceBalance(eid)}" readonly></label><label>Déduction avance<input name="advanceDeduction" id="advanceDeduction" type="number" min="0" value="${+p?.advanceDeduction||0}" oninput="recalcPayrollV456()"></label><label>Date remboursement<input name="advanceRepaymentDate" type="date" value="${esc(p?.advanceRepaymentDate||"")}"></label><label>Source des fonds<select name="fundSource"><option ${p?.fundSource==="Caisse Gestionnaire"||(!p&&user.role==="GESTIONNAIRE")?"selected":""}>Caisse Gestionnaire</option><option ${p?.fundSource==="Admin"||(!p&&user.role==="ADMIN")?"selected":""}>Admin</option></select></label><label>Total réellement payé<input id="payrollTotalPaid" readonly></label><label>Reste salaire<input id="payrollRemaining" readonly></label><label>Statut<input id="payrollStatus" readonly></label><label class="full">Observation<textarea name="note">${esc(p?.note||"")}</textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="payrollPage()">Annuler</button></div></form></div>`;recalcPayrollV456();$("#fPayroll").onsubmit=ev=>{ev.preventDefault();const f=new FormData(ev.target),emp=employeeRows().find(x=>String(x.id)===String(f.get("employeeId")));if(!emp)return alert("Choisir un employé.");const gross=+f.get("grossAmount")||0,ap=!!f.get("advancePaid"),bp=!!f.get("balancePaid"),advance=ap?(+f.get("advanceAmount")||0):0,balance=bp?(+f.get("balanceAmount")||0):0,ded=+f.get("advanceDeduction")||0;if(ded>employeeAdvanceBalance(emp.id)+.01)return alert("Déduction supérieure à la dette d’avance.");if(advance+balance+ded>gross+.01)return alert("Paiements + déduction dépassent le salaire dû.");if(ap&&!f.get("advanceDate"))return alert("Date avance requise.");if(bp&&!f.get("balanceDate"))return alert("Date solde requise.");if(ded>0&&!f.get("advanceRepaymentDate"))return alert("Date remboursement requise.");const paid=advance+balance,remain=Math.max(0,gross-paid-ded),workflow=(paid+ded)<=0?"En attente":remain<=.01?"Payé":"Partiel",now=new Date().toISOString(),o={id:p?.id||"PAY-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),employeeId:emp.id,employeeName:employeeName(emp),jobTitle:employeeRole(emp),project:f.get("project"),payCycle:employeePayCycle(emp),periodLabel:f.get("periodLabel"),grossAmount:gross,advancePaid:ap,advanceDate:f.get("advanceDate")||"",advanceAmount:advance,balancePaid:bp,balanceDate:f.get("balanceDate")||"",balanceAmount:balance,advanceDeduction:ded,advanceRepaymentDate:f.get("advanceRepaymentDate")||"",fundSource:f.get("fundSource")||"Caisse Gestionnaire",totalPaid:paid,remainingSalary:remain,workflow,note:f.get("note")||"",owner:p?.owner||user.username,updatedBy:user.username,updatedAt:now};const before=p?cloneRecord(p):null;if(p)Object.assign(p,o);else{o.createdAt=now;db.modules.payroll.push(o)}removePayrollAdvanceRepayments(o.id);if(ded>0)applyAdvanceRepayment(emp.id,ded,o.advanceRepaymentDate,o.id);audit(p?"Modification paie":"Création paie","payroll",o.id,`${o.employeeName} — ${money(o.totalPaid)} — remboursement ${money(ded)}`,before,o);saveLocalOnly();cloudWriteGeneric("payroll",o,"Paie");payrollPage()};}
+function payrollEmployeeChanged(id){const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return;document.getElementById("payRole").value=employeeRole(e);document.getElementById("payCycle").value=employeePayCycle(e);document.getElementById("grossAmount").value=employeeBaseSalary(e);document.getElementById("advanceDebtOutstanding").value=employeeAdvanceBalance(e.id);recalcPayrollV456();}
+function recalcPayrollV456(){const gross=+document.getElementById("grossAmount")?.value||0,adv=document.getElementById("advancePaid")?.checked?(+document.getElementById("advanceAmount")?.value||0):0,bal=document.getElementById("balancePaid")?.checked?(+document.getElementById("balanceAmount")?.value||0):0,ded=+document.getElementById("advanceDeduction")?.value||0,paid=adv+bal,remain=Math.max(0,gross-paid-ded);if(document.getElementById("payrollTotalPaid"))document.getElementById("payrollTotalPaid").value=paid.toFixed(0);if(document.getElementById("payrollRemaining"))document.getElementById("payrollRemaining").value=remain.toFixed(0);if(document.getElementById("payrollStatus"))document.getElementById("payrollStatus").value=(paid+ded)<=0?"En attente":remain<=.01?"Payé":"Partiel";}
+function deletePayroll(id){const p=payrollRows().find(x=>String(x.id)===String(id));if(!p||!confirm("Supprimer cette paie ?"))return;removePayrollAdvanceRepayments(p.id);const before=cloneRecord(p);p.deleted=true;p.deletedAt=new Date().toISOString();p.updatedAt=p.deletedAt;audit("Suppression paie","payroll",p.id,p.employeeName,before,p);saveLocalOnly();cloudWriteGeneric("payroll",p,"Paie supprimée");payrollPage();}
 
 
 // ===== ENCAISSEMENTS CLIENTS V4.6.0 =====
@@ -2199,6 +2109,18 @@ function validateClientReceipt(id,accept){
 function acceptedQuotesForProject(projectId){
  return (db.quotes||[]).filter(q=>q.status==="Accepté"&&(!projectId||String(q.project)===String(projectId)));
 }
+function invoiceDisplayNo(r){return String(r?.invoiceNo||r?.id||"");}
+function generateInvoiceInternalId(){
+ if(globalThis.crypto?.randomUUID)return "INV-"+crypto.randomUUID();
+ return "INV-"+Date.now()+"-"+Math.random().toString(36).slice(2,10);
+}
+function generateInvoiceNumber(){
+ const y=new Date().getFullYear();
+ const nums=(db.modules?.invoices||[]).map(r=>String(r.invoiceNo||r.id||""))
+  .map(v=>{const m=v.match(new RegExp("^FAC-"+y+"-(\\d{4})$"));return m?+m[1]:0;});
+ const n=Math.max(0,...nums)+1;
+ return "FAC-"+y+"-"+String(n).padStart(4,"0");
+}
 function invoiceLegacyAmount(r){return +(r?.trancheAmount||r?.values?.[2]||0)||0;}
 function isClearlyGhostInvoice(r){
  if(!r||r.deleted)return false;
@@ -2239,6 +2161,52 @@ function quarantineLegacyInvoices(){
  return legacyInvoiceRows().length;
 }
 function legacyInvoiceReviewPage(){if(user.role!=="ADMIN")return;const rows=legacyInvoiceRows();$("#content").innerHTML=`<div class="panel"><h3>ANCIENNES DONNÉES DE FACTURATION À VÉRIFIER</h3><div class="panel-body"><button class="btn secondary" onclick="invoicesPage()">← Retour Facturation</button><div class="notice">Ces données sont isolées et ne participent plus aux totaux ni au reste à facturer.</div></div><div class="table-wrap"><table><thead><tr><th>Référence</th><th>Ancien montant</th><th>Raison</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc(r.id||"")}</td><td>${money(+(r.values?.[2]||r.trancheAmount||0))}</td><td>${esc(r.legacyReason||"Donnée incomplète")}</td></tr>`).join(""):'<tr><td colspan="3">Aucune ancienne donnée isolée.</td></tr>'}</tbody></table></div></div>`;}
+async function invoiceRecoveryPage(){
+ if(user.role!=="ADMIN")return;
+ $("#content").innerHTML=`<div class="panel"><h3>RÉCUPÉRATION & HISTORIQUE FACTURATION</h3>
+ <div class="panel-body"><button class="btn secondary" onclick="invoicesPage()">← Retour Facturation</button>
+ <div class="notice">Centre de sécurité : versions locales, Cloud, audit et sauvegardes automatiques avant conflit. Restaurer crée une nouvelle version sûre sans écraser l’original.</div></div>
+ <div id="invoiceRecoveryRows" class="table-wrap">Chargement…</div></div>`;
+ let candidates=[];
+ const add=(source,snap,date="")=>{
+  if(!snap||!(+snap.quoteAmount||+snap.trancheAmount||+snap.values?.[2]||0))return;
+  candidates.push({source,date:date||snap.updatedAt||snap.createdAt||"",snapshot:snap});
+ };
+ (db.modules?.invoices||[]).forEach(x=>add("Local actuel",cloneRecord(x)));
+ (db.syncRecovery||[]).filter(x=>x.collection==="invoices").forEach(x=>{
+  add("Backup local avant sync",x.localSnapshot,x.createdAt);
+  add("Version Cloud observée",x.remoteSnapshot,x.createdAt);
+ });
+ try{
+  if(cloudReady&&fbStore){
+   const [si,sa]=await Promise.all([fbStore.collection("invoices").get(),fbStore.collection("auditLog").where("module","==","invoices").get()]);
+   si.docs.forEach(d=>add("Cloud actuel",{id:d.id,...d.data()}));
+   sa.docs.forEach(d=>{const a=d.data();if(a.after)add("Audit — "+(a.action||"action"),a.after,a.date);if(a.before)add("Audit avant — "+(a.action||"action"),a.before,a.date);});
+  }
+ }catch(e){console.warn("recovery scan",e);}
+ const seen=new Set();
+ candidates=candidates.filter(c=>{const k=recordFingerprint(c.snapshot);if(seen.has(k))return false;seen.add(k);return true;})
+  .sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
+ const el=document.getElementById("invoiceRecoveryRows");
+ el.innerHTML=`<table><thead><tr><th>Source</th><th>Date version</th><th>N°</th><th>Chantier</th><th>Client</th><th>Montant devis</th><th>Tranche</th><th>Montant tranche</th><th>Action</th></tr></thead><tbody>
+ ${candidates.length?candidates.map((c,i)=>{const r=c.snapshot;return `<tr><td>${esc(c.source)}</td><td>${c.date?new Date(c.date).toLocaleString("fr-FR"):""}</td><td><b>${esc(invoiceDisplayNo(r))}</b></td><td>${esc(projectLabel(r.project)||r.project||"")}</td><td>${esc(r.client||r.values?.[1]||"")}</td><td>${money(+r.quoteAmount||0)}</td><td>${(+r.tranchePercent||0).toFixed(2)}%</td><td>${money(invoiceLegacyAmount(r))}</td><td><button class="btn-xs btn-edit" onclick="restoreInvoiceCandidate(${i})">Restaurer copie</button></td></tr>`;}).join(""):'<tr><td colspan="9">Aucune version récupérable trouvée.</td></tr>'}
+ </tbody></table>`;
+ window.__invoiceRecoveryCandidates=candidates;
+}
+async function restoreInvoiceCandidate(index){
+ if(user.role!=="ADMIN")return;
+ const c=window.__invoiceRecoveryCandidates?.[index];if(!c)return alert("Version introuvable.");
+ const s=cloneRecord(c.snapshot),actor=effectiveUserIdentity(),now=new Date().toISOString();
+ const restored={...s,id:generateInvoiceInternalId(),invoiceNo:(s.invoiceNo||invoiceDisplayNo(s)||generateInvoiceNumber())+"-R",
+  deleted:false,restoredFrom:s.id||"",restoredSource:c.source,restoredAt:now,updatedAt:now,updatedBy:actor.label||actor.username||user.username};
+ delete restored.cloudSyncedAt;delete restored.legacyQuarantined;delete restored.__syncConflict;
+ db.modules.invoices.push(restored);saveLocalOnly();
+ audit("Restauration facture","invoices",restored.id,`Depuis ${c.source} — ${restored.invoiceNo}`,null,cloneRecord(restored));
+ await cloudWriteGeneric("invoices",restored,"Facture restaurée");
+ alert("Copie restaurée. L’ancienne version n’a pas été écrasée.");
+ invoicesPage();
+}
+
 function invoicePaidForProject(projectId,excludeId=""){
  return invoiceRows().filter(r=>String(r.project)===String(projectId)&&String(r.id)!==String(excludeId))
   .reduce((n,r)=>n+invoiceLegacyAmount(r),0);
@@ -2254,6 +2222,7 @@ function invoicesPage(){
  const rows=invoiceRows().filter(r=>!ctx||String(r.project||"")===String(ctx));
  $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>FACTURATION PAR CHANTIER</h3>
  <div class="panel-body"><button class="btn primary" onclick="invoiceForm()">+ Nouvelle tranche / facture</button>
+ <button class="btn secondary" onclick="invoiceRecoveryPage()">🛟 Historique / récupération</button>
  ${legacyInvoiceRows().length?`<button class="btn secondary" onclick="legacyInvoiceReviewPage()">⚠ ${legacyInvoiceRows().length} ancienne(s) donnée(s) isolée(s)</button>`:""}
  <div class="notice">Chaque facture est rattachée à un chantier. Ici, le reste signifie « reste à facturer ». Les paiements réellement reçus sont enregistrés séparément dans ENCAISSEMENTS CLIENTS.</div></div>
  <div class="table-wrap"><table><thead><tr><th>N° facture</th><th>Date</th><th>Chantier</th><th>Client</th><th>Devis validé</th><th>Montant devis</th><th>Tranche</th><th>Montant tranche</th><th>Total facturé</th><th>Reste à facturer</th><th>Actions</th></tr></thead><tbody>
@@ -2261,7 +2230,7 @@ function invoicesPage(){
   const qa=+r.quoteAmount||validatedQuoteAmount(r.project,r.quoteId);
   const paid=invoiceRows().filter(x=>String(x.project)===String(r.project)).reduce((n,x)=>n+invoiceLegacyAmount(x),0);
   const remain=Math.max(0,qa-paid),pr=(db.projects||[]).find(p=>String(p.id)===String(r.project));
-  return `<tr><td><b>${esc(r.id)}</b></td><td>${esc(r.date||"")}</td><td>${esc(pr?.name||r.project||"")}</td><td>${esc(r.client||r.values?.[1]||"")}</td><td>${esc(r.quoteId||"")}</td><td>${money(qa||(+r.quoteAmount||0))}</td><td><b>${(+r.tranchePercent||0).toFixed(2)}%</b></td><td>${money(invoiceLegacyAmount(r))}</td><td>${money(paid)}</td><td><b>${money(remain)}</b></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="invoiceForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="deleteInvoice('${r.id}')">Supprimer</button></div></td></tr>`;
+  return `<tr><td><b>${esc(invoiceDisplayNo(r))}</b></td><td>${esc(r.date||"")}</td><td>${esc(pr?.name||r.project||"")}</td><td>${esc(r.client||r.values?.[1]||"")}</td><td>${esc(r.quoteId||"")}</td><td>${money(qa||(+r.quoteAmount||0))}</td><td><b>${(+r.tranchePercent||0).toFixed(2)}%</b></td><td>${money(invoiceLegacyAmount(r))}</td><td>${money(paid)}</td><td><b>${money(remain)}</b></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="invoiceForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="deleteInvoice('${r.id}')">Supprimer</button></div></td></tr>`;
  }).join(""):`<tr><td colspan="11">Aucune facture pour ce chantier.</td></tr>`}
  </tbody></table></div></div>`;
 }
@@ -2273,7 +2242,8 @@ function invoiceForm(id="",projectOverride=""){
  const selectedQuoteId=r?.quoteId||quotes.slice(-1)[0]?.id||"",selectedQuote=(db.quotes||[]).find(q=>q.id===selectedQuoteId);
  const qa=r?.quoteAmount||(selectedQuote?quoteFinancials(selectedQuote).ttc:0),pct=+r?.tranchePercent||0;
  $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} FACTURATION</h3><div class="notice">Vous pouvez sélectionner un devis accepté pour remplir automatiquement les champs, ou saisir manuellement le client et le montant du devis validé.</div><form id="fInvoice" class="form-grid">
- <label>N° facture<input name="id" value="${esc(r?.id||"FAC-"+new Date().getFullYear()+"-"+String(db.modules.invoices.length+1).padStart(4,"0"))}" required></label>
+ <input type="hidden" name="recordId" value="${esc(r?.id||generateInvoiceInternalId())}">
+ <label>N° facture<input name="invoiceNo" value="${esc(r?.invoiceNo||r?.id?.startsWith("FAC-")?r.id:generateInvoiceNumber())}" required></label>
  <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
  <label>Chantier<select name="project" required onchange="invoiceProjectChanged(this.value)"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(projectId)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
  <label>Devis validé<select name="quoteId" onchange="invoiceQuoteChanged(this.value)"><option value="">Saisie manuelle / aucun devis lié</option>${quotes.map(q=>`<option value="${esc(q.id)}" ${q.id===selectedQuoteId?"selected":""}>${esc(q.id)} — ${money(quoteFinancials(q).ttc)}</option>`).join("")}</select></label>
@@ -2294,14 +2264,31 @@ function invoiceForm(id="",projectOverride=""){
   if(amount<=0)return alert("Veuillez renseigner le montant du devis validé.");
   if(already+tranche>amount+0.01)return alert("Cette tranche dépasse le reste à payer.");
   const before=r?cloneRecord(r):null,actor=effectiveUserIdentity();
-  const obj={id:f.get("id"),date:f.get("date"),project,quoteId:quoteId||"",client,quoteAmount:amount,tranchePercent:pct,trancheAmount:tranche,note:f.get("note")||"",workflow:r?.workflow||"Validé",owner:r?.owner||actor.username||user.username,updatedBy:actor.label||actor.username||user.username,updatedAt:new Date().toISOString()};
+  const obj={
+   id:r?.id||f.get("recordId")||generateInvoiceInternalId(),
+   invoiceNo:String(f.get("invoiceNo")||r?.invoiceNo||r?.id||generateInvoiceNumber()).trim(),
+   date:f.get("date"),project,quoteId:quoteId||"",client,quoteAmount:amount,tranchePercent:pct,trancheAmount:tranche,
+   note:f.get("note")||"",workflow:r?.workflow||"Validé",owner:r?.owner||actor.username||user.username,
+   updatedBy:actor.label||actor.username||user.username,updatedAt:new Date().toISOString()
+  };
   if(r)Object.assign(r,obj);else{obj.createdAt=new Date().toISOString();db.modules.invoices.push(obj);}
-  audit(r?"Modification facture":"Création facture","invoices",obj.id,`${client} — ${money(tranche)}`,before,cloneRecord(obj));sessionStorage.removeItem("nysoa_invoice_form_project");save();invoicesPage();
+  audit(r?"Modification facture":"Création facture","invoices",obj.id,`${obj.invoiceNo} — ${client} — ${money(tranche)}`,before,cloneRecord(obj));
+  sessionStorage.removeItem("nysoa_invoice_form_project");
+  saveLocalOnly();
+  cloudWriteGeneric("invoices",obj,r?"Facture modifiée":"Nouvelle facture");
+  invoicesPage();
  };
 }
 function invoiceProjectChanged(projectId){
  sessionStorage.setItem("nysoa_invoice_form_project",String(projectId||""));
- invoiceForm("",String(projectId||""));
+ const qsel=document.querySelector('#fInvoice select[name="quoteId"]');
+ if(!qsel)return;
+ const quotes=acceptedQuotesForProject(projectId);
+ qsel.innerHTML='<option value="">Saisie manuelle / aucun devis lié</option>'+
+  quotes.map(q=>`<option value="${esc(q.id)}">${esc(q.id)} — ${money(quoteFinancials(q).ttc)}</option>`).join("");
+ const already=document.getElementById("invoiceAlreadyPaid");
+ if(already)already.value=invoicePaidForProject(projectId,"");
+ recalcInvoiceForm();
 }
 function invoiceQuoteChanged(quoteId){
  const q=(db.quotes||[]).find(x=>x.id===quoteId);
@@ -2321,7 +2308,7 @@ function deleteInvoice(id){
  const r=(db.modules.invoices||[]).find(x=>String(x.id)===String(id));if(!r)return;
  if(!confirm("Supprimer cette facture / tranche ?"))return;
  const before=cloneRecord(r),actor=effectiveUserIdentity();r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=actor.label||actor.username||user.username;r.updatedAt=r.deletedAt;
- audit("Suppression facture","invoices",r.id,"Facture/tranche supprimée",before,cloneRecord(r));save();invoicesPage();
+ audit("Suppression facture","invoices",r.id,"Facture/tranche supprimée",before,cloneRecord(r));saveLocalOnly();cloudWriteGeneric("invoices",r,"Facture supprimée");invoicesPage();
 }
 
 
@@ -2791,7 +2778,7 @@ function missingDailyReportMessage(){
  if(!r)return `⚠ Rapport journalier du ${new Date().toLocaleDateString("fr-FR")} non rempli.`;
  if(r.cloudSyncedAt)return "";
  if(r.status==="Brouillon"||r.status==="Complété"||r.status==="Prêt à envoyer")
-   return `⚠ Le rapport du ${new Date(r.reportDate+"T12:00:00").toLocaleDateString("fr-FR")} n’est pas encore envoyé à l’Admin.`;
+   return `⚠ Le rapport du ${new Date(r.reportDate+"T12:00:00").toLocaleDateString("fr-FR")} n’est pas encore envoyé à l’Admin.${dashboardAutoCharts()}`;
  if(r.status==="Exporté vers Admin")return "Rapport exporté. En attente de réception par l’Admin.";
  return "";
 }

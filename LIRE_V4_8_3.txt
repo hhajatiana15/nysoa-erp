@@ -1,0 +1,22 @@
+NYSOA ERP V4.8.3 — JOURNAL DES DÉPENSES UNIFIÉ
+
+RÈGLE FINANCIÈRE UNIQUE
+Le Journal des dépenses contient automatiquement toutes les sorties réelles:
+- Achats dont État paiement = Payé
+- Avances salaire réellement versées
+- Soldes salaire réellement payés
+- Dépenses manuelles payées
+Les lignes provenant d'Achat ou Paie sont automatiques et ne doivent jamais être ressaisies.
+
+ANTI-DOUBLON
+- Suppression du mécanisme qui créait DEP-ACH-* à partir d'un achat payé.
+- Les anciens DEP-ACH liés restent dans les données historiques mais sont ignorés dans le journal et dans les coûts.
+- Si un achat payé est modifié (montant/statut), le journal lit directement sa valeur actuelle : pas de ligne obsolète.
+
+COHÉRENCE
+- totalOperatingExpenses utilise exactement la même logique que le journal.
+- Journal Caisse utilise le journal unifié pour toutes les sorties.
+- Paie et Achats sont synchronisés explicitement au Cloud après enregistrement.
+- Suppression Achat/Dépense est synchronisée.
+
+Base: V4.8.2 Data Integrity Stable.
