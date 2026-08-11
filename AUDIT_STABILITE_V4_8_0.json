@@ -1,0 +1,32 @@
+{
+  "version": "4.8.0 BASELINE STABLE",
+  "base": "4.7.9",
+  "status": "STATIC AUDIT PASSED",
+  "checks": [
+    "JavaScript syntax",
+    "menu/router handlers",
+    "Firebase TECHNICIEN shared login",
+    "mini technician simultaneous sessions",
+    "real user activity and audit trail",
+    "all business collections auto-sync",
+    "remote deletion handling",
+    "permanent cloud deletion",
+    "facturation real-vs-legacy protection and project filter",
+    "employee edit/badge/matricule",
+    "QR scan attribution",
+    "pointage all employees active/passive + QR/manual",
+    "caisse unified Admin/Gestionnaire",
+    "appro duplicate protection linkedApproId",
+    "audit coverage employees/expenses/appro/factures",
+    "obsolete manual sync workflow hidden",
+    "finance workspace caisse unification",
+    "true active time per mini-technician",
+    "5-minute real-activity window",
+    "active employee KPI excludes passive employees"
+  ],
+  "notes": [
+    "Firebase security rules and live multi-device behavior require deployment/runtime testing because credentials/rules are external to the ZIP.",
+    "Camera QR scanning loads html5-qrcode 2.3.8 from CDN; manual QR entry remains fallback if the library cannot load.",
+    "Existing repository assets/logo_nysoa_construct.png must remain in GitHub; the patch ZIP does not remove repository assets."
+  ]
+}

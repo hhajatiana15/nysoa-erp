@@ -1,0 +1,8 @@
+NYSOA ERP V4.7.9 — FACTURATION / TOUS LES CHANTIERS FIX
+
+- « Tous les chantiers » fonctionne réellement dans le sélecteur global.
+- Valeur vide = aucun filtre = toutes les factures affichées.
+- Le choix d'un chantier filtre uniquement l'affichage Facturation.
+- Le choix du chantier à l'intérieur du formulaire de nouvelle facture ne verrouille plus le filtre global.
+- Le filtre est réaffiché correctement après changement.
+- Toutes les corrections V4.7.8 (restauration des vraies factures) sont conservées.

@@ -79,10 +79,6 @@
           <button id="cloudSyncBtn" class="btn cloud-sync-btn" onclick="cloudSyncNow()" title="Secours uniquement — la synchronisation normale est automatique">☁ Synchronisation de secours</button>
           <button class="btn secondary" onclick="exportBackup()">💾 Sauvegarde complète Admin</button>
           <input id="externalImportFile" type="file" accept=".xlsx,.xls,.csv,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/json" class="hidden" onchange="handleExternalImport(event)">
-          <input id="syncImportFile" type="file" accept=".nysoa,application/octet-stream" class="hidden" onchange="handleSyncImport(event)">
-          <input id="validationImportFile" type="file" accept=".nysoa,application/octet-stream" class="hidden" onchange="handleValidationImport(event)">
-          <input id="usageImportFile" type="file" accept=".nysoa,application/octet-stream" class="hidden" onchange="handleUsageImport(event)">
-          <input id="dailyReportImportFile" type="file" accept=".nysoa,application/octet-stream" class="hidden" onchange="handleDailyReportImport(event)">
         </div>
         <section id="content"></section>
         <div id="printArea" class="hidden"></div>
@@ -91,7 +87,7 @@
 
     <footer class="footer">
       <span>© 2026 ENTREPRISE NYSOA CONSTRUCT - Tous droits réservés</span>
-      <span>Logiciel de Gestion BTP - Version 4.7.3 Matricule Auto par Fonction</span>
+      <span>Logiciel de Gestion BTP - Version 4.8.0 BASELINE STABLE</span>
       <span>Téléphone / WhatsApp : +261 34 99 498 49</span>
     </footer>
   </div>
@@ -100,6 +96,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
   <script src="qrcode.min.js"></script>
   <script src="app.js"></script>
 </body>

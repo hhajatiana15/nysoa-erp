@@ -86,12 +86,12 @@ function technicianMiniCreate(){
  <label>PIN personnel<input name="pin" inputmode="numeric" minlength="4" maxlength="8" required placeholder="4 à 8 chiffres"></label>
  <div class="form-actions full"><button class="btn primary">Créer et entrer</button><button type="button" class="btn secondary" onclick="technicianIdentityGate()">Annuler</button></div></form></div>`;
  document.getElementById("fMiniTech").onsubmit=async ev=>{ev.preventDefault();const f=new FormData(ev.target),name=String(f.get("name")||"").trim(),pin=String(f.get("pin")||"").trim();if(!/^\d{4,8}$/.test(pin))return alert("PIN : 4 à 8 chiffres.");
- const obj={id:"TMIN-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),name,pin,active:true,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};await saveTechnicianMiniProfile(obj);sessionStorage.setItem("nysoa_technician_identity",JSON.stringify({id:obj.id,name:obj.name}));$("#currentUserLabel").textContent=obj.name+" — Technicien";lastMeaningfulActivityAt=Date.now();await logUserActivity("Identification technicien créée","session",obj.id,obj.name);renderMenu();go("dashboard");};
+ const obj={id:"TMIN-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),name,pin,active:true,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};await saveTechnicianMiniProfile(obj);sessionStorage.setItem("nysoa_technician_identity",JSON.stringify({id:obj.id,name:obj.name}));$("#currentUserLabel").textContent=obj.name+" — Technicien";lastMeaningfulActivityAt=Date.now();startUsageSession();startPresence();await logUserActivity("Identification technicien créée","session",obj.id,obj.name);renderMenu();go("dashboard");};
 }
 async function technicianMiniLogin(id){
  const rows=await loadTechnicianMiniProfiles(),t=rows.find(x=>String(x.id)===String(id));if(!t)return alert("Identité introuvable.");
  const pin=prompt("PIN personnel de "+t.name+" :");if(pin===null)return;if(String(pin)!==String(t.pin||""))return alert("PIN incorrect.");
- sessionStorage.setItem("nysoa_technician_identity",JSON.stringify({id:t.id,name:t.name}));$("#currentUserLabel").textContent=t.name+" — Technicien";lastMeaningfulActivityAt=Date.now();await logUserActivity("Identification technicien","session",t.id,t.name);renderMenu();go("dashboard");
+ sessionStorage.setItem("nysoa_technician_identity",JSON.stringify({id:t.id,name:t.name}));$("#currentUserLabel").textContent=t.name+" — Technicien";lastMeaningfulActivityAt=Date.now();startUsageSession();startPresence();await logUserActivity("Identification technicien","session",t.id,t.name);renderMenu();go("dashboard");
 }
 async function technicianMyIdentity(){
  const cur=technicianSessionProfile();if(!cur)return technicianIdentityGate();const rows=await loadTechnicianMiniProfiles(),t=rows.find(x=>String(x.id)===String(cur.id));if(!t)return technicianIdentityGate();
@@ -100,7 +100,7 @@ async function technicianMyIdentity(){
  <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="go('dashboard')">Annuler</button><button type="button" class="btn secondary" onclick="technicianChangeIdentity()">Changer de technicien</button></div></form></div>`;
  document.getElementById("fMiniTechEdit").onsubmit=async ev=>{ev.preventDefault();const f=new FormData(ev.target),name=String(f.get("name")||"").trim(),pin=String(f.get("pin")||"").trim();if(pin&&!/^\d{4,8}$/.test(pin))return alert("PIN : 4 à 8 chiffres.");t.name=name;if(pin)t.pin=pin;t.updatedAt=new Date().toISOString();await saveTechnicianMiniProfile(t);sessionStorage.setItem("nysoa_technician_identity",JSON.stringify({id:t.id,name:t.name}));$("#currentUserLabel").textContent=t.name+" — Technicien";await logUserActivity("Identité technicien modifiée","session",t.id,t.name);renderMenu();go("dashboard");};
 }
-function technicianChangeIdentity(){sessionStorage.removeItem("nysoa_technician_identity");lastMeaningfulActivityAt=0;technicianIdentityGate();}
+function technicianChangeIdentity(){closeUsageSession("Changement de technicien");stopPresence();sessionStorage.removeItem("nysoa_usage_session_id");sessionStorage.removeItem("nysoa_technician_identity");lastMeaningfulActivityAt=0;$("#currentUserLabel").textContent=user?.label||"Technicien";technicianIdentityGate();}
 
 // ===== FIREBASE CLOUD SYNC — VERSION 4.5 / PHASE 1 =====
 // Phase 1 : Authentication, profils utilisateurs, chantiers et rapports journaliers.
@@ -124,11 +124,16 @@ let presenceTimer=null;
 let adminNotifUnsub=null;
 let cloudAutoSyncTimer=null;
 
-const CLOUD_MODULE_COLLECTIONS=new Set(["attendanceWeekly","attendanceQR","employees","payroll","purchases","stock","stockMovements","invoices"]);
+const CLOUD_MODULE_COLLECTIONS=new Set([
+ "attendanceWeekly","attendanceQR","employees","payroll","purchases","stock","stockMovements","invoices",
+ "clients","suppliers","bank","accounting","treasury","planning","situations","technicalFollowup","quality",
+ "nonConformities","equipment","vehicles","fuel"
+]);
 const CLOUD_BUSINESS_COLLECTIONS=[
- "projects","quotes","invoices","clientReceipts","requests","appro","expenses",
- "purchases","stock","stockMovements","employees","payroll",
- "siteControls","reports","dailyReports","attendanceWeekly","attendanceQR","usageSessions"
+ "projects","quotes","invoices","clientReceipts","requests","appro","expenses","purchases","stock","stockMovements",
+ "employees","payroll","siteControls","reports","dailyReports","attendanceWeekly","attendanceQR","usageSessions",
+ "clients","suppliers","bank","accounting","treasury","planning","situations","technicalFollowup","quality",
+ "nonConformities","equipment","vehicles","fuel"
 ];
 function cloudCollectionLocalRows(collection){
  if(CLOUD_MODULE_COLLECTIONS.has(collection))return db.modules?.[collection]||[];
@@ -238,7 +243,10 @@ function pageUsesCollection(page,collection){
   dailyReports:["dailyReports","dashboard","dashboardTechnique"],
   attendanceWeekly:["attendance","dashboard","dashboardTechnique"],
   attendanceQR:["qrAttendance","attendance","dashboard","dashboardTechnique"],
-  usageSessions:["usageTime","presenceUsers","dashboard"]
+  usageSessions:["usageTime","presenceUsers","dashboard"],
+  clients:["clients"],suppliers:["suppliers"],bank:["bank"],accounting:["accounting"],treasury:["treasury"],
+  planning:["planning"],situations:["situations","dashboardTechnique"],technicalFollowup:["technicalFollowup"],
+  quality:["quality"],nonConformities:["nonConformities"],equipment:["equipment"],vehicles:["vehicles"],fuel:["fuel"]
  };
  return (map[collection]||[]).includes(page);
 }
@@ -254,20 +262,15 @@ function scheduleRealtimeRender(collection){
 }
 function startExtendedRealtimeListeners(){
  if(!cloudReady||!user)return;
- CLOUD_BUSINESS_COLLECTIONS.filter(collection=>!["projects","dailyReports"].includes(collection)).forEach(collection=>{
+ CLOUD_BUSINESS_COLLECTIONS.forEach(collection=>{
   try{
    cloudListeners.push(fbStore.collection(collection).onSnapshot(s=>{
+    let local=cloudCollectionLocalRows(collection);
+    const removed=new Set(s.docChanges().filter(c=>c.type==="removed").map(c=>String(c.doc.id)));
+    if(removed.size){local=local.filter(r=>!removed.has(String(r.id)));replaceCloudCollectionLocalRows(collection,local);}
     const remote=s.docs.map(d=>({id:d.id,...d.data()}));
-    const local=cloudCollectionLocalRows(collection);
-    const map=new Map(local.map(r=>[String(r.id),r]));
-    let changed=false;
-    remote.forEach(r=>{
-     const l=map.get(String(r.id));
-     if(!l){local.push(r);changed=true;return;}
-     const rt=Date.parse(r.updatedAt||r.cloudSyncedAt||r.createdAt||0)||0;
-     const lt=Date.parse(l.updatedAt||l.cloudSyncedAt||l.createdAt||0)||0;
-     if(rt>=lt && recordFingerprint(l)!==recordFingerprint(r)){Object.assign(l,r);changed=true;}
-    });
+    const map=new Map(local.map(r=>[String(r.id),r]));let changed=removed.size>0;
+    remote.forEach(r=>{const l=map.get(String(r.id));if(!l){local.push(r);changed=true;return;}const rt=Date.parse(r.updatedAt||r.cloudSyncedAt||r.createdAt||0)||0,lt=Date.parse(l.updatedAt||l.cloudSyncedAt||l.createdAt||0)||0;if(rt>=lt&&recordFingerprint(l)!==recordFingerprint(r)){Object.assign(l,r);changed=true;}});
     rememberCollectionFingerprints(collection,remote);
     if(changed){replaceCloudCollectionLocalRows(collection,local);scheduleRealtimeRender(collection);}
     cloudMarkSynced();
@@ -308,7 +311,7 @@ function cashTable(){
 function dashboardDetail(type){
  let title="",rows=[];
  if(type==="revenue"){title="DÉTAIL DU CHIFFRE D’AFFAIRES";rows=(db.projects||[]).filter(p=>!p.deleted).map(p=>({a:p.name||p.id,b:p.client||"",c:money(+p.budget||0),d:p.status||""}));}
- if(type==="employees"){title="DÉTAIL DES EMPLOYÉS ACTIFS";rows=(db.modules?.employees||[]).filter(e=>!e.deleted).map(e=>({a:e.values?.[1]||"",b:e.values?.[4]||"Non affecté",c:e.values?.[2]||"",d:"Actif"}));}
+ if(type==="employees"){title="DÉTAIL DES EMPLOYÉS ACTIFS";rows=(db.modules?.employees||[]).filter(e=>!e.deleted&&employeeStatusLabel(e)==="Actif").map(e=>({a:employeeName(e),b:projectLabel(employeeProject(e))||"Non affecté",c:employeeRole(e),d:employeeStatusLabel(e)}));}
  if(type==="projects"){title="DÉTAIL DES CHANTIERS";rows=(db.projects||[]).filter(p=>!p.deleted).map(p=>({a:p.name||p.id,b:p.client||"",c:(p.progress||0)+"%",d:p.status||""}));}
  $("#content").innerHTML=`<div class="panel"><h3>${title}</h3><div class="table-wrap"><table><thead><tr><th>Nom / Chantier</th><th>Affectation / Client</th><th>Valeur / Fonction</th><th>Statut</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td><b>${esc(r.a)}</b></td><td>${esc(r.b)}</td><td>${esc(r.c)}</td><td>${esc(r.d)}</td></tr>`).join(""):`<tr><td colspan="4">Aucune donnée.</td></tr>`}</tbody></table></div></div>`;
 }
@@ -316,7 +319,7 @@ function cleanupExpiredLocalPhotos(){const days=+(db.appSettings?.photoRetention
 
 
 function legacyUsernameForRole(role){
-  return role==="ADMIN"?"admin":role==="GESTIONNAIRE"?"gestionnaire":role==="CONTROLE"?"controle":"user";
+  return role==="ADMIN"?"admin":role==="GESTIONNAIRE"?"gestionnaire":role==="CONTROLE"?"controle":role==="TECHNICIEN"?"technicien":"user";
 }
 function cloudStatusText(text,kind="normal"){
   cloudState.status=text;
@@ -353,7 +356,7 @@ async function cloudLoadProfile(fbUser){
   if(!snap.exists)throw new Error("Profil Firestore introuvable pour cet utilisateur.");
   const profile=snap.data()||{};
   if(profile.active!==true)throw new Error("Ce compte est désactivé.");
-  if(!["ADMIN","GESTIONNAIRE","CONTROLE"].includes(profile.role))throw new Error("Rôle utilisateur non reconnu.");
+  if(!["ADMIN","GESTIONNAIRE","CONTROLE","TECHNICIEN"].includes(profile.role))throw new Error("Rôle utilisateur non reconnu.");
   return {
     uid:fbUser.uid,
     email:fbUser.email||"",
@@ -485,7 +488,7 @@ async function cloudSyncNow(){
   cloudStatusText("Synchronisation de secours…","busy");
   await cloudSyncPendingPhase1();
   await cloudAutoSyncAll("manuel-secours");
-  cloudStopListeners();cloudAttachPhase1Listeners();startExtendedRealtimeListeners();
+  cloudStopListeners();startExtendedRealtimeListeners();
   cloudMarkSynced();
   alert("Synchronisation terminée. Le mode normal reste automatique.");
 }
@@ -550,9 +553,8 @@ function initFirebaseCloud(){
         sessionStorage.setItem("nysoa_v2_user",JSON.stringify(user));
         cloudLocalUserUpsert();
         boot();
-        cloudAttachPhase1Listeners();
         startExtendedRealtimeListeners();
-        startPresence();
+        if(user.role!=="TECHNICIEN"||technicianSessionProfile())startPresence();
         startCloudAutoSync();
         if(user.role==="ADMIN")startAdminNotifications();
         await cloudSyncPendingPhase1();
@@ -570,7 +572,7 @@ function initFirebaseCloud(){
     if(msg)msg.textContent="Connexion Firebase indisponible. Vérifiez Internet puis actualisez la page.";
   }
 }
-window.addEventListener("online",()=>{cloudStatusText("Reconnexion…","busy");if(user&&cloudReady){cloudSyncPendingPhase1();cloudAutoSyncAll("reconnexion");cloudStopListeners();cloudAttachPhase1Listeners();startExtendedRealtimeListeners();}});
+window.addEventListener("online",()=>{cloudStatusText("Reconnexion…","busy");if(user&&cloudReady){cloudSyncPendingPhase1();cloudAutoSyncAll("reconnexion");cloudStopListeners();startExtendedRealtimeListeners();}});
 window.addEventListener("offline",()=>cloudStatusText("Hors ligne","error"));
 
 const INIT={
@@ -625,13 +627,8 @@ function audit(action,moduleName,reference,details="",before=null,after=null){
  logUserActivity(action,moduleName,reference,details);
 }
 function pushHistory(record,action,before=null,details=""){
- record.history=Array.isArray(record.history)?record.history:[];
- record.history.unshift({
-  id:"HIS-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
-  date:new Date().toISOString(),
-  user:user.username,role:user.role,action,details,
-  snapshot:before?cloneRecord(before):null
- });
+ const actor=effectiveUserIdentity();record.history=Array.isArray(record.history)?record.history:[];
+ record.history.unshift({id:"HIS-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:new Date().toISOString(),user:actor.label||actor.username||user.username,role:actor.role||user.role,technicianId:actor.technicianId||"",action,details,snapshot:before?cloneRecord(before):null});
 }
 function isLocked(record){
  const state=record?.workflow||record?.status||"Brouillon";
@@ -684,7 +681,7 @@ function permanentDelete(collection,moduleName,id){
  const record=rows.find(x=>String(x.id)===String(id));
  db[collection]=rows.filter(x=>String(x.id)!==String(id));
  audit("Suppression définitive",moduleName,id,"Suppression définitive",record,null);
- save();if(collection==="projects"||collection==="dailyReports")cloudDelete(collection,id);trashPage();
+ save();if(CLOUD_BUSINESS_COLLECTIONS.includes(collection))cloudDelete(collection,id);trashPage();
 }
 function showRecordHistory(collection,id){
  const record=(db[collection]||[]).find(x=>String(x.id)===String(id));
@@ -764,9 +761,8 @@ const ADMIN_FINANCE_MENU=[
  ["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],
  ["purchases","🛒","ACHATS"],["stock","📦","STOCK"],
  ["employees","👥","EMPLOYÉS"],["qrAttendance","▣","PRÉSENCE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],
- ["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES"],
- ["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],
- ["treasury","💰","TRÉSORERIE"],["reportsFinance","◔","RAPPORTS FINANCIERS"]
+ ["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["accounting","📚","COMPTABILITÉ"],
+ ["reportsFinance","◔","RAPPORTS FINANCIERS"]
 ];
 const ADMIN_TECH_MENU=[
  ["dashboardTechnique","◉","TABLEAU DE BORD TECHNIQUE"],
@@ -778,8 +774,8 @@ const ADMIN_TECH_MENU=[
 ];
 
 const menus={
- ADMIN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["situations","📊","SITUATION DE TRAVAUX"],["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],["fuel","⛽","CARBURANT"],["employees","👥","EMPLOYÉS"],["qrAttendance","▣","PRÉSENCE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","APPRO. CAISSE"],["accounting","📚","COMPTABILITÉ"],["treasury","💵","TRÉSORERIE"],["dailyReports","📝","RAPPORTS JOURNALIERS"],["reports","◔","RAPPORTS"],["adminValidations","✅","VALIDATIONS À PUBLIER"],["usageTime","⏱","TEMPS D’UTILISATION"],["trash","🗑","CORBEILLE"],["audit","📜","JOURNAL D’AUDIT"],["logicAudit","🧭","CONTRÔLE LOGIQUE ERP"],["presenceUsers","●","UTILISATEURS ACTIFS"],["technicians","🧑‍🔧","TECHNICIENS & ACCÈS"],["settings","⚙","PARAMÈTRES"]],
- GESTIONNAIRE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["employees","👥","EMPLOYÉS"],["qrAttendance","▣","SCAN BADGE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["expenses","☷","DÉPENSES (JOURNAL)"],["appro","💵","DEMANDE D'APPRO."],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS FINANCIERS"]],
+ ADMIN:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["quotes","📄","DEVIS"],["invoices","🧾","FACTURATION"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["situations","📊","SITUATION DE TRAVAUX"],["clients","👥","CLIENTS"],["suppliers","🚚","FOURNISSEURS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["equipment","🏗","MATÉRIELS & ENGINS"],["vehicles","🚚","VÉHICULES"],["fuel","⛽","CARBURANT"],["employees","👥","EMPLOYÉS"],["qrAttendance","▣","PRÉSENCE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["bank","🏦","BANQUE"],["accounting","📚","COMPTABILITÉ"],["dailyReports","📝","RAPPORTS JOURNALIERS"],["reports","◔","RAPPORTS"],["adminValidations","✅","VALIDATIONS"],["usageTime","⏱","TEMPS D’UTILISATION"],["trash","🗑","CORBEILLE"],["audit","📜","JOURNAL D’AUDIT"],["logicAudit","🧭","CONTRÔLE LOGIQUE ERP"],["presenceUsers","●","UTILISATEURS ACTIFS"],["technicians","🧑‍🔧","TECHNICIENS & ACCÈS"],["settings","⚙","PARAMÈTRES"]],
+ GESTIONNAIRE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["purchases","🛒","ACHATS"],["stock","📦","STOCK"],["employees","👥","EMPLOYÉS"],["qrAttendance","▣","SCAN BADGE QR"],["attendance","◷","POINTAGE"],["payroll","💵","PAIE"],["cash","💵","CAISSE"],["clientReceipts","💳","ENCAISSEMENTS CLIENTS"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS FINANCIERS"]],
  CONTROLE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["qrAttendance","▣","SCAN BADGE QR"],["siteControls","📷","CONTRÔLE CHANTIER"],["attendance","◷","PRÉSENCE CHANTIER"],["situations","📊","SITUATION DE TRAVAUX"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]],
  TECHNICIEN:[["dashboard","◉","TABLEAU DE BORD"],["technicianMyIdentity","👤","MON IDENTITÉ"],["projects","🏗","CHANTIERS"],["qrAttendance","▣","SCAN BADGE QR"],["attendance","◷","POINTAGE"],["siteControls","📷","SUIVI CHANTIER"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
 };
@@ -823,7 +819,7 @@ async function login(u,p){
     return false;
   }
 }
-function boot(){ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();if(user.role!=="ADMIN")startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");const actor=effectiveUserIdentity();$("#currentUserLabel").textContent=actor.label||user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");renderMenu();
+function boot(){ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();if(user.role!=="ADMIN"&&(user.role!=="TECHNICIEN"||technicianSessionProfile()))startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");const actor=effectiveUserIdentity();$("#currentUserLabel").textContent=actor.label||user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");renderMenu();
 const obsoleteManualButtons=["sendUpdatesBtn","refreshAdminBtn","publishValidationBtn","importValidationBtn","exportUsageBtn","importUsageBtn","exportDailyReportsBtn","importDailyReportsBtn","cloudMigrateBtn"];
 obsoleteManualButtons.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display="none";});
 const cloudSyncBtn=document.getElementById("cloudSyncBtn");
@@ -879,9 +875,15 @@ function renderGlobalProjectSelector(){
  }
 }
 function setGlobalProjectContext(projectId){
- if(projectId)sessionStorage.setItem("nysoa_project_context",projectId);
+ const value=String(projectId||"").trim();
+ if(value)sessionStorage.setItem("nysoa_project_context",value);
  else sessionStorage.removeItem("nysoa_project_context");
- go(cloudCurrentPage||"dashboard");
+ const el=document.getElementById("globalProjectFilter");
+ if(el)el.value=value;
+ // Re-render current module immediately with the new filter.
+ if((cloudCurrentPage||"")==="invoices")invoicesPage();
+ else go(cloudCurrentPage||"dashboard");
+ setTimeout(renderGlobalProjectSelector,0);
 }
 function matchesProjectContext(record){
  const p=currentProjectContext();
@@ -1086,7 +1088,7 @@ function dashboard(){
  let totalRevenue=totalInvoiced();
  let totalReceived=totalClientReceipts("",true);
  let netProfit=totalRevenue-totalDep;
- let activeEmployees=employees.length;
+ let activeEmployees=employees.filter(e=>employeeStatusLabel(e)==="Actif").length;
  let todayKey=new Date().toISOString().slice(0,10);
  let attendanceToday=(db.modules.attendanceWeekly||[])
    .reduce((n,r)=>n+(r.entries||[]).filter(e=>e.states?.[todayKey]==="P").length,0);
@@ -1401,6 +1403,7 @@ function projectTechnicalForm(id){
   save();projects();
  };
 }
+function usersManagement(){if(user?.role!=="ADMIN")return alert("Réservé à l’Admin.");adminPresencePage();}
 function userForm(username=""){
  const existing=username?findUser(username):null;
  $("#content").innerHTML=`<div class="panel"><h3>${existing?"MODIFIER":"AJOUTER"} UN UTILISATEUR</h3>
@@ -1612,7 +1615,7 @@ async function processBadgeScan(code){
  const now=new Date(),date=now.toISOString().slice(0,10),same=qrAttendanceRows().filter(r=>r.employeeId===e.id&&r.project===project&&r.date===date).sort((a,b)=>String(b.timestamp).localeCompare(String(a.timestamp)));
  const last=same[0];if(last&&now-new Date(last.timestamp)<30000)return showQrResult(`Double scan ignoré — ${employeeName(e)}.`,false);
  const direction=last?.direction==="Entrée"?"Sortie":"Entrée";
- const rec={id:"QRATT-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),employeeId:e.id,employeeName:employeeName(e),jobTitle:employeeRole(e),project,date,timestamp:now.toISOString(),direction,scannedBy:user.username,scannedByLabel:user.label,scannerUid:user.uid||"",owner:user.username,createdAt:now.toISOString(),updatedAt:now.toISOString()};
+ const actor=effectiveUserIdentity();const rec={id:"QRATT-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),employeeId:e.id,employeeName:employeeName(e),jobTitle:employeeRole(e),project,date,timestamp:now.toISOString(),direction,scannedBy:actor.username||user.username,scannedByLabel:actor.label||actor.username||user.label,scannerUid:actor.uid||user.uid||"",technicianId:actor.technicianId||"",owner:user.username,createdAt:now.toISOString(),updatedAt:now.toISOString()};
  db.modules.attendanceQR.push(rec);save();syncQrPresenceToWeekly(e,project,date);logUserActivity("Scan badge QR — "+direction,"pointage",e.id,employeeName(e)+" — "+projectLabel(project));cloudWriteGeneric("attendanceQR",rec,"Scan badge QR");
  showQrResult(`${direction} enregistrée — ${employeeName(e)} — ${now.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}.`,true);setTimeout(qrAttendancePage,900);
 }
@@ -1625,23 +1628,22 @@ function syncQrPresenceToWeekly(e,project,date){
 }
 async function techniciansPage(){
  if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
- $("#content").innerHTML='<div class="panel"><h3>TECHNICIENS & ACCÈS</h3><div class="panel-body">Chargement des profils…</div></div>';
- try{const snap=await fbStore.collection("users").get();const rows=snap.docs.map(d=>({uid:d.id,...d.data()})).filter(x=>["TECHNICIEN","CONTROLE"].includes(x.role));
- $("#content").innerHTML=`<div class="panel"><h3>TECHNICIENS & ACCÈS</h3><div class="panel-body"><button class="btn primary" onclick="technicianForm()">+ Ajouter un technicien</button><div class="notice">Chaque technicien possède son propre compte Firebase (e-mail + mot de passe). Les affectations chantier sont enregistrées dans son profil.</div></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>E-mail</th><th>Chantiers affectés</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${rows.length?rows.map(t=>`<tr><td><b>${esc(t.displayName||t.label||"")}</b></td><td>${esc(t.email||"")}</td><td>${esc((t.assignedProjects||[]).map(projectLabel).join(", ")||"Tous")}</td><td>${t.active===true?'<span class="qr-in">Actif</span>':'<span class="qr-out">Désactivé</span>'}</td><td><button class="btn-xs btn-edit" onclick="technicianEdit('${t.uid}')">Modifier</button> <button class="btn-xs" onclick="technicianToggle('${t.uid}',${t.active===true?'false':'true'})">${t.active===true?'Désactiver':'Activer'}</button> <button class="btn-xs" onclick="technicianReset('${esc(t.email||"")}')">Réinitialiser MDP</button></td></tr>`).join(""):'<tr><td colspan="5">Aucun technicien.</td></tr>'}</tbody></table></div></div>`;
- }catch(err){$("#content").innerHTML=`<div class="panel"><h3>TECHNICIENS & ACCÈS</h3><div class="panel-body"><div class="notice error">${esc(err.message||String(err))}</div></div></div>`;}
+ const rows=await loadTechnicianMiniProfiles();
+ $("#content").innerHTML=`<div class="panel"><h3>TECHNICIENS — MINI IDENTITÉS</h3><div class="panel-body">
+ <button class="btn primary" onclick="adminMiniTechnicianForm()">+ Ajouter une identité technicien</button>
+ <div class="notice">Un seul login Firebase TECHNICIEN est partagé. Chaque technicien utilise ensuite son Nom + PIN personnel sur son propre téléphone ou ordinateur. Plusieurs techniciens peuvent travailler simultanément.</div></div>
+ <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Statut</th><th>Dernière modification</th><th>Actions</th></tr></thead><tbody>
+ ${rows.length?rows.map(t=>`<tr><td><b>${esc(t.name||"")}</b></td><td>${t.active!==false?'<span class="qr-in">Actif</span>':'<span class="qr-out">Passif</span>'}</td><td>${t.updatedAt?new Date(t.updatedAt).toLocaleString("fr-FR"):""}</td><td><button class="btn-xs btn-edit" onclick="adminMiniTechnicianForm('${t.id}')">Modifier</button> <button class="btn-xs" onclick="adminMiniTechnicianToggle('${t.id}',${t.active===false?'true':'false'})">${t.active===false?'Activer':'Désactiver'}</button></td></tr>`).join(""):'<tr><td colspan="4">Aucune identité technicien.</td></tr>'}
+ </tbody></table></div></div>`;
 }
-function technicianForm(){
- if(user.role!=="ADMIN")return;
- $("#content").innerHTML=`<div class="panel"><h3>NOUVEAU TECHNICIEN</h3><form id="fTechnician" class="form-grid"><label>Nom affiché<input name="displayName" required></label><label>E-mail de connexion<input name="email" type="email" required></label><label>Mot de passe initial<input name="password" type="password" minlength="6" required></label><label class="full">Chantiers affectés<div class="project-checks">${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<label><input type="checkbox" name="projects" value="${esc(p.id)}"> ${esc(p.id)} — ${esc(p.name||"")}</label>`).join("")||"Aucun chantier créé."}</div></label><div class="form-actions full"><button class="btn primary">Créer le compte</button><button type="button" class="btn secondary" onclick="techniciansPage()">Annuler</button></div></form></div>`;
- document.getElementById("fTechnician").onsubmit=async ev=>{ev.preventDefault();const btn=ev.target.querySelector('button[type="submit"]')||ev.target.querySelector("button");btn.disabled=true;const f=new FormData(ev.target),email=String(f.get("email")).trim(),password=String(f.get("password")),displayName=String(f.get("displayName")).trim(),assignedProjects=f.getAll("projects");let secondary=null;try{secondary=firebase.apps.find(a=>a.name==="nysoaUserCreator")||firebase.initializeApp(FIREBASE_CONFIG,"nysoaUserCreator");const cred=await secondary.auth().createUserWithEmailAndPassword(email,password);await fbStore.collection("users").doc(cred.user.uid).set({email,displayName,role:"TECHNICIEN",active:true,assignedProjects,createdAt:new Date().toISOString(),createdBy:user.uid||user.username});await secondary.auth().signOut();alert("Compte technicien créé avec succès.");techniciansPage();}catch(err){alert("Création impossible : "+(err.message||String(err)));}finally{btn.disabled=false;}};
+async function adminMiniTechnicianForm(id=""){
+ if(user.role!=="ADMIN")return;const rows=await loadTechnicianMiniProfiles(),t=id?rows.find(x=>String(x.id)===String(id)):null;
+ $("#content").innerHTML=`<div class="panel"><h3>${t?"MODIFIER":"AJOUTER"} UNE IDENTITÉ TECHNICIEN</h3><form id="fAdminMiniTech" class="form-grid">
+ <label>Nom<input name="name" value="${esc(t?.name||"")}" required></label><label>PIN ${t?"(laisser vide pour conserver)":""}<input name="pin" inputmode="numeric" minlength="4" maxlength="8" ${t?"":"required"}></label>
+ <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="techniciansPage()">Annuler</button></div></form></div>`;
+ document.getElementById("fAdminMiniTech").onsubmit=async ev=>{ev.preventDefault();const f=new FormData(ev.target),name=String(f.get("name")||"").trim(),pin=String(f.get("pin")||"").trim();if((!t||pin)&&!/^[0-9]{4,8}$/.test(pin))return alert("PIN : 4 à 8 chiffres.");const obj=t?{...t}:{id:"TMIN-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),active:true,createdAt:new Date().toISOString()};obj.name=name;if(pin)obj.pin=pin;obj.updatedAt=new Date().toISOString();await saveTechnicianMiniProfile(obj);audit(t?"Modification identité technicien":"Création identité technicien","technicianMiniProfiles",obj.id,obj.name,t||null,obj);techniciansPage();};
 }
-async function technicianEdit(uid){
- const snap=await fbStore.collection("users").doc(uid).get();if(!snap.exists)return alert("Profil introuvable.");const t=snap.data(),assigned=t.assignedProjects||[];
- $("#content").innerHTML=`<div class="panel"><h3>MODIFIER TECHNICIEN</h3><form id="fTechnicianEdit" class="form-grid"><label>Nom affiché<input name="displayName" value="${esc(t.displayName||t.label||"")}" required></label><label>E-mail<input value="${esc(t.email||"")}" readonly></label><label class="full">Chantiers affectés<div class="project-checks">${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<label><input type="checkbox" name="projects" value="${esc(p.id)}" ${assigned.includes(p.id)?"checked":""}> ${esc(p.id)} — ${esc(p.name||"")}</label>`).join("")}</div></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="techniciansPage()">Annuler</button></div></form></div>`;
- document.getElementById("fTechnicianEdit").onsubmit=async ev=>{ev.preventDefault();const f=new FormData(ev.target);await fbStore.collection("users").doc(uid).set({displayName:String(f.get("displayName")).trim(),assignedProjects:f.getAll("projects"),updatedAt:new Date().toISOString(),updatedBy:user.uid||user.username},{merge:true});alert("Profil mis à jour.");techniciansPage();};
-}
-async function technicianToggle(uid,active){if(!confirm(active?"Réactiver ce technicien ?":"Désactiver ce technicien ?"))return;await fbStore.collection("users").doc(uid).set({active,updatedAt:new Date().toISOString(),updatedBy:user.uid||user.username},{merge:true});techniciansPage();}
-async function technicianReset(email){if(!email)return;try{await fbAuth.sendPasswordResetEmail(email);alert("E-mail de réinitialisation envoyé à "+email);}catch(err){alert(err.message||String(err));}}
+async function adminMiniTechnicianToggle(id,active){if(user.role!=="ADMIN")return;const rows=await loadTechnicianMiniProfiles(),t=rows.find(x=>String(x.id)===String(id));if(!t)return;t.active=!!active;t.updatedAt=new Date().toISOString();await saveTechnicianMiniProfile(t);audit(active?"Activation technicien":"Désactivation technicien","technicianMiniProfiles",id,t.name);techniciansPage();}
 
 
 const PURCHASE_STATUSES=["Demandé","Approuvé","Effectué","Livré","Refusé","Annulé"];
@@ -1774,7 +1776,7 @@ function expenseRows(){
 function expensesPage(){
  const ctx=currentProjectContext();
  const rows=expenseRows().filter(x=>!ctx||String(x.project)===String(ctx));
- $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>DÉPENSES (JOURNAL)</h3>
+ $("#content").innerHTML=`${caisseNav("expenses")}${projectContextNotice()}<div class="panel"><h3>DÉPENSES (JOURNAL)</h3>
  <div class="panel-body"><button class="btn primary" onclick="expenseForm()">+ Nouvelle dépense</button>
  <div class="notice">Une dépense est une sortie réelle de caisse. Chaque saisie doit être rattachée à un chantier.</div></div>
  <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Catégorie</th><th>Libellé</th><th>Montant</th><th>Mode</th><th>Référence</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
@@ -1798,23 +1800,28 @@ function expenseForm(id=""){
  $("#fExpense").onsubmit=e=>{
   e.preventDefault();const f=new FormData(e.target);
   const obj={id:r?.id||"DEP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),category:f.get("category"),label:f.get("label"),amount:+f.get("amount")||0,paymentMode:f.get("paymentMode"),reference:f.get("reference")||"",status:f.get("status"),note:f.get("note")||"",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
-  if(r)Object.assign(r,obj);else{obj.createdAt=new Date().toISOString();db.expenses.push(obj);}
-  save();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("expenses",obj,"Nouvelle dépense");expensesPage();
+  const before=r?cloneRecord(r):null;if(r)Object.assign(r,obj);else{obj.createdAt=new Date().toISOString();db.expenses.push(obj);}
+  audit(r?"Modification dépense":"Création dépense","expenses",obj.id,`${obj.label} — ${money(obj.amount)}`,before,cloneRecord(obj));save();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("expenses",obj,"Nouvelle dépense");expensesPage();
  };
 }
 function deleteExpense(id){
  const r=expenseRows().find(x=>String(x.id)===String(id));if(!r)return;
  if(!confirm("Supprimer cette dépense ?"))return;
- r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=user.username;r.updatedAt=new Date().toISOString();save();expensesPage();
+ const before=cloneRecord(r),actor=effectiveUserIdentity();r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=actor.label||actor.username||user.username;r.updatedAt=r.deletedAt;audit("Suppression dépense","expenses",r.id,r.label||"",before,cloneRecord(r));save();expensesPage();
 }
 
+function caisseNav(active="journal"){
+ const btn=(key,label,fn)=>`<button class="btn ${active===key?"primary":"secondary"}" onclick="${fn}">${label}</button>`;
+ return `<div class="panel caisse-hub"><h3>💵 MODULE CAISSE</h3><div class="panel-body form-actions">${btn("journal","Vue générale / Journal","cashPage()")}${btn("appro","Demandes & Approvisionnements","approPage()")}${btn("expenses","Dépenses caisse","expensesPage()")}${btn("treasury","Trésorerie","cashTreasuryPage()")}</div></div>`;
+}
+function cashTreasuryPage(){generic("treasury");const c=document.getElementById("content");if(c)c.innerHTML=caisseNav("treasury")+c.innerHTML;}
 function approPage(){
  db.requests=Array.isArray(db.requests)?db.requests:[];
  db.appro=Array.isArray(db.appro)?db.appro:[];
  const ctx=currentProjectContext();
  const req=db.requests.filter(x=>!x.deleted&&(!ctx||String(x.project)===String(ctx))).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
  const aps=db.appro.filter(x=>!x.deleted&&x.status==="Validée"&&(!ctx||String(x.project)===String(ctx))).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
- $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>${user.role==="ADMIN"?"APPROVISIONNEMENT CAISSE":"DEMANDE D’APPROVISIONNEMENT"}</h3>
+ $("#content").innerHTML=`${caisseNav("appro")}${projectContextNotice()}<div class="panel"><h3>${user.role==="ADMIN"?"APPROVISIONNEMENT CAISSE":"DEMANDE D’APPROVISIONNEMENT"}</h3>
  <div class="panel-body"><button class="btn primary" onclick="approForm()">+ ${user.role==="ADMIN"?"Nouvel approvisionnement":"Nouvelle demande"}</button>
  <div class="notice">APPRO. CAISSE = entrée de fonds destinée au fonctionnement d’un chantier. Ce n’est pas une dépense.</div></div>
  <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Montant</th><th>Motif</th><th>Mode</th><th>Référence</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
@@ -1838,11 +1845,11 @@ function approForm(id=""){
   e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString();
   if(user.role==="ADMIN"){
    const obj={id:"APP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),amount:+f.get("amount")||0,purpose:f.get("purpose"),paymentMode:f.get("paymentMode"),reference:f.get("reference")||"",note:f.get("note")||"",status:"Validée",owner:user.username,createdAt:now,updatedAt:now};
-   db.appro.push(obj);save();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("appro",obj);approPage();return;
+   db.appro.push(obj);audit("Création approvisionnement caisse","appro",obj.id,`${projectLabel(obj.project)} — ${money(obj.amount)}`,null,obj);save();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("appro",obj);approPage();return;
   }
   const obj={id:r?.id||"DEM-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),amount:+f.get("amount")||0,purpose:f.get("purpose"),paymentMode:f.get("paymentMode"),reference:f.get("reference")||"",note:f.get("note")||"",status:r?.status||"En attente",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};
-  if(r)Object.assign(r,obj);else{obj.createdAt=now;db.requests.push(obj);}
-  save();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("requests",obj,"Nouvelle demande d’approvisionnement");approPage();
+  const before=r?cloneRecord(r):null;if(r)Object.assign(r,obj);else{obj.createdAt=now;db.requests.push(obj);}
+  audit(r?"Modification demande approvisionnement":"Création demande approvisionnement","requests",obj.id,`${projectLabel(obj.project)} — ${money(obj.amount)}`,before,obj);save();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("requests",obj,"Nouvelle demande d’approvisionnement");approPage();
  };
 }
 function validateApproRequest(id,accept){
@@ -1856,7 +1863,7 @@ function validateApproRequest(id,accept){
    r.linkedApproId=a.id;db.appro.push(a);if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("appro",a);
   }
  }else{r.status="Rejetée";r.rejectedAt=now;r.rejectedBy=user.username;r.updatedAt=now;}
- save();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("requests",r);approPage();
+ audit(accept?"Validation demande approvisionnement":"Rejet demande approvisionnement","requests",r.id,`${projectLabel(r.project)} — ${money(r.amount)}`,null,cloneRecord(r));save();if(typeof cloudWriteGeneric==="function")cloudWriteGeneric("requests",r);approPage();
 }
 
 function payrollActualMovements(projectId=""){
@@ -1887,7 +1894,7 @@ function cashPage(){
  let running=0;
  const rendered=rows.map(r=>{running+=r.type==="Entrée"?+r.amount:-r.amount;return {...r,balance:running};});
  const totalIn=rows.filter(r=>r.type==="Entrée").reduce((n,r)=>n+r.amount,0),totalOut=rows.filter(r=>r.type==="Sortie").reduce((n,r)=>n+r.amount,0);
- $("#content").innerHTML=`${projectContextNotice()}<div class="kpis">${kpi("⬇","green","ENTRÉES CAISSE",money(totalIn))}${kpi("⬆","orange","SORTIES CAISSE",money(totalOut))}${kpi("💵","blue","SOLDE CAISSE",money(totalIn-totalOut))}</div>
+ $("#content").innerHTML=`${caisseNav("journal")}${projectContextNotice()}<div class="kpis">${kpi("⬇","green","ENTRÉES CAISSE",money(totalIn))}${kpi("⬆","orange","SORTIES CAISSE",money(totalOut))}${kpi("💵","blue","SOLDE CAISSE",money(totalIn-totalOut))}</div>
  <div class="panel"><h3>CAISSE — JOURNAL DES MOUVEMENTS</h3><div class="notice">La caisse est calculée automatiquement à partir des approvisionnements validés, dépenses payées et paiements de personnel.</div>
  <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Type</th><th>Source</th><th>Libellé</th><th>Entrée</th><th>Sortie</th><th>Solde progressif</th><th>Référence</th></tr></thead><tbody>
  ${rendered.length?rendered.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${r.type}</td><td>${esc(r.source)}</td><td>${esc(r.label)}</td><td>${r.type==="Entrée"?money(r.amount):""}</td><td>${r.type==="Sortie"?money(r.amount):""}</td><td><b>${money(r.balance)}</b></td><td>${esc(r.reference||"")}</td></tr>`).join(""):`<tr><td colspan="9">Aucun mouvement de caisse.</td></tr>`}
@@ -1949,12 +1956,14 @@ function nextEmployeeMatricule(jobTitle,excludeId=""){
  return prefix+String(max+1).padStart(3,"0");
 }
 function ensureEmployeeMatricules(){
- const rows=employeeRows();
- let changed=false;
+ const rows=employeeRows();let anyChanged=false,changedRows=[];
  rows.forEach(emp=>{
-  if(!employeeMatricule(emp)){emp.matricule=nextEmployeeMatricule(employeeRole(emp),emp.id);emp.updatedAt=new Date().toISOString();changed=true;cloudWriteGeneric("employees",emp,"Attribution matricule automatique");}
+  let rowChanged=false;const old=String(employeeMatricule(emp)||"").trim(),prefix=employeeJobCode(employeeRole(emp));
+  if(!old){emp.matricule=nextEmployeeMatricule(employeeRole(emp),emp.id);rowChanged=true;}
+  else{const legacy=old.match(/^(\d{1,4})[A-Za-zÀ-ÿ]+$/);if(legacy&&!old.toUpperCase().startsWith(prefix)){emp.matricule=prefix+String(parseInt(legacy[1],10)||0).padStart(3,"0");emp.matriculeLegacy=old;emp.matriculeNormalizedAt=new Date().toISOString();rowChanged=true;}}
+  if(rowChanged){emp.updatedAt=new Date().toISOString();anyChanged=true;changedRows.push(emp);}
  });
- if(changed)save();
+ if(anyChanged){save();changedRows.forEach(emp=>cloudWriteGeneric("employees",emp,"Normalisation matricule employé"));}
 }
 
 function employeesPage(){
@@ -2008,8 +2017,8 @@ function employeeForm(id=""){
   const selectedJob=f.get("jobTitle");
   const permanentMatricule=e?.matricule||nextEmployeeMatricule(selectedJob,e?.id||"");
   const obj={...(e||{}),id:e?.id||"EMP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),matricule:permanentMatricule,qrToken:e?.qrToken||("QR"+Date.now().toString(36)+Math.random().toString(36).slice(2,10)).toUpperCase(),name:f.get("name"),category:f.get("category"),jobTitle:selectedJob,project:f.get("project")||"",payCycle:f.get("payCycle"),baseSalary:+f.get("baseSalary")||0,startDate:f.get("startDate")||e?.startDate||"",workflow:f.get("workflow")||e?.workflow||"Actif",owner:e?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString(),photoData:photoData};
-  if(e)Object.assign(e,obj);else{obj.createdAt=new Date().toISOString();db.modules.employees.push(obj);}
-  save();cloudWriteGeneric("employees",obj,e?"Modification employé":"Création employé");logUserActivity(e?"Employé modifié":"Employé créé","employés",obj.id,obj.name);employeeBadge(obj.id);
+  const before=e?cloneRecord(e):null;if(e)Object.assign(e,obj);else{obj.createdAt=new Date().toISOString();db.modules.employees.push(obj);}
+  audit(e?"Modification employé":"Création employé","employees",obj.id,obj.name,before,cloneRecord(obj));save();cloudWriteGeneric("employees",obj,e?"Modification employé":"Création employé");employeeBadge(obj.id);
  };
 }
 function updateEmployeeRoleOptions(selected=""){
@@ -2027,8 +2036,8 @@ function updateEmployeeMatriculePreview(){
 }
 function deleteEmployee(id){
  const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return;
- if(!confirm("Supprimer cet employé ?"))return;
- e.deleted=true;e.deletedAt=new Date().toISOString();e.deletedBy=user.username;save();employeesPage();
+ if(!confirm("Supprimer cet employé ?"))return;const before=cloneRecord(e),actor=effectiveUserIdentity();
+ e.deleted=true;e.deletedAt=new Date().toISOString();e.deletedBy=actor.label||actor.username||user.username;e.updatedAt=e.deletedAt;audit("Suppression employé","employees",e.id,e.name||"",before,cloneRecord(e));save();employeesPage();
 }
 
 function employeeAdvancesTotal(employeeId,excludePayrollId=""){
@@ -2237,7 +2246,8 @@ function validatedQuoteAmount(projectId,quoteId=""){
 }
 function invoicesPage(){
  if(user.role!=="ADMIN")return generic("invoices");
- const ctx="",rows=invoiceRows();
+ const ctx=currentProjectContext();
+ const rows=invoiceRows().filter(r=>!ctx||String(r.project||"")===String(ctx));
  $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>FACTURATION PAR CHANTIER</h3>
  <div class="panel-body"><button class="btn primary" onclick="invoiceForm()">+ Nouvelle tranche / facture</button>
  ${legacyInvoiceRows().length?`<button class="btn secondary" onclick="legacyInvoiceReviewPage()">⚠ ${legacyInvoiceRows().length} ancienne(s) donnée(s) isolée(s)</button>`:""}
@@ -2251,11 +2261,11 @@ function invoicesPage(){
  }).join(""):`<tr><td colspan="11">Aucune facture pour ce chantier.</td></tr>`}
  </tbody></table></div></div>`;
 }
-function invoiceForm(id=""){
+function invoiceForm(id="",projectOverride=""){
  if(user.role!=="ADMIN")return;
  db.modules.invoices=Array.isArray(db.modules.invoices)?db.modules.invoices:[];
  const r=id?db.modules.invoices.find(x=>String(x.id)===String(id)):null;
- const projectId=r?.project||currentProjectContext()||"",quotes=acceptedQuotesForProject(projectId);
+ const projectId=r?.project||projectOverride||sessionStorage.getItem("nysoa_invoice_form_project")||currentProjectContext()||"",quotes=acceptedQuotesForProject(projectId);
  const selectedQuoteId=r?.quoteId||quotes.slice(-1)[0]?.id||"",selectedQuote=(db.quotes||[]).find(q=>q.id===selectedQuoteId);
  const qa=r?.quoteAmount||(selectedQuote?quoteFinancials(selectedQuote).ttc:0),pct=+r?.tranchePercent||0;
  $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} FACTURATION</h3><div class="notice">Vous pouvez sélectionner un devis accepté pour remplir automatiquement les champs, ou saisir manuellement le client et le montant du devis validé.</div><form id="fInvoice" class="form-grid">
@@ -2270,7 +2280,7 @@ function invoiceForm(id=""){
  <label>Total déjà facturé avant cette tranche<input id="invoiceAlreadyPaid" value="${invoicePaidForProject(projectId,r?.id||"")}" readonly></label>
  <label>Reste à facturer après cette tranche<input id="invoiceRemaining" value="0" readonly></label>
  <label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label>
- <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="invoicesPage()">Annuler</button></div></form></div>`;
+ <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="sessionStorage.removeItem('nysoa_invoice_form_project');invoicesPage()">Annuler</button></div></form></div>`;
  recalcInvoiceForm();
  $("#fInvoice").onsubmit=e=>{
   e.preventDefault();const f=new FormData(e.target),project=f.get("project"),quoteId=f.get("quoteId"),q=(db.quotes||[]).find(x=>x.id===quoteId);
@@ -2282,12 +2292,12 @@ function invoiceForm(id=""){
   const before=r?cloneRecord(r):null,actor=effectiveUserIdentity();
   const obj={id:f.get("id"),date:f.get("date"),project,quoteId:quoteId||"",client,quoteAmount:amount,tranchePercent:pct,trancheAmount:tranche,note:f.get("note")||"",workflow:r?.workflow||"Validé",owner:r?.owner||actor.username||user.username,updatedBy:actor.label||actor.username||user.username,updatedAt:new Date().toISOString()};
   if(r)Object.assign(r,obj);else{obj.createdAt=new Date().toISOString();db.modules.invoices.push(obj);}
-  audit(r?"Modification facture":"Création facture","invoices",obj.id,`${client} — ${money(tranche)}`,before,cloneRecord(obj));save();invoicesPage();
+  audit(r?"Modification facture":"Création facture","invoices",obj.id,`${client} — ${money(tranche)}`,before,cloneRecord(obj));sessionStorage.removeItem("nysoa_invoice_form_project");save();invoicesPage();
  };
 }
 function invoiceProjectChanged(projectId){
- if(projectId)sessionStorage.setItem("nysoa_project_context",projectId);else sessionStorage.removeItem("nysoa_project_context");
- invoiceForm();
+ sessionStorage.setItem("nysoa_invoice_form_project",String(projectId||""));
+ invoiceForm("",String(projectId||""));
 }
 function invoiceQuoteChanged(quoteId){
  const q=(db.quotes||[]).find(x=>x.id===quoteId);
@@ -2313,7 +2323,7 @@ function deleteInvoice(id){
 
 const GENERIC_FIELDS={clients:["Nom / raison sociale","Téléphone","Adresse"],suppliers:["Fournisseur","Téléphone","Spécialité"],stock:["Article","Quantité","Unité"],employees:["Matricule","Nom complet","Fonction"],payroll:["Employé","Mois","Net à payer"],bank:["Référence","Libellé","Montant"],accounting:["Journal","Libellé","Montant"],treasury:["Libellé","Échéance","Montant"],planning:["Activité","Début","Fin"],situations:["Situation","Période","Avancement"],technicalFollowup:["Chantier","Travaux du jour","Observation"],quality:["Contrôle","Résultat","Observation"],nonConformities:["Référence","Description","Action corrective"],equipment:["Matériel / engin","État","Affectation"],vehicles:["Véhicule","Immatriculation","État"],fuel:["Véhicule / engin","Quantité (L)","Montant"],invoices:["N° facture","Client","Montant"]};
 function generic(page){
- let label=(menus[user.role].find(x=>x[0]===page)||ADMIN_FINANCE_MENU.concat(ADMIN_TECH_MENU).find(x=>x[0]===page)||[])[2]||page,
+ let label=(page==="treasury"?"TRÉSORERIE CAISSE":(menus[user.role].find(x=>x[0]===page)||ADMIN_FINANCE_MENU.concat(ADMIN_TECH_MENU).find(x=>x[0]===page)||[])[2])||page,
  fields=GENERIC_FIELDS[page]||["Référence","Désignation","Observation"],
  rows=(db.modules[page]||[]).filter(r=>!r.deleted&&matchesProjectContext(r));
  $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>${label}</h3><div class="panel-body">
@@ -2633,21 +2643,22 @@ window.addEventListener("storage",e=>{
 
 
 
-const USAGE_IDLE_LIMIT_MS=15*60*1000;
+const USAGE_IDLE_LIMIT_MS=5*60*1000;
 let lastUsageActivity=Date.now();
 function currentUsageSession(){
  const id=sessionStorage.getItem("nysoa_usage_session_id");
  return id?(db.usageSessions||[]).find(x=>x.id===id):null;
 }
 function startUsageSession(){
- if(!user||user.role==="ADMIN")return;
+ if(!user||user.role==="ADMIN"||(user.role==="TECHNICIEN"&&!technicianSessionProfile()))return;
  db.usageSessions=Array.isArray(db.usageSessions)?db.usageSessions:[];
  let s=currentUsageSession();
  if(s&&!s.closedAt)return;
- const now=new Date().toISOString();
+ const actor=effectiveUserIdentity(),now=new Date().toISOString();
  s={
-  id:"UTI-"+user.username+"-"+Date.now(),
-  username:user.username,label:user.label,role:user.role,
+  id:"UTI-"+(actor.uid||actor.username||user.username)+"-"+Date.now(),
+  uid:actor.uid||user.uid||"",sharedUid:actor.sharedUid||user.uid||"",technicianId:actor.technicianId||"",
+  username:actor.username||user.username,label:actor.label||actor.username||user.label,role:actor.role||user.role,
   loginAt:now,lastSeenAt:now,logoutAt:null,
   activeSeconds:0,idleSeconds:0,closedAt:null,
   device:navigator.userAgent,exported:false
@@ -2670,7 +2681,7 @@ function closeUsageSession(reason="Fermeture"){
  s.logoutAt=new Date().toISOString();s.closedAt=s.logoutAt;s.closeReason=reason;save();
  sessionStorage.removeItem("nysoa_usage_session_id");
 }
-["click","keydown","input","mousemove","touchstart","scroll"].forEach(evt=>document.addEventListener(evt,()=>{lastUsageActivity=Date.now();},{passive:true}));
+["click","keydown","input","change","touchstart"].forEach(evt=>document.addEventListener(evt,()=>{lastUsageActivity=Date.now();},{passive:true}));
 window.addEventListener("beforeunload",()=>{if(user&&user.role!=="ADMIN"){const s=currentUsageSession();if(s){s.lastSeenAt=new Date().toISOString();save();}}});
 setInterval(recordUsageTick,60000);
 
@@ -3387,7 +3398,7 @@ function restoreGeneric(page,id){
 }
 function permanentDeleteGeneric(page,id){
  if(user.role!=="ADMIN"||!confirm("Supprimer définitivement ?"))return;
- const rows=db.modules[page]||[];const before=rows.find(x=>String(x.id)===String(id));db.modules[page]=rows.filter(x=>String(x.id)!==String(id));audit("Suppression définitive","modules."+page,id,"",before,null);save();trashPage();
+ const rows=db.modules[page]||[];const before=rows.find(x=>String(x.id)===String(id));db.modules[page]=rows.filter(x=>String(x.id)!==String(id));audit("Suppression définitive","modules."+page,id,"",before,null);save();if(CLOUD_BUSINESS_COLLECTIONS.includes(page))cloudDelete(page,id);trashPage();
 }
 function showGenericHistory(page,id){
  const record=(db.modules[page]||[]).find(x=>String(x.id)===String(id));if(!record)return;
