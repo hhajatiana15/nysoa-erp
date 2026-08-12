@@ -1155,17 +1155,47 @@ function safeTotalInvoiced(projectId=""){
 
 function dashboardAutoCharts(){const projects=(db.projects||[]).filter(p=>!p.deleted),data=projects.map(p=>({label:p.name||p.id,rev:safeTotalInvoiced(p.id),dep:totalOperatingExpenses(p.id)})),mx=Math.max(1,...data.flatMap(x=>[x.rev,x.dep]));const bars=data.length?data.map(x=>`<div class="auto-chart-row"><b>${esc(x.label)}</b><div><div class="auto-chart-track"><div class="auto-chart-bar revenue" style="width:${Math.min(100,x.rev/mx*100)}%"></div></div><small>CA ${money(x.rev)}</small><div class="auto-chart-track"><div class="auto-chart-bar expense" style="width:${Math.min(100,x.dep/mx*100)}%"></div></div><small>Dép. ${money(x.dep)}</small></div></div>`).join(""):'<div class="empty-state">Aucune donnée.</div>';const cats={};unifiedExpenseJournalRows().forEach(r=>{const k=r.category||r.source||"Autre";cats[k]=(cats[k]||0)+(+r.amount||0)});const cm=Math.max(1,...Object.values(cats)),cb=Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="auto-chart-row"><b>${esc(k)}</b><div><div class="auto-chart-track"><div class="auto-chart-bar expense" style="width:${Math.min(100,v/cm*100)}%"></div></div><small>${money(v)}</small></div></div>`).join("")||'<div class="empty-state">Aucune dépense.</div>';return`<div class="grid-2 auto-dashboard-charts"><div class="panel"><h3>📊 CA / DÉPENSES PAR CHANTIER</h3><div class="panel-body">${bars}</div></div><div class="panel"><h3>📉 DÉPENSES PAR CATÉGORIE</h3><div class="panel-body">${cb}</div></div></div>`;}
 
-function dashboard(){
+
+function totalClientReceipts(projectId=""){
+ const rows=(db.clientReceipts||db.modules?.clientReceipts||[]);
+ return (Array.isArray(rows)?rows:[])
+   .filter(r=>!r.deleted&&(!projectId||String(r.project||"")===String(projectId)))
+   .reduce((n,r)=>n+(+r.amount||+r.receivedAmount||+r.values?.[2]||0),0);
+}
+
+
+function totalExpenses(projectId=""){
+ try{
+  if(typeof totalOperatingExpenses==="function")return totalOperatingExpenses(projectId)||0;
+ }catch(e){}
+ const rows=(db.expenses||[]);
+ return (Array.isArray(rows)?rows:[])
+   .filter(r=>!r.deleted&&(!projectId||String(r.project||"")===String(projectId)))
+   .reduce((n,r)=>n+(+r.amount||0),0);
+}
+
+
+function safeMetric(fn,fallback=0){
+ try{
+  const v=fn();
+  return Number.isFinite(+v)?+v:fallback;
+ }catch(e){
+  console.warn("Dashboard metric fallback",e);
+  return fallback;
+ }
+}
+
+function dashboardCore(){
  let totalBudget=sum(db.projects.map(x=>x.budget));
  let totalApp=sum(db.appro.filter(x=>x.status==="Validée").map(x=>x.amount));
  let totalRequests=sum(db.requests.map(x=>+x.amount||0));
  let totalAppDisplayed=user.role==="GESTIONNAIRE"?totalApp+totalRequests:totalApp;
- let totalDep=totalOperatingExpenses();
+ let totalDep=safeMetric(()=>totalOperatingExpenses(),0);
  let cashBal=totalApp-totalDep;
  let invoices=db.modules.invoices||[];
  let employees=db.modules.employees||[];
  let stock=db.modules.stock||[];
- let totalRevenue=safeTotalInvoiced("");
+ let totalRevenue=safeMetric(()=>safeTotalInvoiced(""),0);
  let totalReceived=totalClientReceipts("",true);
  let netProfit=totalRevenue-totalDep;
  let activeEmployees=employees.filter(e=>employeeStatusLabel(e)==="Actif").length;
@@ -1245,6 +1275,25 @@ function dashboard(){
   <div class="panel"><h3>ALERTES</h3><div class="alert-list">${alertItems.length?alertItems.map(x=>`<div class="alert-item"><span>⚠ ${x}</span></div>`).join(""):`<div class="empty-state">Aucune alerte actuellement.</div>`}</div></div>
  </div>`;
 }
+
+function dashboard(){
+ try{
+  return dashboardCore();
+ }catch(e){
+  console.error("Dashboard non bloquant",e);
+  const msg=(e&&e.message)?e.message:String(e||"Erreur inconnue");
+  const content=document.getElementById("content");
+  if(content){
+   content.innerHTML=`<div class="panel"><h3>TABLEAU DE BORD</h3>
+    <div class="panel-body">
+     <div class="notice">Le tableau de bord a rencontré une erreur non critique. Les modules ERP restent accessibles.</div>
+     <p><b>Détail :</b> ${esc(msg)}</p>
+    </div></div>`;
+  }
+  return null;
+ }
+}
+
 function projectsTable(compact=false){return `<div class="table-wrap"><table><thead><tr><th>Chantier</th><th>Client</th><th>Début</th><th>Fin prévue</th><th>Avancement</th><th>Statut</th></tr></thead><tbody>${db.projects.map(p=>`<tr><td>${p.id}<br>${p.name}</td><td>${p.client}</td><td>${p.start}</td><td>${p.end}</td><td><div class="progress"><span style="width:${p.progress}%"></span></div>${p.progress}%</td><td><span class="badge b-blue">${p.status}</span></td></tr>`).join("")}</tbody></table></div>`}
 function projects(){
  let budgetCol=user.role==="ADMIN"?"<th>Budget initial</th>":"";
