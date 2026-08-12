@@ -1137,7 +1137,23 @@ function dashboardTechnique(){
  </div>`;
 }
 
-function dashboardAutoCharts(){const projects=(db.projects||[]).filter(p=>!p.deleted),data=projects.map(p=>({label:p.name||p.id,rev:totalInvoiced(p.id),dep:totalOperatingExpenses(p.id)})),mx=Math.max(1,...data.flatMap(x=>[x.rev,x.dep]));const bars=data.length?data.map(x=>`<div class="auto-chart-row"><b>${esc(x.label)}</b><div><div class="auto-chart-track"><div class="auto-chart-bar revenue" style="width:${Math.min(100,x.rev/mx*100)}%"></div></div><small>CA ${money(x.rev)}</small><div class="auto-chart-track"><div class="auto-chart-bar expense" style="width:${Math.min(100,x.dep/mx*100)}%"></div></div><small>Dép. ${money(x.dep)}</small></div></div>`).join(""):'<div class="empty-state">Aucune donnée.</div>';const cats={};unifiedExpenseJournalRows().forEach(r=>{const k=r.category||r.source||"Autre";cats[k]=(cats[k]||0)+(+r.amount||0)});const cm=Math.max(1,...Object.values(cats)),cb=Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="auto-chart-row"><b>${esc(k)}</b><div><div class="auto-chart-track"><div class="auto-chart-bar expense" style="width:${Math.min(100,v/cm*100)}%"></div></div><small>${money(v)}</small></div></div>`).join("")||'<div class="empty-state">Aucune dépense.</div>';return`<div class="grid-2 auto-dashboard-charts"><div class="panel"><h3>📊 CA / DÉPENSES PAR CHANTIER</h3><div class="panel-body">${bars}</div></div><div class="panel"><h3>📉 DÉPENSES PAR CATÉGORIE</h3><div class="panel-body">${cb}</div></div></div>`;}
+
+function totalInvoiced(projectId=""){
+ const rows=(typeof invoiceRows==="function")
+   ? invoiceRows()
+   : ((db.modules?.invoices||[]).filter(r=>!r.deleted));
+ return rows
+   .filter(r=>!projectId||String(r.project||"")===String(projectId))
+   .reduce((n,r)=>n+(typeof invoiceLegacyAmount==="function"
+     ? invoiceLegacyAmount(r)
+     : (+r.trancheAmount||+r.values?.[2]||0)),0);
+}
+function safeTotalInvoiced(projectId=""){
+ try{return totalInvoiced(projectId)||0;}
+ catch(e){console.warn("Dashboard total facturé",e);return 0;}
+}
+
+function dashboardAutoCharts(){const projects=(db.projects||[]).filter(p=>!p.deleted),data=projects.map(p=>({label:p.name||p.id,rev:safeTotalInvoiced(p.id),dep:totalOperatingExpenses(p.id)})),mx=Math.max(1,...data.flatMap(x=>[x.rev,x.dep]));const bars=data.length?data.map(x=>`<div class="auto-chart-row"><b>${esc(x.label)}</b><div><div class="auto-chart-track"><div class="auto-chart-bar revenue" style="width:${Math.min(100,x.rev/mx*100)}%"></div></div><small>CA ${money(x.rev)}</small><div class="auto-chart-track"><div class="auto-chart-bar expense" style="width:${Math.min(100,x.dep/mx*100)}%"></div></div><small>Dép. ${money(x.dep)}</small></div></div>`).join(""):'<div class="empty-state">Aucune donnée.</div>';const cats={};unifiedExpenseJournalRows().forEach(r=>{const k=r.category||r.source||"Autre";cats[k]=(cats[k]||0)+(+r.amount||0)});const cm=Math.max(1,...Object.values(cats)),cb=Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="auto-chart-row"><b>${esc(k)}</b><div><div class="auto-chart-track"><div class="auto-chart-bar expense" style="width:${Math.min(100,v/cm*100)}%"></div></div><small>${money(v)}</small></div></div>`).join("")||'<div class="empty-state">Aucune dépense.</div>';return`<div class="grid-2 auto-dashboard-charts"><div class="panel"><h3>📊 CA / DÉPENSES PAR CHANTIER</h3><div class="panel-body">${bars}</div></div><div class="panel"><h3>📉 DÉPENSES PAR CATÉGORIE</h3><div class="panel-body">${cb}</div></div></div>`;}
 
 function dashboard(){
  let totalBudget=sum(db.projects.map(x=>x.budget));
@@ -1149,7 +1165,7 @@ function dashboard(){
  let invoices=db.modules.invoices||[];
  let employees=db.modules.employees||[];
  let stock=db.modules.stock||[];
- let totalRevenue=totalInvoiced();
+ let totalRevenue=safeTotalInvoiced("");
  let totalReceived=totalClientReceipts("",true);
  let netProfit=totalRevenue-totalDep;
  let activeEmployees=employees.filter(e=>employeeStatusLabel(e)==="Actif").length;
@@ -1587,10 +1603,13 @@ function addDays(dateStr,n){const d=new Date(dateStr+"T12:00:00");d.setDate(d.ge
 function employeeStatusLabel(e){return (e.workflow==="Inactif"||e.active===false)?"Passif":"Actif";}
 function attendance(){
  ensureSecurityData();const employees=(db.modules.employees||[]).filter(r=>!r.deleted);const today=new Date().toISOString().slice(0,10),selectedDate=sessionStorage.getItem("nysoa_attendance_date")||today,weekStart=mondayOf(selectedDate),project=sessionStorage.getItem("nysoa_attendance_project")||"";const days=["L","M","M","J","V","S","D"].map((label,i)=>({label,date:addDays(weekStart,i)}));let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);const entries=record?.entries||[],keyOf=(r,i)=>r.id||r.values?.[0]||`EMP-${i+1}`,projects=accessibleProjects();
- $("#content").innerHTML=`<div class="panel"><h3>POINTAGE — AFFECTATION PAR JOUR</h3><div class="panel-body"><div class="form-grid"><label>Semaine contenant le<input id="attendanceDate" type="date" value="${selectedDate}"></label><label>Filtre chantier<select id="attendanceProject"><option value="">Tous les employés</option>${projects.map(p=>`<option value="${esc(p.id)}" ${project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label><div class="form-actions full"><button class="btn primary" onclick="saveAttendance()">Enregistrer</button><button class="btn secondary" onclick="go('qrAttendance')">📷 Scanner QR</button></div></div><div class="attendance-note">Par jour : <b>Absent</b>, <b>½ journée</b> ou <b>Présent</b>. L’affectation peut changer chaque jour et peut être choisie ou saisie manuellement.</div></div><datalist id="attendanceChantiers">${projects.map(p=>`<option value="${esc(p.id)}">${esc(p.name||"")}</option><option value="${esc(p.name||"")}"></option>`).join("")}</datalist><div class="table-wrap"><table class="attendance-table weekly-attendance"><thead><tr><th>Matricule</th><th>Nom</th><th>Fonction</th><th>État</th>${days.map(d=>`<th class="center">${d.label}<small>${d.date.slice(8,10)}</small><br><small>Présence / Affectation</small></th>`).join("")}<th>Total jours</th></tr></thead><tbody>${employees.length?employees.map((e,i)=>{const key=keyOf(e,i),entry=entries.find(x=>x.employeeKey===key)||{},states=entry.states||{},assign=entry.assignments||{},def=employeeProject(e)||"",show=!project||Object.values(assign).includes(project)||String(def)===String(project);if(!show)return"";const total=days.reduce((n,d)=>n+(states[d.date]==="P"?1:states[d.date]==="H"?0.5:0),0);return`<tr><td>${esc(employeeMatricule(e)||e.id||"")}</td><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeRole(e))}</td><td>${employeeStatusLabel(e)==="Actif"?'<span class="qr-in">Actif</span>':'<span class="qr-out">Passif</span>'}</td>${days.map(d=>{const st=states[d.date]||"A",af=assign[d.date]??def;return`<td class="center"><select class="att-state" data-key="${esc(key)}" data-date="${d.date}" onchange="refreshAttendanceRow('${esc(key)}')"><option value="A" ${st==="A"?"selected":""}>Absent</option><option value="H" ${st==="H"?"selected":""}>½ journée</option><option value="P" ${st==="P"?"selected":""}>Présent</option></select><input class="att-assignment" data-key="${esc(key)}" data-date="${d.date}" list="attendanceChantiers" value="${esc(af||"")}" placeholder="Chantier / lieu"></td>`}).join("")}<td class="attendance-total" data-key="${esc(key)}"><b>${total.toFixed(1)}</b></td></tr>`}).join(""):'<tr><td colspan="12">Aucun employé.</td></tr>'}</tbody></table></div></div>`;$("#attendanceDate").onchange=e=>{sessionStorage.setItem("nysoa_attendance_date",e.target.value);attendance()};$("#attendanceProject").onchange=e=>{sessionStorage.setItem("nysoa_attendance_project",e.target.value);attendance()};
+ $("#content").innerHTML=`<div class="panel"><h3>POINTAGE — AFFECTATION PAR JOUR</h3><div class="panel-body"><div class="form-grid"><label>Semaine contenant le<input id="attendanceDate" type="date" value="${selectedDate}"></label><label>Filtre chantier<select id="attendanceProject"><option value="">Tous les employés</option>${projects.map(p=>`<option value="${esc(p.id)}" ${project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label><div class="form-actions full"><button class="btn primary" onclick="saveAttendance()">Enregistrer</button><button class="btn secondary" onclick="go('qrAttendance')">📷 Scanner QR</button></div></div><div class="attendance-note">Par jour : <b>Absent = 0</b>, <b>½ journée = 0,5 jour</b> ou <b>Présent = 1 jour</b>. L’affectation peut changer chaque jour et peut être choisie dans la liste ou saisie manuellement.</div></div><datalist id="attendanceChantiers">${projects.map(p=>`<option value="${esc(p.id)}">${esc(p.name||"")}</option><option value="${esc(p.name||"")}"></option>`).join("")}</datalist><div class="table-wrap"><table class="attendance-table weekly-attendance"><thead><tr><th>Matricule</th><th>Nom</th><th>Fonction</th><th>État</th>${days.map(d=>`<th class="center">${d.label}<small>${d.date.slice(8,10)}</small><br><small>Présence / Affectation</small></th>`).join("")}<th>Total jours</th></tr></thead><tbody>${employees.length?employees.map((e,i)=>{const key=keyOf(e,i),entry=entries.find(x=>x.employeeKey===key)||{},states=entry.states||{},assign=entry.assignments||{},def=employeeProject(e)||"",show=!project||Object.values(assign).includes(project)||String(def)===String(project);if(!show)return"";const total=days.reduce((n,d)=>n+(states[d.date]==="P"?1:states[d.date]==="H"?0.5:0),0);return`<tr><td>${esc(employeeMatricule(e)||e.id||"")}</td><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeRole(e))}</td><td>${employeeStatusLabel(e)==="Actif"?'<span class="qr-in">Actif</span>':'<span class="qr-out">Passif</span>'}</td>${days.map(d=>{const st=states[d.date]||"A",af=assign[d.date]??def;return`<td class="center"><select class="att-state" data-key="${esc(key)}" data-date="${d.date}" onchange="refreshAttendanceRow('${esc(key)}')"><option value="A" ${st==="A"?"selected":""}>Absent (0)</option><option value="H" ${st==="H"?"selected":""}>½ journée (0,5)</option><option value="P" ${st==="P"?"selected":""}>Présent (1)</option></select><input class="att-assignment" data-key="${esc(key)}" data-date="${d.date}" list="attendanceChantiers" value="${esc(af||"")}" placeholder="Chantier / lieu"></td>`}).join("")}<td class="attendance-total" data-key="${esc(key)}"><b>${total.toFixed(1)}</b></td></tr>`}).join(""):'<tr><td colspan="12">Aucun employé.</td></tr>'}</tbody></table></div></div>`;$("#attendanceDate").onchange=e=>{sessionStorage.setItem("nysoa_attendance_date",e.target.value);attendance()};$("#attendanceProject").onchange=e=>{sessionStorage.setItem("nysoa_attendance_project",e.target.value);attendance()};
 }
 function refreshAttendanceRow(key){const ss=[...document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`)];const total=ss.reduce((n,s)=>n+(s.value==="P"?1:s.value==="H"?0.5:0),0),t=document.querySelector(`.attendance-total[data-key="${CSS.escape(key)}"]`);if(t)t.innerHTML=`<b>${total.toFixed(1)}</b>`;}
-function saveAttendance(){const selectedDate=$("#attendanceDate")?.value,project=$("#attendanceProject")?.value||"";if(!selectedDate)return alert("Choisissez une date.");const weekStart=mondayOf(selectedDate),employees=(db.modules.employees||[]).filter(r=>!r.deleted);let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);if(!record){record={id:"ATTW-"+Date.now()+"-"+Math.random().toString(36).slice(2,5),weekStart,project,entries:[],owner:user.username,createdAt:new Date().toISOString()};db.modules.attendanceWeekly.push(record)}record.entries=record.entries||[];employees.forEach((e,i)=>{const key=e.id||e.values?.[0]||`EMP-${i+1}`;let en=record.entries.find(x=>x.employeeKey===key);if(!en){en={employeeKey:key,states:{},assignments:{}};record.entries.push(en)}en.states=en.states||{};en.assignments=en.assignments||{};document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`).forEach(x=>en.states[x.dataset.date]=x.value||"A");document.querySelectorAll(`.att-assignment[data-key="${CSS.escape(key)}"]`).forEach(x=>en.assignments[x.dataset.date]=String(x.value||"").trim())});record.updatedAt=new Date().toISOString();record.updatedBy=user.username;saveLocalOnly();cloudWriteGeneric("attendanceWeekly",record,"Pointage");logUserActivity("Pointage enregistré","pointage",record.id,"Affectations journalières");attendance();}
+function saveAttendance(){const selectedDate=$("#attendanceDate")?.value,project=$("#attendanceProject")?.value||"";if(!selectedDate)return alert("Choisissez une date.");const weekStart=mondayOf(selectedDate),employees=(db.modules.employees||[]).filter(r=>!r.deleted);let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);if(!record){record={id:"ATTW-"+Date.now()+"-"+Math.random().toString(36).slice(2,5),weekStart,project,entries:[],owner:user.username,createdAt:new Date().toISOString()};db.modules.attendanceWeekly.push(record)}record.entries=record.entries||[];employees.forEach((e,i)=>{const key=e.id||e.values?.[0]||`EMP-${i+1}`;let en=record.entries.find(x=>x.employeeKey===key);if(!en){en={employeeKey:key,states:{},assignments:{}};record.entries.push(en)}en.states=en.states||{};en.assignments=en.assignments||{};document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`).forEach(x=>en.states[x.dataset.date]=x.value||"A");document.querySelectorAll(`.att-assignment[data-key="${CSS.escape(key)}"]`).forEach(x=>en.assignments[x.dataset.date]=String(x.value||"").trim())});record.updatedAt=new Date().toISOString();record.updatedBy=effectiveUserIdentity().label||user.username;
+ const stats={P:0,H:0,A:0};(record.entries||[]).forEach(en=>Object.values(en.states||{}).forEach(s=>{if(stats[s]!==undefined)stats[s]++;}));
+ audit("Enregistrement pointage","attendanceWeekly",record.id,`Présents ${stats.P} — Demi-journées ${stats.H} — Absents ${stats.A}`,null,cloneRecord(record));
+ saveLocalOnly();cloudWriteGeneric("attendanceWeekly",record,"Pointage");logUserActivity("Pointage enregistré","pointage",record.id,"Affectations journalières");attendance();}
 function clearAttendanceEmployee(key){document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`).forEach(x=>x.value="A");document.querySelectorAll(`.att-assignment[data-key="${CSS.escape(key)}"]`).forEach(x=>x.value="");refreshAttendanceRow(key);}
 // ===== V4.7 — PRÉSENCE QR & MULTI-TECHNICIENS =====
 let activeQrScanner=null;
@@ -2215,23 +2234,75 @@ function validatedQuoteAmount(projectId,quoteId=""){
  const q=quoteId?(db.quotes||[]).find(x=>x.id===quoteId):acceptedQuotesForProject(projectId).slice(-1)[0];
  return q?quoteFinancials(q).ttc:0;
 }
-function invoicesPage(){
+async function refreshInvoicesFromCloud(){
+ if(!cloudReady||!fbStore||!user)return {active:invoiceRows(),recoverable:0};
+ try{
+  const snap=await fbStore.collection("invoices").get();
+  const remote=snap.docs.map(d=>({id:d.id,...d.data()}));
+  db.modules.invoices=Array.isArray(db.modules.invoices)?db.modules.invoices:[];
+  const byId=new Map(db.modules.invoices.map(r=>[String(r.id),r]));
+  let changed=false;
+  remote.forEach(r=>{
+   const id=String(r.id),local=byId.get(id);
+   if(!local){db.modules.invoices.push(r);byId.set(id,r);changed=true;return;}
+   const rt=businessTimestamp(r),lt=businessTimestamp(local);
+   if(recordFingerprint(local)!==recordFingerprint(r) && rt>=lt){
+    backupBeforeRemoteOverwrite("invoices",local,r,"facturation_cloud_refresh");
+    Object.keys(local).forEach(k=>delete local[k]);Object.assign(local,r);changed=true;
+   }
+  });
+  if(changed)saveLocalOnly();
+  rememberCollectionFingerprints("invoices",remote);
+
+  // Count distinct historical invoice versions that are not currently active.
+  let recoverable=0;
+  try{
+   const a=await fbStore.collection("auditLog").where("module","==","invoices").get();
+   const activeIds=new Set(invoiceRows().map(r=>String(r.id)));
+   const seen=new Set();
+   a.docs.forEach(d=>{
+    const x=d.data()||{};
+    [x.after,x.before].forEach(v=>{
+     if(!v)return;
+     const amt=+v.trancheAmount||+v.values?.[2]||0;
+     if(!amt)return;
+     const key=recordFingerprint(v);
+     if(seen.has(key))return;seen.add(key);
+     if(!activeIds.has(String(v.id||"")))recoverable++;
+    });
+   });
+  }catch(e){console.warn("audit facturation",e);}
+  return {active:invoiceRows(),recoverable};
+ }catch(e){
+  console.warn("Lecture Cloud facturation",e);
+  return {active:invoiceRows(),recoverable:0};
+ }
+}
+
+async function invoicesPage(){
  sessionStorage.removeItem("nysoa_invoice_form_project");
  if(user.role!=="ADMIN")return generic("invoices");
+
+ $("#content").innerHTML=`<div class="panel"><h3>FACTURATION</h3><div class="panel-body">Chargement des factures Cloud…</div></div>`;
+ const cloudStateInvoices=await refreshInvoicesFromCloud();
+
  const ctx=currentProjectContext();
  const rows=invoiceRows().filter(r=>!ctx||String(r.project||"")===String(ctx));
+ const recoverable=cloudStateInvoices.recoverable||0;
+
  $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>FACTURATION PAR CHANTIER</h3>
  <div class="panel-body"><button class="btn primary" onclick="invoiceForm()">+ Nouvelle tranche / facture</button>
- <button class="btn secondary" onclick="invoiceRecoveryPage()">🛟 Historique / récupération</button>
+ <button class="btn secondary" onclick="invoiceRecoveryPage()">🛟 Historique / récupération${recoverable?` (${recoverable})`:""}</button>
  ${legacyInvoiceRows().length?`<button class="btn secondary" onclick="legacyInvoiceReviewPage()">⚠ ${legacyInvoiceRows().length} ancienne(s) donnée(s) isolée(s)</button>`:""}
- <div class="notice">Chaque facture est rattachée à un chantier. Ici, le reste signifie « reste à facturer ». Les paiements réellement reçus sont enregistrés séparément dans ENCAISSEMENTS CLIENTS.</div></div>
+ <div class="notice"><b>Source actuelle : Cloud Firebase + données locales fusionnées.</b> « Tous les chantiers » affiche toutes les factures actives. Les anciennes versions restent accessibles dans Historique / récupération sans être comptées deux fois.</div></div>
  <div class="table-wrap"><table><thead><tr><th>N° facture</th><th>Date</th><th>Chantier</th><th>Client</th><th>Devis validé</th><th>Montant devis</th><th>Tranche</th><th>Montant tranche</th><th>Total facturé</th><th>Reste à facturer</th><th>Actions</th></tr></thead><tbody>
  ${rows.length?rows.map(r=>{
   const qa=+r.quoteAmount||validatedQuoteAmount(r.project,r.quoteId);
-  const paid=invoiceRows().filter(x=>String(x.project)===String(r.project)).reduce((n,x)=>n+invoiceLegacyAmount(x),0);
+  const projectInvoices=invoiceRows().filter(x=>String(x.project)===String(r.project));
+  const paid=projectInvoices.reduce((n,x)=>n+invoiceLegacyAmount(x),0);
   const remain=Math.max(0,qa-paid),pr=(db.projects||[]).find(p=>String(p.id)===String(r.project));
-  return `<tr><td><b>${esc(invoiceDisplayNo(r))}</b></td><td>${esc(r.date||"")}</td><td>${esc(pr?.name||r.project||"")}</td><td>${esc(r.client||r.values?.[1]||"")}</td><td>${esc(r.quoteId||"")}</td><td>${money(qa||(+r.quoteAmount||0))}</td><td><b>${(+r.tranchePercent||0).toFixed(2)}%</b></td><td>${money(invoiceLegacyAmount(r))}</td><td>${money(paid)}</td><td><b>${money(remain)}</b></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="invoiceForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="deleteInvoice('${r.id}')">Supprimer</button></div></td></tr>`;
- }).join(""):`<tr><td colspan="11">Aucune facture pour ce chantier.</td></tr>`}
+  return `<tr><td><b>${esc(invoiceDisplayNo(r))}</b></td><td>${esc(r.date||"")}</td><td>${esc(pr?.name||r.project||"")}</td><td>${esc(r.client||r.values?.[1]||"")}</td><td>${esc(r.quoteId||"")}</td><td>${money(qa||(+r.quoteAmount||0))}</td><td><b>${(+r.tranchePercent||0).toFixed(2)}%</b></td><td>${money(invoiceLegacyAmount(r))}</td><td>${money(paid)}</td><td><b>${money(remain)}</b></td><td>${r.__syncConflict?'<span class="badge b-orange">Conflit sync</span> ':""}<div class="edit-actions"><button class="btn-xs btn-edit" onclick="invoiceForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="deleteInvoice('${r.id}')">Supprimer</button></div></td></tr>`;
+ }).join(""):`<tr><td colspan="11">Aucune facture active pour ce filtre. Vérifiez « Historique / récupération » si une ancienne facture a été remplacée ou supprimée.</td></tr>`}
  </tbody></table></div></div>`;
 }
 function invoiceForm(id="",projectOverride=""){

@@ -1,0 +1,19 @@
+NYSOA ERP V4.8.6 — FACTURATION / POINTAGE STABLE
+
+FACTURATION
+- À chaque ouverture du module, lecture directe de la collection Firebase invoices.
+- Fusion Cloud/local avant affichage.
+- Tous les chantiers = toutes les factures actives.
+- Les versions historiques non actives sont comptées et signalées sur « Historique / récupération ».
+- Une ancienne version n'est jamais comptée automatiquement comme facture active.
+
+POINTAGE
+- Absent = 0 jour.
+- 1/2 journée = 0,5 jour.
+- Présent = 1 jour.
+- Affectation indépendante par jour, liste ou saisie manuelle.
+- Historique/audit du pointage avec nombre Présents / Demi-journées / Absents.
+
+Validation technique:
+- node --check app.js : OK
+- ZIP integrity : OK
