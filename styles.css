@@ -308,3 +308,111 @@ textarea{min-height:90px}.btn{border:0;border-radius:8px;padding:10px 14px;font-
 @media print{@page{size:85.6mm 54mm;margin:0}html,body{width:85.6mm;height:54mm;margin:0!important;padding:0!important;background:#fff!important}body *{visibility:hidden!important}.employee-badge-v472,.employee-badge-v472 *{visibility:visible!important}.employee-badge-v472{position:fixed!important;left:0!important;top:0!important;width:85.6mm!important;height:54mm!important;min-height:54mm!important;border:0!important;border-radius:0!important;box-shadow:none!important;padding:2.4mm!important;transform:none!important}.employee-badge-v472 .badge-top{height:10.5mm;gap:2.2mm;padding-bottom:1.4mm;border-bottom-width:.3mm}.employee-badge-v472 .badge-logo{width:14.5mm;max-height:8.5mm}.employee-badge-v472 .badge-brand{font-size:2.7mm}.employee-badge-v472 .badge-subtitle{font-size:1.8mm;margin-top:.5mm}.employee-badge-v472 .badge-main{grid-template-columns:17.5mm 1fr 15mm;gap:2.2mm;height:33mm;padding:1.8mm 0}.employee-badge-v472 .badge-photo{width:16.5mm;height:21.5mm;border-width:.3mm;border-radius:1.2mm}.employee-badge-v472 .badge-info h2{font-size:3.4mm;margin-bottom:.8mm}.employee-badge-v472 .badge-job{font-size:2.3mm;margin-bottom:1.8mm}.employee-badge-v472 .badge-info p{font-size:1.7mm;margin:.8mm 0}.employee-badge-v472 .qr-canvas{width:12.8mm;min-height:12.8mm;margin-bottom:.7mm}.employee-badge-v472 .qr-canvas canvas,.employee-badge-v472 .qr-canvas img{width:12.8mm!important;height:12.8mm!important}.employee-badge-v472 .badge-qr-col small{font-size:1.2mm}.employee-badge-v472 .badge-footer{padding-top:1mm;font-size:1.4mm}}
 
 .auto-dashboard-charts{margin-top:14px}.auto-chart-row{display:grid;grid-template-columns:minmax(120px,190px) 1fr;gap:8px;align-items:center;margin:12px 0}.auto-chart-track{height:12px;background:#e8edf3;border-radius:999px;overflow:hidden;margin:3px 0}.auto-chart-bar{height:100%;min-width:2px;border-radius:999px;background:#267d62}.auto-chart-bar.expense{background:#ce7a2d}.auto-chart-bar.revenue{background:#267d62}@media(max-width:760px){.auto-chart-row{grid-template-columns:100px 1fr}}
+
+
+/* ===== IMPRESSION A4 AUTO-FIT V4.8.8 ===== */
+@page {
+  size: A4 portrait;
+  margin: 7mm;
+}
+
+@media print {
+  html, body {
+    width: 210mm !important;
+    min-height: 297mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    overflow: visible !important;
+  }
+
+  body {
+    font-size: 9.5pt !important;
+    line-height: 1.25 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  aside, nav, .sidebar, .menu, .topbar, .toolbar, .no-print,
+  button, input[type="file"], .btn, .btn-xs, .edit-actions,
+  #globalProjectFilter, .cloud-status, .mobile-menu-toggle {
+    display: none !important;
+  }
+
+  main, #app, #content, .content, .main-content, .page-content,
+  .container, .panel, .card, .table-wrap {
+    width: 100% !important;
+    max-width: none !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    box-shadow: none !important;
+    transform: none !important;
+  }
+
+  .panel, .card {
+    border: 0.3mm solid #bbb !important;
+    margin-bottom: 3mm !important;
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+  }
+
+  .panel-body { padding: 2.5mm !important; }
+
+  .table-wrap { overflow: visible !important; }
+
+  table {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-collapse: collapse !important;
+    table-layout: auto !important;
+    font-size: 8pt !important;
+  }
+
+  th, td {
+    padding: 1.2mm 1mm !important;
+    border: 0.2mm solid #c8c8c8 !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
+    vertical-align: top !important;
+  }
+
+  th {
+    font-size: 7.8pt !important;
+    font-weight: 700 !important;
+  }
+
+  thead { display: table-header-group !important; }
+  tfoot { display: table-footer-group !important; }
+
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  h1, h2, h3 {
+    break-after: avoid-page !important;
+    page-break-after: avoid !important;
+    margin-top: 2mm !important;
+    margin-bottom: 2mm !important;
+  }
+
+  .kpis, .grid-2, .grid-3 {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 2mm !important;
+  }
+
+  img, svg, canvas {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  header, .company-header, .print-header {
+    width: 100% !important;
+    margin: 0 0 3mm 0 !important;
+    padding: 0 0 2mm 0 !important;
+  }
+}
