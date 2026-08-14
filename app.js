@@ -1660,16 +1660,124 @@ function mondayOf(dateStr){
 }
 function addDays(dateStr,n){const d=new Date(dateStr+"T12:00:00");d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);}
 function employeeStatusLabel(e){return (e.workflow==="Inactif"||e.active===false)?"Passif":"Actif";}
-function attendance(){
- ensureSecurityData();const employees=(db.modules.employees||[]).filter(r=>!r.deleted);const today=new Date().toISOString().slice(0,10),selectedDate=sessionStorage.getItem("nysoa_attendance_date")||today,weekStart=mondayOf(selectedDate),project=sessionStorage.getItem("nysoa_attendance_project")||"";const days=["L","M","M","J","V","S","D"].map((label,i)=>({label,date:addDays(weekStart,i)}));let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);const entries=record?.entries||[],keyOf=(r,i)=>r.id||r.values?.[0]||`EMP-${i+1}`,projects=accessibleProjects();
- $("#content").innerHTML=`<div class="panel"><h3>POINTAGE — AFFECTATION PAR JOUR</h3><div class="panel-body"><div class="form-grid"><label>Semaine contenant le<input id="attendanceDate" type="date" value="${selectedDate}"></label><label>Filtre chantier<select id="attendanceProject"><option value="">Tous les employés</option>${projects.map(p=>`<option value="${esc(p.id)}" ${project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label><div class="form-actions full"><button class="btn primary" onclick="saveAttendance()">Enregistrer</button><button class="btn secondary" onclick="go('qrAttendance')">📷 Scanner QR</button></div></div><div class="attendance-note">Par jour : <b>Absent = 0</b>, <b>½ journée = 0,5 jour</b> ou <b>Présent = 1 jour</b>. L’affectation peut changer chaque jour et peut être choisie dans la liste ou saisie manuellement.</div></div><datalist id="attendanceChantiers">${projects.map(p=>`<option value="${esc(p.id)}">${esc(p.name||"")}</option><option value="${esc(p.name||"")}"></option>`).join("")}</datalist><div class="table-wrap"><table class="attendance-table weekly-attendance"><thead><tr><th>Matricule</th><th>Nom</th><th>Fonction</th><th>État</th>${days.map(d=>`<th class="center">${d.label}<small>${d.date.slice(8,10)}</small><br><small>Présence / Affectation</small></th>`).join("")}<th>Total jours</th></tr></thead><tbody>${employees.length?employees.map((e,i)=>{const key=keyOf(e,i),entry=entries.find(x=>x.employeeKey===key)||{},states=entry.states||{},assign=entry.assignments||{},def=employeeProject(e)||"",show=!project||Object.values(assign).includes(project)||String(def)===String(project);if(!show)return"";const total=days.reduce((n,d)=>n+(states[d.date]==="P"?1:states[d.date]==="H"?0.5:0),0);return`<tr><td>${esc(employeeMatricule(e)||e.id||"")}</td><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeRole(e))}</td><td>${employeeStatusLabel(e)==="Actif"?'<span class="qr-in">Actif</span>':'<span class="qr-out">Passif</span>'}</td>${days.map(d=>{const st=states[d.date]||"A",af=assign[d.date]??def;return`<td class="center"><select class="att-state" data-key="${esc(key)}" data-date="${d.date}" onchange="refreshAttendanceRow('${esc(key)}')"><option value="A" ${st==="A"?"selected":""}>Absent (0)</option><option value="H" ${st==="H"?"selected":""}>½ journée (0,5)</option><option value="P" ${st==="P"?"selected":""}>Présent (1)</option></select><input class="att-assignment" data-key="${esc(key)}" data-date="${d.date}" list="attendanceChantiers" value="${esc(af||"")}" placeholder="Chantier / lieu"></td>`}).join("")}<td class="attendance-total" data-key="${esc(key)}"><b>${total.toFixed(1)}</b></td></tr>`}).join(""):'<tr><td colspan="12">Aucun employé.</td></tr>'}</tbody></table></div></div>`;$("#attendanceDate").onchange=e=>{sessionStorage.setItem("nysoa_attendance_date",e.target.value);attendance()};$("#attendanceProject").onchange=e=>{sessionStorage.setItem("nysoa_attendance_project",e.target.value);attendance()};
+
+function weeklyAttendanceRecord(weekStart){
+ db.modules.attendanceWeekly=Array.isArray(db.modules.attendanceWeekly)?db.modules.attendanceWeekly:[];
+ const same=db.modules.attendanceWeekly.filter(r=>r.weekStart===weekStart&&!r.deleted);
+ let master=same.find(r=>!r.project)||same[0];
+ if(!master){
+  master={id:"ATTW-"+Date.now()+"-"+Math.random().toString(36).slice(2,5),weekStart,project:"",entries:[],owner:user.username,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+  db.modules.attendanceWeekly.push(master);
+ }
+ master.project="";
+ master.entries=Array.isArray(master.entries)?master.entries:[];
+
+ // Merge former per-project weekly records into one master record.
+ same.filter(r=>r!==master).forEach(old=>{
+  (old.entries||[]).forEach(oe=>{
+   let me=master.entries.find(x=>String(x.employeeKey)===String(oe.employeeKey));
+   if(!me){me={employeeKey:oe.employeeKey,states:{},assignments:{}};master.entries.push(me);}
+   me.states=me.states||{};me.assignments=me.assignments||{};
+   Object.entries(oe.states||{}).forEach(([d,s])=>{
+    if(!me.states[d]||me.states[d]==="A")me.states[d]=s;
+   });
+   Object.entries(oe.assignments||{}).forEach(([d,a])=>{
+    if(a&&!me.assignments[d])me.assignments[d]=a;
+   });
+  });
+  old.deleted=true;old.deletedAt=new Date().toISOString();old.mergedInto=master.id;
+ });
+ return master;
 }
-function refreshAttendanceRow(key){const ss=[...document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`)];const total=ss.reduce((n,s)=>n+(s.value==="P"?1:s.value==="H"?0.5:0),0),t=document.querySelector(`.attendance-total[data-key="${CSS.escape(key)}"]`);if(t)t.innerHTML=`<b>${total.toFixed(1)}</b>`;}
-function saveAttendance(){const selectedDate=$("#attendanceDate")?.value,project=$("#attendanceProject")?.value||"";if(!selectedDate)return alert("Choisissez une date.");const weekStart=mondayOf(selectedDate),employees=(db.modules.employees||[]).filter(r=>!r.deleted);let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);if(!record){record={id:"ATTW-"+Date.now()+"-"+Math.random().toString(36).slice(2,5),weekStart,project,entries:[],owner:user.username,createdAt:new Date().toISOString()};db.modules.attendanceWeekly.push(record)}record.entries=record.entries||[];employees.forEach((e,i)=>{const key=e.id||e.values?.[0]||`EMP-${i+1}`;let en=record.entries.find(x=>x.employeeKey===key);if(!en){en={employeeKey:key,states:{},assignments:{}};record.entries.push(en)}en.states=en.states||{};en.assignments=en.assignments||{};document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`).forEach(x=>en.states[x.dataset.date]=x.value||"A");document.querySelectorAll(`.att-assignment[data-key="${CSS.escape(key)}"]`).forEach(x=>en.assignments[x.dataset.date]=String(x.value||"").trim())});record.updatedAt=new Date().toISOString();record.updatedBy=effectiveUserIdentity().label||user.username;
+function attendanceAssignmentControl(key,date,value,projects){
+ const known=projects.some(p=>String(p.id)===String(value));
+ const manual=value&&!known;
+ return `<select class="att-assignment-choice" data-key="${esc(key)}" data-date="${date}" onchange="attendanceAssignmentChoiceChanged(this)">
+   <option value="">— Chantier / lieu —</option>
+   ${projects.map(p=>`<option value="${esc(p.id)}" ${String(value)===String(p.id)?"selected":""}>${esc(p.name||p.id)}</option>`).join("")}
+   <option value="__MANUAL__" ${manual?"selected":""}>Autre / manuel…</option>
+  </select>
+  <input class="att-assignment-manual" data-key="${esc(key)}" data-date="${date}" value="${esc(manual?value:"")}" placeholder="Saisir chantier / lieu" style="${manual?"":"display:none"}">`;
+}
+function attendanceAssignmentChoiceChanged(el){
+ const key=el.dataset.key,date=el.dataset.date;
+ const manual=document.querySelector(`.att-assignment-manual[data-key="${CSS.escape(key)}"][data-date="${date}"]`);
+ if(manual)manual.style.display=el.value==="__MANUAL__"?"block":"none";
+}
+function attendanceReadAssignment(key,date){
+ const sel=document.querySelector(`.att-assignment-choice[data-key="${CSS.escape(key)}"][data-date="${date}"]`);
+ if(!sel)return "";
+ if(sel.value==="__MANUAL__"){
+  return String(document.querySelector(`.att-assignment-manual[data-key="${CSS.escape(key)}"][data-date="${date}"]`)?.value||"").trim();
+ }
+ return String(sel.value||"").trim();
+}
+function attendance(){
+ ensureSecurityData();
+ const employees=(db.modules.employees||[]).filter(r=>!r.deleted);
+ const today=new Date().toISOString().slice(0,10);
+ const selectedDate=sessionStorage.getItem("nysoa_attendance_date")||today;
+ const weekStart=mondayOf(selectedDate);
+ const filterProject=sessionStorage.getItem("nysoa_attendance_project")||"";
+ const days=["L","M","M","J","V","S","D"].map((label,i)=>({label,date:addDays(weekStart,i)}));
+ const record=weeklyAttendanceRecord(weekStart),entries=record.entries||[],projects=accessibleProjects();
+ const keyOf=(r,i)=>r.id||r.values?.[0]||`EMP-${i+1}`;
+
+ $("#content").innerHTML=`<div class="panel"><h3>POINTAGE — AFFECTATION PAR JOUR</h3><div class="panel-body">
+ <div class="form-grid"><label>Semaine contenant le<input id="attendanceDate" type="date" value="${selectedDate}"></label>
+ <label>Filtre chantier<select id="attendanceProject"><option value="">Tous les employés</option>${projects.map(p=>`<option value="${esc(p.id)}" ${filterProject===p.id?"selected":""}>${esc(p.name||p.id)}</option>`).join("")}</select></label>
+ <div class="form-actions full"><button class="btn primary" onclick="saveAttendance()">Enregistrer</button><button class="btn secondary" onclick="go('qrAttendance')">📷 Scanner QR</button></div></div>
+ <div class="attendance-note"><b>Présence :</b> Absent = 0, ½ journée = 0,5, Présent = 1. <b>Chantier / lieu :</b> choisissez un chantier dans la liste ou « Autre / manuel ». Un scan QR met automatiquement le chantier du scan sur le jour concerné.</div></div>
+ <div class="table-wrap"><table class="attendance-table weekly-attendance"><thead><tr><th>Matricule</th><th>Nom</th><th>Fonction</th><th>État</th>${days.map(d=>`<th class="center">${d.label}<small>${d.date.slice(8,10)}</small><br><small>Présence / Chantier</small></th>`).join("")}<th>Total jours</th></tr></thead><tbody>
+ ${employees.length?employees.map((e,i)=>{
+  const key=keyOf(e,i),entry=entries.find(x=>String(x.employeeKey)===String(key))||{},states=entry.states||{},assign=entry.assignments||{};
+  const defaultProject=employeeProject(e)||"";
+  const matchesFilter=!filterProject||days.some(d=>String(assign[d.date]||defaultProject)===String(filterProject));
+  if(!matchesFilter)return "";
+  const total=days.reduce((n,d)=>n+(states[d.date]==="P"?1:states[d.date]==="H"?0.5:0),0);
+  return `<tr><td>${esc(employeeMatricule(e)||e.id||"")}</td><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeRole(e))}</td><td>${employeeStatusLabel(e)==="Actif"?'<span class="qr-in">Actif</span>':'<span class="qr-out">Passif</span>'}</td>
+  ${days.map(d=>{const st=states[d.date]||"A",af=assign[d.date]??defaultProject;return `<td class="center"><select class="att-state" data-key="${esc(key)}" data-date="${d.date}" onchange="refreshAttendanceRow('${esc(key)}')"><option value="A" ${st==="A"?"selected":""}>Absent (0)</option><option value="H" ${st==="H"?"selected":""}>½ journée (0,5)</option><option value="P" ${st==="P"?"selected":""}>Présent (1)</option></select>${attendanceAssignmentControl(key,d.date,af,projects)}</td>`}).join("")}
+  <td class="attendance-total" data-key="${esc(key)}"><b>${total.toFixed(1)}</b></td></tr>`;
+ }).join(""):'<tr><td colspan="12">Aucun employé.</td></tr>'}
+ </tbody></table></div></div>`;
+
+ $("#attendanceDate").onchange=e=>{sessionStorage.setItem("nysoa_attendance_date",e.target.value);attendance()};
+ $("#attendanceProject").onchange=e=>{sessionStorage.setItem("nysoa_attendance_project",e.target.value);attendance()};
+}
+function refreshAttendanceRow(key){
+ const ss=[...document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`)];
+ const total=ss.reduce((n,s)=>n+(s.value==="P"?1:s.value==="H"?0.5:0),0);
+ const t=document.querySelector(`.attendance-total[data-key="${CSS.escape(key)}"]`);
+ if(t)t.innerHTML=`<b>${total.toFixed(1)}</b>`;
+}
+function saveAttendance(){
+ const selectedDate=$("#attendanceDate")?.value;
+ if(!selectedDate)return alert("Choisissez une date.");
+ const weekStart=mondayOf(selectedDate),employees=(db.modules.employees||[]).filter(r=>!r.deleted);
+ const record=weeklyAttendanceRecord(weekStart);
+ record.entries=record.entries||[];
+ employees.forEach((e,i)=>{
+  const key=e.id||e.values?.[0]||`EMP-${i+1}`;
+  let en=record.entries.find(x=>String(x.employeeKey)===String(key));
+  if(!en){en={employeeKey:key,states:{},assignments:{}};record.entries.push(en);}
+  en.states=en.states||{};en.assignments=en.assignments||{};
+  document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`).forEach(x=>en.states[x.dataset.date]=x.value||"A");
+  document.querySelectorAll(`.att-assignment-choice[data-key="${CSS.escape(key)}"]`).forEach(x=>{
+   en.assignments[x.dataset.date]=attendanceReadAssignment(key,x.dataset.date);
+  });
+ });
+ record.updatedAt=new Date().toISOString();record.updatedBy=effectiveUserIdentity().label||user.username;
  const stats={P:0,H:0,A:0};(record.entries||[]).forEach(en=>Object.values(en.states||{}).forEach(s=>{if(stats[s]!==undefined)stats[s]++;}));
  audit("Enregistrement pointage","attendanceWeekly",record.id,`Présents ${stats.P} — Demi-journées ${stats.H} — Absents ${stats.A}`,null,cloneRecord(record));
- saveLocalOnly();cloudWriteGeneric("attendanceWeekly",record,"Pointage");logUserActivity("Pointage enregistré","pointage",record.id,"Affectations journalières");attendance();}
-function clearAttendanceEmployee(key){document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`).forEach(x=>x.value="A");document.querySelectorAll(`.att-assignment[data-key="${CSS.escape(key)}"]`).forEach(x=>x.value="");refreshAttendanceRow(key);}
+ saveLocalOnly();cloudWriteGeneric("attendanceWeekly",record,"Pointage hebdomadaire");logUserActivity("Pointage enregistré","pointage",record.id,"Affectations journalières");attendance();
+}
+function clearAttendanceEmployee(key){
+ document.querySelectorAll(`.att-state[data-key="${CSS.escape(key)}"]`).forEach(x=>x.value="A");
+ document.querySelectorAll(`.att-assignment-choice[data-key="${CSS.escape(key)}"]`).forEach(x=>x.value="");
+ document.querySelectorAll(`.att-assignment-manual[data-key="${CSS.escape(key)}"]`).forEach(x=>{x.value="";x.style.display="none"});
+ refreshAttendanceRow(key);
+}
+
 // ===== V4.7 — PRÉSENCE QR & MULTI-TECHNICIENS =====
 let activeQrScanner=null;
 function employeeQrCode(e){return `NYSOA-EMP|${e.id}|${e.qrToken||""}`;}
@@ -1727,7 +1835,7 @@ async function startQrScanner(){
 async function stopQrScanner(){if(activeQrScanner){try{await activeQrScanner.stop();await activeQrScanner.clear();}catch(e){}activeQrScanner=null;}}
 async function processBadgeScan(code){
  code=String(code||"").trim();if(!code)return;
- const project=document.getElementById("qrProject")?.value;if(!project)return alert("Choisissez le chantier.");
+ const project=document.getElementById("qrProject")?.value;if(!project)return alert("Choisissez le chantier où le badge est scanné. Ce chantier sera affecté automatiquement au pointage du jour.");
  const parts=code.split("|");if(parts.length!==3||parts[0]!=="NYSOA-EMP")return showQrResult("Badge QR invalide.",false);
  const [,id,token]=parts,e=employeeRows().find(x=>String(x.id)===String(id));
  if(!e||!e.qrToken||String(e.qrToken)!==String(token)||e.workflow==="Inactif")return showQrResult("Badge inconnu, expiré ou employé inactif.",false);
@@ -1740,11 +1848,20 @@ async function processBadgeScan(code){
 }
 function showQrResult(msg,ok){const el=document.getElementById("qrScanResult");if(el)el.innerHTML=`<div class="qr-result ${ok?"ok":"bad"}">${ok?"✓":"⚠"} ${esc(msg)}</div>`;}
 function syncQrPresenceToWeekly(e,project,date){
- const weekStart=mondayOf(date);let record=db.modules.attendanceWeekly.find(r=>r.weekStart===weekStart&&r.project===project);
- if(!record){record={id:"ATTW-"+Date.now(),weekStart,project,entries:[],owner:user.username,updatedAt:new Date().toISOString(),updatedBy:user.username};db.modules.attendanceWeekly.push(record);}
- const key=e.id;let entry=record.entries.find(x=>x.employeeKey===key);if(!entry){entry={employeeKey:key,states:{},dailySalary:employeePayCycle(e)==="Hebdomadaire"?Math.round(employeeBaseSalary(e)/6):0,paid:false,paidAt:""};record.entries.push(entry);}
- entry.states=entry.states||{};entry.assignments=entry.assignments||{};entry.states[date]="P";entry.assignments[date]=project;record.updatedAt=new Date().toISOString();record.updatedBy=user.username;saveLocalOnly();cloudWriteGeneric("attendanceWeekly",record,"Présence QR synchronisée");
+ const weekStart=mondayOf(date),record=weeklyAttendanceRecord(weekStart);
+ const key=e.id;
+ let entry=record.entries.find(x=>String(x.employeeKey)===String(key));
+ if(!entry){entry={employeeKey:key,states:{},assignments:{}};record.entries.push(entry);}
+ entry.states=entry.states||{};entry.assignments=entry.assignments||{};
+ // QR scan means present for the day and records the exact chantier selected at scan.
+ entry.states[date]="P";
+ entry.assignments[date]=project;
+ record.updatedAt=new Date().toISOString();
+ record.updatedBy=effectiveUserIdentity().label||user.username;
+ saveLocalOnly();
+ cloudWriteGeneric("attendanceWeekly",record,"Présence QR synchronisée");
 }
+
 async function techniciansPage(){
  if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
  const rows=await loadTechnicianMiniProfiles();

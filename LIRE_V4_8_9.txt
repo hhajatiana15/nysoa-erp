@@ -1,0 +1,11 @@
+NYSOA ERP V4.8.9 — POINTAGE CHANTIER QR / MANUEL
+
+- Une seule fiche de pointage par semaine.
+- Le filtre chantier ne crée plus une deuxième fiche de pointage.
+- Pour chaque employé et chaque jour, Chantier / lieu est une liste déroulante contenant tous les chantiers.
+- Option « Autre / manuel » avec champ libre.
+- QR : le chantier choisi au scanner est affecté automatiquement au jour du scan.
+- Présence QR = Présent (1) pour le jour.
+- Manuel : Absent 0 / Demi-journée 0,5 / Présent 1.
+- Un employé peut changer de chantier chaque jour dans la même semaine.
+- Migration automatique des anciennes fiches hebdomadaires séparées par chantier vers une fiche unique.
