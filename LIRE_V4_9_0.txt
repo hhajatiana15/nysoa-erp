@@ -1,0 +1,22 @@
+NYSOA ERP V4.9.0 — RESTAURATION FACTURES / CLIENTS / CHANTIERS PAR NOM
+
+FACTURATION
+- Recherche automatiquement les factures manquantes dans Firebase invoices, auditLog et syncRecovery.
+- Restaure uniquement la dernière version connue de chaque facture manquante.
+- Ne restaure pas une ancienne version si la même facture est déjà active.
+- Évite les doublons par identité de facture.
+- La facture restaurée est resynchronisée vers Firebase.
+
+CLIENTS
+- Récupération automatique depuis collection clients, audit, devis, factures, encaissements et chantiers.
+- Déduplication par nom/raison sociale.
+- Téléphone/adresse anciens conservés lorsqu'ils existent.
+- Le module Clients n'exige plus de chantier.
+- Enregistrement client synchronisé vers Firebase.
+
+CHANTIERS
+- Suppression du champ Code visible.
+- L'utilisateur saisit uniquement « Nom / lieu du chantier ».
+- L'ERP génère un ID interne invisible CH-...
+- Les listes déroulantes affichent le nom du chantier, pas le code interne.
+- Le client du chantier peut être choisi via suggestions de la liste Clients ou saisi manuellement.

@@ -916,7 +916,9 @@ function printA4AutoFit(){
  }
 }
 
-function boot(){ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();if(user.role!=="ADMIN"&&(user.role!=="TECHNICIEN"||technicianSessionProfile()))startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");const actor=effectiveUserIdentity();$("#currentUserLabel").textContent=actor.label||user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");renderMenu();
+function boot(){
+ try{migrateProjectChantierFields();}catch(e){console.warn('migration chantier',e);}
+ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();if(user.role!=="ADMIN"&&(user.role!=="TECHNICIEN"||technicianSessionProfile()))startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");const actor=effectiveUserIdentity();$("#currentUserLabel").textContent=actor.label||user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");renderMenu();
 const obsoleteManualButtons=["sendUpdatesBtn","refreshAdminBtn","publishValidationBtn","importValidationBtn","exportUsageBtn","importUsageBtn","exportDailyReportsBtn","importDailyReportsBtn","cloudMigrateBtn"];
 obsoleteManualButtons.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display="none";});
 const cloudSyncBtn=document.getElementById("cloudSyncBtn");
@@ -961,7 +963,7 @@ function userCanAccessProject(projectId){
 function accessibleProjects(){return (db.projects||[]).filter(p=>!p.deleted&&userCanAccessProject(p.id));}
 function projectContextOptions(selected=currentProjectContext()){
  return `<option value="${ALL_PROJECTS_CONTEXT}" ${!selected?"selected":""}>Tous les chantiers</option>`+
-  accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${String(selected)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("");
+  accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${String(selected)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("");
 }
 function renderGlobalProjectSelector(){
  const el=document.getElementById("globalProjectFilter");
@@ -1320,7 +1322,7 @@ function projects(){
    <div class="table-wrap">
      <table>
        <thead><tr>
-         <th>Code</th><th>Projet</th><th>Client</th>${budgetCol}
+         <th>Chantier / lieu</th><th>Projet / travaux</th><th>Client</th>${budgetCol}
          <th>Début</th><th>Fin prévue</th><th>Avancement</th><th>Statut</th><th>Actions</th>
        </tr></thead>
        <tbody>
@@ -1375,9 +1377,11 @@ function projectForm(id=""){
  $("#content").innerHTML=`<div class="panel">
    <h3>${p?"MODIFIER":"NOUVEAU"} CHANTIER</h3>
    <form id="fProject" class="form-grid">
-     <label>Code<input name="id" value="${p?.id||""}" ${p?"readonly":""} required></label>
-     <label>Client<input name="client" value="${p?.client||""}" required></label>
-     <label class="full">Intitulé<input name="name" value="${p?.name||""}" required></label>
+     <input type="hidden" name="id" value="${esc(p?.id||"")}">
+     <label>Chantier / lieu<input name="chantier" value="${esc(projectChantierName(p))}" placeholder="Ex. AMPEFY, VISY GASY, AMBOHIMANABE" required></label>
+     <label>Projet / travaux<input name="name" value="${esc(projectWorkName(p))}" placeholder="Ex. PEINTURE, OUVRAGE METALLIQUE, CLÔTURE" required></label>
+     <label>Client<input name="client" list="projectClientList" value="${esc(p?.client||"")}" required></label>
+     <datalist id="projectClientList">${(db.modules?.clients||[]).filter(c=>!c.deleted).map(c=>`<option value="${esc(clientNameFromRecord(c))}"></option>`).join("")}</datalist>
      ${budgetField}
      <label>Début<input name="start" type="date" value="${p?.start||""}" required></label>
      <label>Fin prévue<input name="end" type="date" value="${p?.end||""}" required></label>
@@ -1395,12 +1399,17 @@ function projectForm(id=""){
  $("#fProject").onsubmit=e=>{
    e.preventDefault();
    let f=new FormData(e.target);
-   let duplicate=db.projects.find(x=>x.id===f.get("id") && x!==p);
-   if(duplicate)return alert("Ce code chantier existe déjà.");
+   const chantier=String(f.get("chantier")||"").trim();
+   const name=String(f.get("name")||"").trim();
+   let duplicate=db.projects.find(x=>x!==p&&!x.deleted&&projectChantierName(x).toLowerCase()===chantier.toLowerCase()&&projectWorkName(x).toLowerCase()===name.toLowerCase());
+   if(duplicate)return alert("Ce chantier avec ce projet existe déjà.");
+   const internalId=p?.id||("CH-"+Date.now()+"-"+Math.random().toString(36).slice(2,7).toUpperCase());
 
    let obj={
-     id:f.get("id").trim(),
-     name:f.get("name").trim(),
+     id:internalId,
+     chantier:chantier,
+     name:name,
+     projectName:name,
      client:f.get("client").trim(),
      budget:user.role==="ADMIN"?+f.get("budget"):(p?.budget||0),
      start:f.get("start"),
@@ -1478,7 +1487,7 @@ function siteControlForm(id=""){
  $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEAU"} CONTRÔLE CHANTIER</h3>
  <form id="fSiteControl" class="form-grid">
  <label>Date<input name="date" type="date" value="${r?.date||new Date().toISOString().slice(0,10)}" required></label>
- <label>Chantier<select name="project" required>${accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${r?.project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name)}</option>`).join("")}</select></label>
+ <label>Chantier<select name="project" required>${accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${r?.project===p.id?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label>
  <label>Nombre d’ouvriers<input name="workers" type="number" min="0" value="${r?.workers??0}" required></label>
  <label>Nombre de manœuvres<input name="labourers" type="number" min="0" value="${r?.labourers??0}" required></label>
  <label class="full">Travaux contrôlés / Observation<textarea name="note" required>${esc(r?.note||"")}</textarea></label>
@@ -1694,7 +1703,7 @@ function attendanceAssignmentControl(key,date,value,projects){
  const manual=value&&!known;
  return `<select class="att-assignment-choice" data-key="${esc(key)}" data-date="${date}" onchange="attendanceAssignmentChoiceChanged(this)">
    <option value="">— Chantier / lieu —</option>
-   ${projects.map(p=>`<option value="${esc(p.id)}" ${String(value)===String(p.id)?"selected":""}>${esc(p.name||p.id)}</option>`).join("")}
+   ${projects.map(p=>`<option value="${esc(p.id)}" ${String(value)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}
    <option value="__MANUAL__" ${manual?"selected":""}>Autre / manuel…</option>
   </select>
   <input class="att-assignment-manual" data-key="${esc(key)}" data-date="${date}" value="${esc(manual?value:"")}" placeholder="Saisir chantier / lieu" style="${manual?"":"display:none"}">`;
@@ -1725,7 +1734,7 @@ function attendance(){
 
  $("#content").innerHTML=`<div class="panel"><h3>POINTAGE — AFFECTATION PAR JOUR</h3><div class="panel-body">
  <div class="form-grid"><label>Semaine contenant le<input id="attendanceDate" type="date" value="${selectedDate}"></label>
- <label>Filtre chantier<select id="attendanceProject"><option value="">Tous les employés</option>${projects.map(p=>`<option value="${esc(p.id)}" ${filterProject===p.id?"selected":""}>${esc(p.name||p.id)}</option>`).join("")}</select></label>
+ <label>Filtre chantier<select id="attendanceProject"><option value="">Tous les employés</option>${projects.map(p=>`<option value="${esc(p.id)}" ${filterProject===p.id?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label>
  <div class="form-actions full"><button class="btn primary" onclick="saveAttendance()">Enregistrer</button><button class="btn secondary" onclick="go('qrAttendance')">📷 Scanner QR</button></div></div>
  <div class="attendance-note"><b>Présence :</b> Absent = 0, ½ journée = 0,5, Présent = 1. <b>Chantier / lieu :</b> choisissez un chantier dans la liste ou « Autre / manuel ». Un scan QR met automatiquement le chantier du scan sur le jour concerné.</div></div>
  <div class="table-wrap"><table class="attendance-table weekly-attendance"><thead><tr><th>Matricule</th><th>Nom</th><th>Fonction</th><th>État</th>${days.map(d=>`<th class="center">${d.label}<small>${d.date.slice(8,10)}</small><br><small>Présence / Chantier</small></th>`).join("")}<th>Total jours</th></tr></thead><tbody>
@@ -1822,7 +1831,7 @@ function qrAttendancePage(){
  if(!["ADMIN","GESTIONNAIRE","CONTROLE","TECHNICIEN"].includes(user.role))return alert("Accès non autorisé.");
  const ctx=currentProjectContext();const today=new Date().toISOString().slice(0,10);
  const rows=qrAttendanceRows().filter(r=>(!ctx||String(r.project)===String(ctx))&&String(r.date)===today).sort((a,b)=>String(b.timestamp).localeCompare(String(a.timestamp)));
- $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>PRÉSENCE PAR BADGE QR</h3><div class="panel-body"><div class="form-grid"><label>Chantier<select id="qrProject" required><option value="">Choisir le chantier</option>${accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${String(ctx)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label><div class="form-actions"><button class="btn primary" onclick="startQrScanner()">📷 Scanner un badge</button><button class="btn secondary" onclick="stopQrScanner()">Arrêter caméra</button></div><label class="full">Saisie manuelle (secours)<div class="manual-qr"><input id="qrManualCode" placeholder="Coller / saisir le code du badge"><button type="button" class="btn secondary" onclick="processBadgeScan(document.getElementById('qrManualCode').value)">Valider</button></div></label></div><div id="qr-reader" class="qr-reader"></div><div id="qrScanResult"></div><div class="notice">Premier scan de la journée = <b>Entrée</b>. Le scan suivant après l’entrée = <b>Sortie</b>. Un double scan dans les 30 secondes est ignoré.</div></div></div>
+ $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>PRÉSENCE PAR BADGE QR</h3><div class="panel-body"><div class="form-grid"><label>Chantier<select id="qrProject" required><option value="">Choisir le chantier</option>${accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${String(ctx)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label><div class="form-actions"><button class="btn primary" onclick="startQrScanner()">📷 Scanner un badge</button><button class="btn secondary" onclick="stopQrScanner()">Arrêter caméra</button></div><label class="full">Saisie manuelle (secours)<div class="manual-qr"><input id="qrManualCode" placeholder="Coller / saisir le code du badge"><button type="button" class="btn secondary" onclick="processBadgeScan(document.getElementById('qrManualCode').value)">Valider</button></div></label></div><div id="qr-reader" class="qr-reader"></div><div id="qrScanResult"></div><div class="notice">Premier scan de la journée = <b>Entrée</b>. Le scan suivant après l’entrée = <b>Sortie</b>. Un double scan dans les 30 secondes est ignoré.</div></div></div>
  <div class="panel" style="margin-top:12px"><h3>SCANS DU JOUR</h3><div class="table-wrap"><table><thead><tr><th>Heure</th><th>Employé</th><th>Poste</th><th>Chantier</th><th>Mouvement</th><th>Scanné par</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${new Date(r.timestamp).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</td><td><b>${esc(r.employeeName)}</b></td><td>${esc(r.jobTitle||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${r.direction==="Entrée"?'<span class="qr-in">Entrée</span>':'<span class="qr-out">Sortie</span>'}</td><td>${esc(r.scannedByLabel||r.scannedBy||"")}</td></tr>`).join(""):'<tr><td colspan="6">Aucun scan aujourd’hui.</td></tr>'}</tbody></table></div></div>`;
 }
 async function startQrScanner(){
@@ -1913,7 +1922,7 @@ function stockItemForm(id=""){
  $("#fStockItem").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),obj={...(r||{}),id:r?.id||"STK-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),article:f.get("article"),unit:f.get("unit"),openingQty:+f.get("openingQty")||0,openingUnitValue:+f.get("openingUnitValue")||0,updatedAt:now,updatedBy:user.username};const before=r?cloneRecord(r):null;if(r)Object.assign(r,obj);else{obj.createdAt=now;db.modules.stock.push(obj);}audit(r?"Modification article stock":"Création article stock","stock",obj.id,obj.article,before,cloneRecord(obj));saveLocalOnly();cloudWriteGeneric("stock",obj,"Stock article");stockPage();};
 }
 function stockMovementForm(type){
- const items=stockItems();$("#content").innerHTML=`<div class="panel"><h3>${type.toUpperCase()} STOCK</h3><form id="fStockMove" class="form-grid"><label>Date<input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label>Article<select name="itemId" required><option value="">Choisir</option>${items.map(i=>`<option value="${esc(i.id)}">${esc(stockItemName(i))} — ${stockSnapshot(i).qty.toFixed(2)} ${esc(stockItemUnit(i))}</option>`).join("")}</select></label><label>Quantité<input name="qty" type="number" min="0.01" step="0.01" required></label>${type==="Entrée"?'<label>Valeur unitaire (Ar)<input name="unitValue" type="number" min="0" step="0.01" required></label>':""}<label>Chantier / destination<select name="project"><option value="">Non affecté</option>${accessibleProjects().map(p=>`<option value="${esc(p.id)}">${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label><label>Référence<input name="reference"></label><label class="full">Observation<textarea name="note"></textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="stockPage()">Annuler</button></div></form></div>`;
+ const items=stockItems();$("#content").innerHTML=`<div class="panel"><h3>${type.toUpperCase()} STOCK</h3><form id="fStockMove" class="form-grid"><label>Date<input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label>Article<select name="itemId" required><option value="">Choisir</option>${items.map(i=>`<option value="${esc(i.id)}">${esc(stockItemName(i))} — ${stockSnapshot(i).qty.toFixed(2)} ${esc(stockItemUnit(i))}</option>`).join("")}</select></label><label>Quantité<input name="qty" type="number" min="0.01" step="0.01" required></label>${type==="Entrée"?'<label>Valeur unitaire (Ar)<input name="unitValue" type="number" min="0" step="0.01" required></label>':""}<label>Chantier / destination<select name="project"><option value="">Non affecté</option>${accessibleProjects().map(p=>`<option value="${esc(p.id)}">${esc(projectChantierName(p))}</option>`).join("")}</select></label><label>Référence<input name="reference"></label><label class="full">Observation<textarea name="note"></textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="stockPage()">Annuler</button></div></form></div>`;
  $("#fStockMove").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),item=items.find(i=>String(i.id)===String(f.get("itemId")));if(!item)return;const qty=+f.get("qty")||0,s=stockSnapshot(item);if(type==="Sortie"&&qty>s.qty+0.0001)return alert("Stock insuffisant.");const uv=type==="Entrée"?(+f.get("unitValue")||0):s.avg,now=new Date().toISOString(),m={id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),type,itemId:item.id,itemName:stockItemName(item),unit:stockItemUnit(item),qty,unitValue:uv,project:f.get("project")||"",reference:f.get("reference")||"",note:f.get("note")||"",owner:user.username,createdAt:now,updatedAt:now};db.modules.stockMovements.push(m);audit(type+" stock","stockMovements",m.id,`${m.itemName} — ${qty}`,null,m);saveLocalOnly();cloudWriteGeneric("stockMovements",m,type+" stock");stockPage();};
 }
 
@@ -2040,10 +2049,44 @@ function purchaseHistory(id){
 
 
 // ===== APPRO CAISSE / CAISSE / DÉPENSES V4.5.6 =====
+function isInternalProjectId(v){
+ return /^CH-\d+-[A-Z0-9]+$/i.test(String(v||""));
+}
+function projectChantierName(p){
+ if(!p)return "";
+ if(String(p.chantier||"").trim())return String(p.chantier).trim();
+ if(p.id&&!isInternalProjectId(p.id))return String(p.id).trim();
+ return String(p.location||p.siteName||p.name||p.id||"").trim();
+}
+function projectWorkName(p){
+ if(!p)return "";
+ return String(p.name||p.projectName||p.workName||"").trim();
+}
 function projectLabel(id){
  const p=(db.projects||[]).find(x=>String(x.id)===String(id));
- return p?.name||id||"Non affecté";
+ return p?projectChantierName(p):(id||"Non affecté");
 }
+function projectFullLabel(id){
+ const p=(db.projects||[]).find(x=>String(x.id)===String(id));
+ if(!p)return id||"Non affecté";
+ const ch=projectChantierName(p),work=projectWorkName(p);
+ return work&&work!==ch?`${ch} — ${work}`:ch;
+}
+function migrateProjectChantierFields(){
+ db.projects=Array.isArray(db.projects)?db.projects:[];
+ let changed=false;
+ db.projects.forEach(p=>{
+  if(p.deleted)return;
+  if(!String(p.chantier||"").trim()){
+   if(p.id&&!isInternalProjectId(p.id)){p.chantier=String(p.id).trim();changed=true;}
+   else if(p.location||p.siteName){p.chantier=String(p.location||p.siteName).trim();changed=true;}
+  }
+  if(!p.projectName&&p.name){p.projectName=p.name;changed=true;}
+ });
+ if(changed)saveLocalOnly();
+ return changed;
+}
+
 function expenseRows(){db.expenses=Array.isArray(db.expenses)?db.expenses:[];return db.expenses.filter(x=>!x.deleted);}
 function manualExpenseRows(){return expenseRows().filter(x=>!x.sourcePurchaseId&&!x.sourcePayrollId);}
 function paidPurchaseJournalRows(projectId=""){return (db.modules?.purchases||[]).filter(p=>!p.deleted&&p.paymentStatus==="Payé"&&(!projectId||String(p.project)===String(projectId))).map(p=>({id:"JRN-ACH-"+p.id,date:p.paymentDate||p.date||"",project:p.project,category:"Achats",label:`Achat ${p.designation||p.id}`,amount:+p.amount||0,paymentMode:p.paymentMode||"À préciser",fundSource:p.fundSource||"Admin",reference:p.id,status:"Payée",source:"Achat",readonly:true}));}
@@ -2052,14 +2095,14 @@ function payrollExpenseJournalRows(projectId=""){return payrollActualMovements(p
 function unifiedExpenseJournalRows(projectId=""){const direct=manualExpenseRows().filter(e=>e.status!=="En attente"&&(!projectId||String(e.project)===String(projectId))).map(e=>({...e,source:"Dépense",fundSource:e.fundSource||"Admin",readonly:false}));return[...direct,...paidPurchaseJournalRows(projectId),...payrollExpenseJournalRows(projectId)].sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));}
 function unifiedExpenseTotal(projectId=""){return unifiedExpenseJournalRows(projectId).reduce((n,r)=>n+(+r.amount||0),0);}
 function expensesPage(){const ctx=currentProjectContext(),rows=unifiedExpenseJournalRows(ctx),total=rows.reduce((n,r)=>n+(+r.amount||0),0);$("#content").innerHTML=`${caisseNav("expenses")}${projectContextNotice()}<div class="kpis">${kpi("📒","orange","TOTAL DÉPENSES",money(total),"Journal général")}</div><div class="panel"><h3>DÉPENSES — JOURNAL GÉNÉRAL</h3><div class="panel-body"><button class="btn primary" onclick="expenseForm()">+ Nouvelle dépense</button><div class="notice">Tous les achats payés, salaires payés et autres dépenses apparaissent ici. <b>Source des fonds</b> distingue Caisse Gestionnaire et Admin.</div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Source</th><th>Catégorie</th><th>Libellé</th><th>Montant</th><th>Source des fonds</th><th>Référence</th><th>Action</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(r.source||"")}</td><td>${esc(r.category||"")}</td><td>${esc(r.label||"")}</td><td><b>${money(r.amount)}</b></td><td><b>${esc(r.fundSource||"Admin")}</b></td><td>${esc(r.reference||"")}</td><td>${r.readonly?'<span class="muted">Automatique</span>':`<button class="btn-xs btn-edit" onclick="expenseForm('${r.id}')">Modifier</button> <button class="btn-xs btn-delete" onclick="deleteExpense('${r.id}')">Supprimer</button>`}</td></tr>`).join(""):'<tr><td colspan="9">Aucune dépense.</td></tr>'}</tbody></table></div></div>`;}
-function expenseForm(id=""){const r=id?expenseRows().find(x=>String(x.id)===String(id)):null,project=r?.project||currentProjectContext()||"";$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} DÉPENSE</h3><form id="fExpense" class="form-grid"><label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label><label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label><label>Catégorie<select name="category">${["Achats","Carburant","Transport","Main-d’œuvre externe","Matériels","Frais chantier","Autre"].map(x=>`<option ${r?.category===x?"selected":""}>${x}</option>`).join("")}</select></label><label>Libellé<input name="label" value="${esc(r?.label||"")}" required></label><label>Montant<input name="amount" type="number" min="1" value="${+r?.amount||""}" required></label><label>Mode<select name="paymentMode">${["Espèces","Virement","Mobile Money","Chèque","Autre"].map(x=>`<option ${r?.paymentMode===x?"selected":""}>${x}</option>`).join("")}</select></label><label>Source des fonds<select name="fundSource"><option ${r?.fundSource==="Caisse Gestionnaire"||(!r&&user.role==="GESTIONNAIRE")?"selected":""}>Caisse Gestionnaire</option><option ${r?.fundSource==="Admin"||(!r&&user.role==="ADMIN")?"selected":""}>Admin</option></select></label><label>Référence<input name="reference" value="${esc(r?.reference||"")}"></label><label>Statut<select name="status"><option ${r?.status==="Payée"?"selected":""}>Payée</option><option ${r?.status==="En attente"?"selected":""}>En attente</option></select></label><label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="expensesPage()">Annuler</button></div></form></div>`;$("#fExpense").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),obj={id:r?.id||"DEP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),category:f.get("category"),label:f.get("label"),amount:+f.get("amount")||0,paymentMode:f.get("paymentMode"),fundSource:f.get("fundSource")||"Admin",reference:f.get("reference")||"",status:f.get("status"),note:f.get("note")||"",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};const before=r?cloneRecord(r):null;if(r)Object.assign(r,obj);else{obj.createdAt=now;db.expenses.push(obj)}audit(r?"Modification dépense":"Création dépense","expenses",obj.id,`${obj.label} — ${money(obj.amount)} — ${obj.fundSource}`,before,obj);saveLocalOnly();cloudWriteGeneric("expenses",obj,"Dépense");expensesPage()};}
+function expenseForm(id=""){const r=id?expenseRows().find(x=>String(x.id)===String(id)):null,project=r?.project||currentProjectContext()||"";$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} DÉPENSE</h3><form id="fExpense" class="form-grid"><label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label><label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label><label>Catégorie<select name="category">${["Achats","Carburant","Transport","Main-d’œuvre externe","Matériels","Frais chantier","Autre"].map(x=>`<option ${r?.category===x?"selected":""}>${x}</option>`).join("")}</select></label><label>Libellé<input name="label" value="${esc(r?.label||"")}" required></label><label>Montant<input name="amount" type="number" min="1" value="${+r?.amount||""}" required></label><label>Mode<select name="paymentMode">${["Espèces","Virement","Mobile Money","Chèque","Autre"].map(x=>`<option ${r?.paymentMode===x?"selected":""}>${x}</option>`).join("")}</select></label><label>Source des fonds<select name="fundSource"><option ${r?.fundSource==="Caisse Gestionnaire"||(!r&&user.role==="GESTIONNAIRE")?"selected":""}>Caisse Gestionnaire</option><option ${r?.fundSource==="Admin"||(!r&&user.role==="ADMIN")?"selected":""}>Admin</option></select></label><label>Référence<input name="reference" value="${esc(r?.reference||"")}"></label><label>Statut<select name="status"><option ${r?.status==="Payée"?"selected":""}>Payée</option><option ${r?.status==="En attente"?"selected":""}>En attente</option></select></label><label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="expensesPage()">Annuler</button></div></form></div>`;$("#fExpense").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),obj={id:r?.id||"DEP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),category:f.get("category"),label:f.get("label"),amount:+f.get("amount")||0,paymentMode:f.get("paymentMode"),fundSource:f.get("fundSource")||"Admin",reference:f.get("reference")||"",status:f.get("status"),note:f.get("note")||"",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};const before=r?cloneRecord(r):null;if(r)Object.assign(r,obj);else{obj.createdAt=now;db.expenses.push(obj)}audit(r?"Modification dépense":"Création dépense","expenses",obj.id,`${obj.label} — ${money(obj.amount)} — ${obj.fundSource}`,before,obj);saveLocalOnly();cloudWriteGeneric("expenses",obj,"Dépense");expensesPage()};}
 function deleteExpense(id){const r=expenseRows().find(x=>String(x.id)===String(id));if(!r||!confirm("Supprimer cette dépense ?"))return;const before=cloneRecord(r);r.deleted=true;r.deletedAt=new Date().toISOString();r.updatedAt=r.deletedAt;audit("Suppression dépense","expenses",r.id,r.label,before,r);saveLocalOnly();cloudWriteGeneric("expenses",r,"Dépense supprimée");expensesPage();}
 function caisseNav(active="journal"){const b=(k,l,f)=>`<button class="btn ${active===k?"primary":"secondary"}" onclick="${f}">${l}</button>`;return`<div class="panel caisse-hub"><h3>💵 MODULE CAISSE</h3><div class="panel-body form-actions">${b("journal","Journal caisse","cashPage()")}${b("appro","Demandes appro","approPage()")}${b("expenses","Dépenses","expensesPage()")}${b("treasury","Trésorerie","cashTreasuryPage()")}</div></div>`;}
 function cashEntryRows(){db.modules.cashEntries=Array.isArray(db.modules.cashEntries)?db.modules.cashEntries:[];return db.modules.cashEntries.filter(x=>!x.deleted);}
-function cashEntryForm(){$("#content").innerHTML=`<div class="panel"><h3>ENTRÉE CAISSE MANUELLE</h3><div class="notice">Montant réellement remis à la caisse Gestionnaire. Indépendant de la demande d’approvisionnement.</div><form id="fCashEntry" class="form-grid"><label>Date<input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label>Montant<input name="amount" type="number" min="1" required></label><label>Chantier<select name="project"><option value="">Caisse générale</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}">${esc(p.name||p.id)}</option>`).join("")}</select></label><label>Référence<input name="reference"></label><label class="full">Observation<textarea name="note"></textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="cashPage()">Annuler</button></div></form></div>`;$("#fCashEntry").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),a=effectiveUserIdentity(),o={id:"CIN-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),amount:+f.get("amount")||0,project:f.get("project")||"",reference:f.get("reference")||"",note:f.get("note")||"",enteredBy:a.label||a.username||user.username,createdAt:now,updatedAt:now};db.modules.cashEntries.push(o);audit("Entrée caisse","cashEntries",o.id,money(o.amount),null,o);saveLocalOnly();cloudWriteGeneric("cashEntries",o,"Entrée caisse");cashPage()};}
+function cashEntryForm(){$("#content").innerHTML=`<div class="panel"><h3>ENTRÉE CAISSE MANUELLE</h3><div class="notice">Montant réellement remis à la caisse Gestionnaire. Indépendant de la demande d’approvisionnement.</div><form id="fCashEntry" class="form-grid"><label>Date<input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label>Montant<input name="amount" type="number" min="1" required></label><label>Chantier<select name="project"><option value="">Caisse générale</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}">${esc(projectChantierName(p))}</option>`).join("")}</select></label><label>Référence<input name="reference"></label><label class="full">Observation<textarea name="note"></textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="cashPage()">Annuler</button></div></form></div>`;$("#fCashEntry").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),a=effectiveUserIdentity(),o={id:"CIN-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),amount:+f.get("amount")||0,project:f.get("project")||"",reference:f.get("reference")||"",note:f.get("note")||"",enteredBy:a.label||a.username||user.username,createdAt:now,updatedAt:now};db.modules.cashEntries.push(o);audit("Entrée caisse","cashEntries",o.id,money(o.amount),null,o);saveLocalOnly();cloudWriteGeneric("cashEntries",o,"Entrée caisse");cashPage()};}
 function cashTreasuryPage(){generic("treasury");const c=document.getElementById("content");if(c)c.innerHTML=caisseNav("treasury")+c.innerHTML;}
 function approPage(){db.requests=Array.isArray(db.requests)?db.requests:[];const ctx=currentProjectContext(),req=db.requests.filter(x=>!x.deleted&&(!ctx||String(x.project)===String(ctx))).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));$("#content").innerHTML=`${caisseNav("appro")}${projectContextNotice()}<div class="panel"><h3>DEMANDES D’APPROVISIONNEMENT</h3><div class="panel-body">${user.role!=="ADMIN"?'<button class="btn primary" onclick="approForm()">+ Nouvelle demande</button>':""}<div class="notice">Validation Admin simple : <b>OK</b> ou <b>Non</b>. Une validation ne crédite jamais automatiquement la caisse.</div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Montant</th><th>Motif</th><th>Statut</th><th>Action</th></tr></thead><tbody>${req.length?req.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td><b>${money(r.amount)}</b></td><td>${esc(r.purpose||r.note||"")}</td><td>${workflowBadge(r.status||"En attente")}</td><td>${user.role==="ADMIN"&&r.status==="En attente"?`<button class="btn-xs btn-edit" onclick="validateApproRequest('${r.id}',true)">OK</button> <button class="btn-xs btn-delete" onclick="validateApproRequest('${r.id}',false)">Non</button>`:r.status==="En attente"?`<button class="btn-xs btn-edit" onclick="approForm('${r.id}')">Modifier</button>`:""}</td></tr>`).join(""):'<tr><td colspan="6">Aucune demande.</td></tr>'}</tbody></table></div></div>`;}
-function approForm(id=""){const r=id?(db.requests||[]).find(x=>String(x.id)===String(id)):null,project=r?.project||currentProjectContext()||"";$("#content").innerHTML=`<div class="panel"><h3>DEMANDE D’APPROVISIONNEMENT</h3><form id="fAppro" class="form-grid"><label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label><label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label><label>Montant<input name="amount" type="number" min="1" value="${+r?.amount||""}" required></label><label>Motif<input name="purpose" value="${esc(r?.purpose||"")}" required></label><label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label><div class="form-actions full"><button class="btn primary">Envoyer</button><button type="button" class="btn secondary" onclick="approPage()">Annuler</button></div></form></div>`;$("#fAppro").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),o={id:r?.id||"DEM-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),amount:+f.get("amount")||0,purpose:f.get("purpose"),note:f.get("note")||"",status:r?.status||"En attente",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};const before=r?cloneRecord(r):null;if(r)Object.assign(r,o);else{o.createdAt=now;db.requests.push(o)}audit(r?"Modification demande appro":"Création demande appro","requests",o.id,`${projectLabel(o.project)} — ${money(o.amount)}`,before,o);saveLocalOnly();cloudWriteGeneric("requests",o,"Demande appro");approPage()};}
+function approForm(id=""){const r=id?(db.requests||[]).find(x=>String(x.id)===String(id)):null,project=r?.project||currentProjectContext()||"";$("#content").innerHTML=`<div class="panel"><h3>DEMANDE D’APPROVISIONNEMENT</h3><form id="fAppro" class="form-grid"><label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label><label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label><label>Montant<input name="amount" type="number" min="1" value="${+r?.amount||""}" required></label><label>Motif<input name="purpose" value="${esc(r?.purpose||"")}" required></label><label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label><div class="form-actions full"><button class="btn primary">Envoyer</button><button type="button" class="btn secondary" onclick="approPage()">Annuler</button></div></form></div>`;$("#fAppro").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),o={id:r?.id||"DEM-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),amount:+f.get("amount")||0,purpose:f.get("purpose"),note:f.get("note")||"",status:r?.status||"En attente",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};const before=r?cloneRecord(r):null;if(r)Object.assign(r,o);else{o.createdAt=now;db.requests.push(o)}audit(r?"Modification demande appro":"Création demande appro","requests",o.id,`${projectLabel(o.project)} — ${money(o.amount)}`,before,o);saveLocalOnly();cloudWriteGeneric("requests",o,"Demande appro");approPage()};}
 function validateApproRequest(id,accept){if(user.role!=="ADMIN")return;const r=(db.requests||[]).find(x=>String(x.id)===String(id));if(!r)return;const now=new Date().toISOString(),before=cloneRecord(r);r.status=accept?"Validée":"Rejetée";r.updatedAt=now;if(accept){r.validatedAt=now;r.validatedBy=user.username}else{r.rejectedAt=now;r.rejectedBy=user.username}audit(accept?"Validation demande appro":"Rejet demande appro","requests",r.id,accept?"OK":"Non",before,r);saveLocalOnly();cloudWriteGeneric("requests",r,"Décision appro");approPage();}
 function cashMovements(projectId=""){const rows=[];cashEntryRows().filter(a=>!projectId||!a.project||String(a.project)===String(projectId)).forEach(a=>rows.push({date:a.date,project:a.project,type:"Entrée",source:"Entrée caisse manuelle",label:a.note||"Entrée caisse",amount:+a.amount||0,reference:a.reference||a.id}));unifiedExpenseJournalRows(projectId).filter(e=>(e.fundSource||"Admin")==="Caisse Gestionnaire").forEach(e=>rows.push({date:e.date,project:e.project,type:"Sortie",source:e.source||"Dépense",label:e.label||e.category||"Dépense",amount:+e.amount||0,reference:e.reference||e.id}));return rows.sort((a,b)=>String(a.date||"").localeCompare(String(b.date||"")));}
 function cashPage(){const ctx=currentProjectContext(),rows=cashMovements(ctx);let running=0;const rendered=rows.map(r=>{running+=r.type==="Entrée"?+r.amount:-r.amount;return{...r,balance:running}}),ins=rows.filter(r=>r.type==="Entrée").reduce((n,r)=>n+r.amount,0),outs=rows.filter(r=>r.type==="Sortie").reduce((n,r)=>n+r.amount,0);$("#content").innerHTML=`${caisseNav("journal")}${projectContextNotice()}<div class="kpis">${kpi("⬇","green","ENTRÉES CAISSE",money(ins))}${kpi("⬆","orange","SORTIES CAISSE",money(outs))}${kpi("💵","blue","SOLDE CAISSE",money(ins-outs))}</div><div class="panel"><h3>JOURNAL CAISSE GESTIONNAIRE</h3><div class="panel-body"><button class="btn primary" onclick="cashEntryForm()">+ Entrée caisse manuelle</button><div class="notice">La caisse est indépendante des demandes appro. Seules les dépenses marquées <b>Caisse Gestionnaire</b> diminuent ce solde. Les dépenses Admin restent dans le Journal général sans diminuer cette caisse.</div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Type</th><th>Source</th><th>Libellé</th><th>Entrée</th><th>Sortie</th><th>Solde</th><th>Référence</th></tr></thead><tbody>${rendered.length?rendered.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${r.type}</td><td>${esc(r.source)}</td><td>${esc(r.label)}</td><td>${r.type==="Entrée"?money(r.amount):""}</td><td>${r.type==="Sortie"?money(r.amount):""}</td><td><b>${money(r.balance)}</b></td><td>${esc(r.reference||"")}</td></tr>`).join(""):'<tr><td colspan="9">Aucun mouvement.</td></tr>'}</tbody></table></div></div>`;}
@@ -2172,7 +2215,7 @@ function employeeForm(id=""){
    <option ${category==="Staff"?"selected":""}>Staff</option>
  </select></label>
  <label>Poste<select name="jobTitle" id="employeeRole" onchange="updateEmployeeMatriculePreview()"></select></label>
- <label>Chantier<select name="project"><option value="">Non affecté / Multi-chantiers</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
+ <label>Chantier<select name="project"><option value="">Non affecté / Multi-chantiers</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label>
  <label>Mode de paiement<select name="payCycle">
    <option ${existingPayCycle==="Hebdomadaire"?"selected":""}>Hebdomadaire</option>
    <option ${existingPayCycle==="Mensuel"?"selected":""}>Mensuel</option>
@@ -2259,7 +2302,7 @@ function clientReceiptForm(id="",projectOverride=""){
  const inv=invoiceRows().filter(x=>!project||String(x.project)===String(project));
  $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEL"} ENCAISSEMENT CLIENT</h3><form id="fReceipt" class="form-grid">
  <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
- <label>Chantier<select name="project" required onchange="receiptProjectChanged(this.value)"><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
+ <label>Chantier<select name="project" required onchange="receiptProjectChanged(this.value)"><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label>
  <label>Facture / tranche<select name="invoiceId" onchange="receiptInvoiceChanged(this.value)"><option value="">Paiement global chantier</option>${inv.map(i=>`<option value="${esc(i.id)}" ${i.id===r?.invoiceId?"selected":""}>${esc(i.id)} — ${money(i.trancheAmount||0)}</option>`).join("")}</select></label>
  <label>Client<input name="client" id="receiptClient" value="${esc(r?.client||inv.find(i=>i.id===r?.invoiceId)?.client||"")}" required></label>
  <label>Montant reçu (Ar)<input name="amount" type="number" min="1" step="1" value="${+r?.amount||""}" required></label>
@@ -2410,6 +2453,73 @@ function validatedQuoteAmount(projectId,quoteId=""){
  const q=quoteId?(db.quotes||[]).find(x=>x.id===quoteId):acceptedQuotesForProject(projectId).slice(-1)[0];
  return q?quoteFinancials(q).ttc:0;
 }
+
+function invoiceRecoveryIdentity(r){
+ const visible=String(r?.invoiceNo||r?.id||"").trim();
+ if(visible)return visible;
+ return [r?.date||"",r?.project||"",r?.client||"",+r?.quoteAmount||0,+r?.tranchePercent||0,+r?.trancheAmount||+r?.values?.[2]||0].join("|");
+}
+function isValidRecoverableInvoice(r){
+ if(!r||r.deleted)return false;
+ const amount=+r.trancheAmount||+r.values?.[2]||0;
+ const quote=+r.quoteAmount||0;
+ return amount>0&&(quote>0||r.project||r.client);
+}
+async function restoreMissingInvoicesFromHistory(){
+ db.modules.invoices=Array.isArray(db.modules.invoices)?db.modules.invoices:[];
+ const currentKeys=new Set(invoiceRows().map(invoiceRecoveryIdentity));
+ let candidates=[];
+
+ const add=(r,date="",source="")=>{
+  if(!isValidRecoverableInvoice(r))return;
+  candidates.push({r:cloneRecord(r),date:date||r.updatedAt||r.createdAt||"",source});
+ };
+ (db.syncRecovery||[]).filter(x=>x.collection==="invoices").forEach(x=>{
+  add(x.localSnapshot,x.createdAt,"Backup sync");
+  add(x.remoteSnapshot,x.createdAt,"Cloud observé");
+ });
+ try{
+  if(cloudReady&&fbStore){
+   const [is,as]=await Promise.all([
+    fbStore.collection("invoices").get(),
+    fbStore.collection("auditLog").get()
+   ]);
+   is.docs.forEach(d=>add({id:d.id,...d.data()},"","Cloud invoices"));
+   as.docs.map(d=>d.data()).filter(a=>String(a.module||"").includes("invoices")).forEach(a=>{
+    add(a.after,a.date,"Audit après");
+    add(a.before,a.date,"Audit avant");
+   });
+  }
+ }catch(e){console.warn("Restauration factures",e);}
+
+ // Keep only the latest known snapshot for each invoice identity.
+ const latest=new Map();
+ candidates.sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))).forEach(c=>{
+  const key=invoiceRecoveryIdentity(c.r);
+  latest.set(key,c);
+ });
+
+ let restored=0;
+ for(const [key,c] of latest){
+  if(currentKeys.has(key))continue;
+  const s=c.r,now=new Date().toISOString();
+  // Preserve visible invoice number; give a fresh internal ID only if its old ID collides.
+  const existingId=db.modules.invoices.some(x=>String(x.id)===String(s.id));
+  const restoredObj={...s,
+   id:existingId?generateInvoiceInternalId():(s.id||generateInvoiceInternalId()),
+   invoiceNo:s.invoiceNo||(String(s.id||"").startsWith("FAC-")?s.id:generateInvoiceNumber()),
+   deleted:false,recovered:true,recoveredSource:c.source,recoveredAt:now,updatedAt:now,
+   updatedBy:effectiveUserIdentity().label||user.username
+  };
+  delete restoredObj.legacyQuarantined;delete restoredObj.legacyReason;delete restoredObj.__syncConflict;
+  db.modules.invoices.push(restoredObj);currentKeys.add(key);restored++;
+  audit("Restauration automatique facture","invoices",restoredObj.id,`${restoredObj.invoiceNo} — ${c.source}`,null,cloneRecord(restoredObj));
+  try{await cloudWriteGeneric("invoices",restoredObj,"Facture récupérée");}catch(e){}
+ }
+ if(restored)saveLocalOnly();
+ return restored;
+}
+
 async function refreshInvoicesFromCloud(){
  if(!cloudReady||!fbStore||!user)return {active:invoiceRows(),recoverable:0};
  try{
@@ -2461,6 +2571,7 @@ async function invoicesPage(){
 
  $("#content").innerHTML=`<div class="panel"><h3>FACTURATION</h3><div class="panel-body">Chargement des factures Cloud…</div></div>`;
  const cloudStateInvoices=await refreshInvoicesFromCloud();
+ const restoredInvoices=await restoreMissingInvoicesFromHistory();
 
  const ctx=currentProjectContext();
  const rows=invoiceRows().filter(r=>!ctx||String(r.project||"")===String(ctx));
@@ -2470,6 +2581,7 @@ async function invoicesPage(){
  <div class="panel-body"><button class="btn primary" onclick="invoiceForm()">+ Nouvelle tranche / facture</button>
  <button class="btn secondary" onclick="invoiceRecoveryPage()">🛟 Historique / récupération${recoverable?` (${recoverable})`:""}</button>
  ${legacyInvoiceRows().length?`<button class="btn secondary" onclick="legacyInvoiceReviewPage()">⚠ ${legacyInvoiceRows().length} ancienne(s) donnée(s) isolée(s)</button>`:""}
+ ${restoredInvoices?`<div class="notice"><b>${restoredInvoices} facture(s) historique(s) récupérée(s) automatiquement.</b></div>`:""}
  <div class="notice"><b>Source actuelle : Cloud Firebase + données locales fusionnées.</b> « Tous les chantiers » affiche toutes les factures actives. Les anciennes versions restent accessibles dans Historique / récupération sans être comptées deux fois.</div></div>
  <div class="table-wrap"><table><thead><tr><th>N° facture</th><th>Date</th><th>Chantier</th><th>Client</th><th>Devis validé</th><th>Montant devis</th><th>Tranche</th><th>Montant tranche</th><th>Total facturé</th><th>Reste à facturer</th><th>Actions</th></tr></thead><tbody>
  ${rows.length?rows.map(r=>{
@@ -2492,7 +2604,7 @@ function invoiceForm(id="",projectOverride=""){
  <input type="hidden" name="recordId" value="${esc(r?.id||generateInvoiceInternalId())}">
  <label>N° facture<input name="invoiceNo" value="${esc(r?.invoiceNo||r?.id?.startsWith("FAC-")?r.id:generateInvoiceNumber())}" required></label>
  <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
- <label>Chantier<select name="project" required onchange="invoiceProjectChanged(this.value)"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(projectId)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
+ <label>Chantier<select name="project" required onchange="invoiceProjectChanged(this.value)"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(projectId)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label>
  <label>Devis validé<select name="quoteId" onchange="invoiceQuoteChanged(this.value)"><option value="">Saisie manuelle / aucun devis lié</option>${quotes.map(q=>`<option value="${esc(q.id)}" ${q.id===selectedQuoteId?"selected":""}>${esc(q.id)} — ${money(quoteFinancials(q).ttc)}</option>`).join("")}</select></label>
  <label>Client<input name="client" id="invoiceClient" value="${esc(r?.client||selectedQuote?.client||"")}" placeholder="Nom du client" required></label>
  <label>Montant du devis validé<input name="quoteAmount" id="invoiceQuoteAmount" type="number" min="0" step="0.01" value="${+qa||0}" oninput="recalcInvoiceForm()" required></label>
@@ -2559,15 +2671,86 @@ function deleteInvoice(id){
 }
 
 
+
+function normalizeClientName(v){return String(v||"").trim().replace(/\s+/g," ").toLowerCase();}
+function clientNameFromRecord(r){return String(r?.values?.[0]||r?.name||r?.client||"").trim();}
+function clientPhoneFromRecord(r){return String(r?.values?.[1]||r?.phone||r?.telephone||"").trim();}
+function clientAddressFromRecord(r){return String(r?.values?.[2]||r?.address||r?.adresse||"").trim();}
+function ensureClientFromName(name,phone="",address="",source="Récupération"){
+ name=String(name||"").trim();if(!name)return null;
+ db.modules.clients=Array.isArray(db.modules.clients)?db.modules.clients:[];
+ const key=normalizeClientName(name);
+ let c=db.modules.clients.find(x=>!x.deleted&&normalizeClientName(clientNameFromRecord(x))===key);
+ if(c){
+  c.values=Array.isArray(c.values)?c.values:["","",""];
+  if(!c.values[1]&&phone)c.values[1]=phone;
+  if(!c.values[2]&&address)c.values[2]=address;
+  return c;
+ }
+ const now=new Date().toISOString();
+ c={id:"CLI-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),project:"",values:[name,phone,address],workflow:"Validé",owner:user?.username||"ADMIN",createdAt:now,updatedAt:now,recovered:true,recoveredSource:source};
+ db.modules.clients.push(c);
+ return c;
+}
+async function restoreClientsFromHistory(){
+ db.modules.clients=Array.isArray(db.modules.clients)?db.modules.clients:[];
+ let before=db.modules.clients.filter(x=>!x.deleted).length,cloudRows=[],auditRows=[];
+ try{
+  if(cloudReady&&fbStore){
+   const [cs,as]=await Promise.all([
+    fbStore.collection("clients").get(),
+    fbStore.collection("auditLog").get()
+   ]);
+   cloudRows=cs.docs.map(d=>({id:d.id,...d.data()}));
+   auditRows=as.docs.map(d=>d.data()).filter(a=>String(a.module||"").includes("clients"));
+  }
+ }catch(e){console.warn("Restauration clients Cloud",e);}
+
+ // Current Cloud client records
+ cloudRows.forEach(r=>ensureClientFromName(clientNameFromRecord(r),clientPhoneFromRecord(r),clientAddressFromRecord(r),"Cloud clients"));
+ // Audit snapshots
+ auditRows.forEach(a=>[a.after,a.before].forEach(r=>{
+  if(r)ensureClientFromName(clientNameFromRecord(r),clientPhoneFromRecord(r),clientAddressFromRecord(r),"Audit clients");
+ }));
+ // Business modules containing client names
+ (db.quotes||[]).filter(x=>!x.deleted).forEach(q=>ensureClientFromName(q.client,q.clientPhone||"",q.clientAddress||"","Devis"));
+ invoiceRows().forEach(i=>ensureClientFromName(i.client||i.values?.[1],"","","Facturation"));
+ (db.clientReceipts||[]).filter(x=>!x.deleted).forEach(r=>ensureClientFromName(r.client||r.clientName||"","","","Encaissements"));
+ (db.projects||[]).filter(x=>!x.deleted).forEach(p=>ensureClientFromName(p.client||"","","","Chantiers"));
+
+ const after=db.modules.clients.filter(x=>!x.deleted).length;
+ if(after>before){
+  saveLocalOnly();
+  for(const c of db.modules.clients.filter(x=>!x.deleted&&x.recovered&&!x.cloudSyncedAt)){
+   try{await cloudWriteGeneric("clients",c,"Client récupéré");}catch(e){}
+  }
+ }
+ return after-before;
+}
+async function clientsRecoveredPage(){
+ $("#content").innerHTML='<div class="panel"><h3>CLIENTS</h3><div class="panel-body">Récupération des anciennes données clients…</div></div>';
+ const n=await restoreClientsFromHistory();
+ generic("clients");
+ if(n>0){
+  const p=document.querySelector("#content .panel-body");
+  if(p)p.insertAdjacentHTML("beforeend",`<div class="notice"><b>${n}</b> client(s) ancien(s) récupéré(s) automatiquement.</div>`);
+ }
+}
+
 const GENERIC_FIELDS={clients:["Nom / raison sociale","Téléphone","Adresse"],suppliers:["Fournisseur","Téléphone","Spécialité"],stock:["Article","Quantité","Unité"],employees:["Matricule","Nom complet","Fonction"],payroll:["Employé","Mois","Net à payer"],bank:["Référence","Libellé","Montant"],accounting:["Journal","Libellé","Montant"],treasury:["Libellé","Échéance","Montant"],planning:["Activité","Début","Fin"],situations:["Situation","Période","Avancement"],technicalFollowup:["Chantier","Travaux du jour","Observation"],quality:["Contrôle","Résultat","Observation"],nonConformities:["Référence","Description","Action corrective"],equipment:["Matériel / engin","État","Affectation"],vehicles:["Véhicule","Immatriculation","État"],fuel:["Véhicule / engin","Quantité (L)","Montant"],invoices:["N° facture","Client","Montant"]};
 function generic(page){
+ if(page==="clients"&&!sessionStorage.getItem("nysoa_clients_recovery_done")){
+  sessionStorage.setItem("nysoa_clients_recovery_done","1");
+  restoreClientsFromHistory().then(()=>generic("clients"));
+  return;
+ }
  let label=(page==="treasury"?"TRÉSORERIE CAISSE":(menus[user.role].find(x=>x[0]===page)||ADMIN_FINANCE_MENU.concat(ADMIN_TECH_MENU).find(x=>x[0]===page)||[])[2])||page,
  fields=GENERIC_FIELDS[page]||["Référence","Désignation","Observation"],
  rows=(db.modules[page]||[]).filter(r=>!r.deleted&&matchesProjectContext(r));
  $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>${label}</h3><div class="panel-body">
  <button class="btn primary" onclick="genericForm('${page}')">+ Nouvelle entrée</button><button class="btn secondary" onclick="exportBackup()">Sauvegarder les données</button></div>
- <div class="table-wrap"><table><thead><tr><th>Chantier</th>${fields.map(x=>`<th>${x}</th>`).join("")}<th>Statut</th><th>Actions</th></tr></thead><tbody>
- ${rows.length?rows.map(r=>`<tr><td>${esc((db.projects||[]).find(p=>String(p.id)===String(r.project))?.name||r.project||"Non affecté")}</td>${fields.map((_,j)=>`<td>${esc(r.values[j]||"")}</td>`).join("")}<td>${workflowBadge(r.workflow)}</td><td><div class="edit-actions">${canUserChange(r)?`<button class="btn-xs btn-edit" onclick="genericFormById('${page}','${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteGeneric('${page}','${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showGenericHistory('${page}','${r.id}')">Historique</button></div></td></tr>`).join(""):`<tr><td colspan="${fields.length+3}">Aucune donnée pour ce chantier.</td></tr>`}
+ <div class="table-wrap"><table><thead><tr>${page==="clients"?"":`<th>Chantier</th>`}${fields.map(x=>`<th>${x}</th>`).join("")}<th>Statut</th><th>Actions</th></tr></thead><tbody>
+ ${rows.length?rows.map(r=>`<tr>${page==="clients"?"":`<td>${esc(projectLabel(r.project))}</td>`}${fields.map((_,j)=>`<td>${esc(r.values[j]||"")}</td>`).join("")}<td>${workflowBadge(r.workflow)}</td><td><div class="edit-actions">${canUserChange(r)?`<button class="btn-xs btn-edit" onclick="genericFormById('${page}','${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteGeneric('${page}','${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showGenericHistory('${page}','${r.id}')">Historique</button></div></td></tr>`).join(""):`<tr><td colspan="${fields.length+3}">Aucune donnée pour ce chantier.</td></tr>`}
  </tbody></table></div></div>`;
 }
 function genericForm(page,index=-1){
@@ -2575,16 +2758,16 @@ function genericForm(page,index=-1){
  if(r&&!canEditRecord(r))return alert("Cette entrée validée ne peut plus être modifiée.");
  const selectedProject=r?.project||currentProjectContext()||"";
  $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} ENTRÉE</h3><form id="fGeneric" class="form-grid">
- <label>Chantier<select name="project" required><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(selectedProject)===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label>
+ ${page==="clients"?"":`<label>Chantier<select name="project" required><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(selectedProject)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label>`}
  ${fields.map((f,i)=>`<label>${f}<input name="v${i}" value="${esc(r?.values?.[i]||"")}" required></label>`).join("")}
  <label>Statut<select name="workflow">${["Brouillon","Soumis","À corriger","Validé"].filter(x=>user.role==="ADMIN"||x!=="Validé").map(x=>`<option ${r?.workflow===x?"selected":""}>${x}</option>`).join("")}</select></label>
  <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="generic('${page}')">Annuler</button></div></form></div>`;
  $("#fGeneric").onsubmit=e=>{
-  e.preventDefault();let f=new FormData(e.target),obj={id:r?.id||"GEN-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),project:f.get("project"),values:fields.map((_,i)=>f.get("v"+i)),workflow:f.get("workflow"),owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
+  e.preventDefault();let f=new FormData(e.target),obj={id:r?.id||"GEN-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),project:page==="clients"?"":f.get("project"),values:fields.map((_,i)=>f.get("v"+i)),workflow:f.get("workflow"),owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
   db.modules[page]=db.modules[page]||[];const before=r?cloneRecord(r):null;
   if(r){pushHistory(r,"Modification",before);Object.assign(r,obj);audit("Modification","modules."+page,r.id,"Entrée modifiée",before,r)}
   else{obj.createdAt=new Date().toISOString();obj.history=[];pushHistory(obj,"Création");db.modules[page].push(obj);audit("Création","modules."+page,obj.id,"Entrée créée",null,obj)}
-  save();generic(page);
+  saveLocalOnly();if(CLOUD_MODULE_COLLECTIONS.has(page))cloudWriteGeneric(page,obj,page==="clients"?"Client enregistré":"Entrée enregistrée");generic(page);
  };
 }
 function genericDelete(page,index){if(user.role!=="ADMIN")return;if(confirm("Supprimer cette entrée ?")){db.modules[page].splice(index,1);save();generic(page)}}
@@ -2610,7 +2793,7 @@ function quoteFinancials(q){let ht=quoteTotal(q),discount=+q.discount||0,net=Mat
 function quoteStatusClass(s){return s==="Accepté"?"qs-approved":s==="Refusé"?"qs-refused":s==="Envoyé"?"qs-sent":"qs-draft"}
 function quotes(){
  if(user.role!=="ADMIN"){document.querySelector("#content").innerHTML='<div class="panel"><div class="panel-body"><div class="admin-only-note">Le module Devis est réservé exclusivement à l’ADMIN.</div></div></div>';return}
- document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button></div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Chantier</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${db.quotes.map(q=>{let f=quoteFinancials(q);return `<tr data-search="${(q.id+' '+q.client+' '+q.object).toLowerCase()}"><td><b>${q.id}</b></td><td>${q.date}</td><td>${esc((db.projects||[]).find(p=>String(p.id)===String(q.project))?.name||q.project||"Non affecté")}</td><td>${q.client}</td><td>${q.object}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${q.status}</span></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${q.id}')">Ouvrir</button><button class="btn-xs btn-save" onclick="duplicateQuote('${q.id}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${q.id}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
+ document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button></div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Chantier</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${db.quotes.map(q=>{let f=quoteFinancials(q);return `<tr data-search="${(q.id+' '+q.client+' '+q.object).toLowerCase()}"><td><b>${q.id}</b></td><td>${q.date}</td><td>${esc(projectLabel(q.project))}</td><td>${q.client}</td><td>${q.object}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${q.status}</span></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${q.id}')">Ouvrir</button><button class="btn-xs btn-save" onclick="duplicateQuote('${q.id}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${q.id}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
 }
 function filterQuotes(){let v=(document.querySelector('#quoteSearch')?.value||'').toLowerCase();document.querySelectorAll('#quoteList tbody tr').forEach(r=>r.style.display=r.dataset.search.includes(v)?'':'none')}
 function newQuote(){return{id:"DEV-"+new Date().getFullYear()+"-"+String(db.quotes.length+1).padStart(3,"0"),date:new Date().toISOString().slice(0,10),validUntil:"",project:currentProjectContext()||"",client:"",clientAddress:"",clientPhone:"",object:"",status:"Brouillon",vatEnabled:false,vatRate:20,discount:0,sections:[{title:"NOUVEAU LOT",items:[{no:"1.1",designation:"",unit:"",qty:1,pu:0}]}],notes:"Arrêté le présent devis à la somme indiquée ci-dessous.",createdBy:"ADMIN"}}
@@ -2623,7 +2806,7 @@ function renderQuoteEditor(){let q=activeQuote,f=quoteFinancials(q);document.que
  <div class="quote-editor">
   <div class="quote-head"><div class="quote-company"><img src="assets/logo_nysoa_construct.png"><div class="quote-company-info"><strong>ENTREPRISE NYSOA CONSTRUCT</strong><br>Construction - Bâtiment - Génie Civil - Travaux Publics<br>Lot 0708 K Ambohimena, Antsirabe<br>Téléphone / WhatsApp : +261 34 99 498 49<br>E-mail : hhajatiana15@gmail.com<br>Facebook : Entreprise NySoa Antsirabe</div></div><div class="quote-title-box"><h1>DEVIS</h1><div class="quote-no"><input value="${q.id}" onchange="activeQuote.id=this.value" style="text-align:right;font-weight:800"></div><div style="margin-top:8px">Date : <input type="date" value="${q.date}" onchange="activeQuote.date=this.value" style="width:150px;display:inline-block"></div></div></div>
   <div class="quote-meta"><label>Client<input value="${esc(q.client)}" onchange="activeQuote.client=this.value"></label><label>Adresse<input value="${esc(q.clientAddress)}" onchange="activeQuote.clientAddress=this.value"></label><label>Téléphone<input value="${esc(q.clientPhone)}" onchange="activeQuote.clientPhone=this.value"></label><label>Validité<input type="date" value="${q.validUntil||''}" onchange="activeQuote.validUntil=this.value"></label></div>
-  <div class="quote-object"><label>Chantier<select onchange="activeQuote.project=this.value"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(q.project||"")===String(p.id)?"selected":""}>${esc(p.id)} — ${esc(p.name||"")}</option>`).join("")}</select></label></div>
+  <div class="quote-object"><label>Chantier<select onchange="activeQuote.project=this.value"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(q.project||"")===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label></div>
   <div class="quote-object"><label>Objet du devis<input value="${esc(q.object)}" onchange="activeQuote.object=this.value"></label></div>
   <div class="table-wrap"><table class="quote-table"><thead><tr><th style="width:60px">N°</th><th>DÉSIGNATION</th><th style="width:90px">UNITÉ</th><th style="width:100px">QUANTITÉ</th><th style="width:145px">PU</th><th style="width:155px">PRIX TOTAL</th><th class="no-print" style="width:55px"></th></tr></thead><tbody>${q.sections.map((s,si)=>quoteSectionHtml(s,si)).join('')}</tbody></table></div>
   <div class="quote-add-row no-print"><button class="btn secondary" onclick="addQuoteSection()">+ Ajouter un lot</button><button class="btn secondary" onclick="addQuoteItem(${Math.max(0,q.sections.length-1)})">+ Ajouter une ligne</button></div>

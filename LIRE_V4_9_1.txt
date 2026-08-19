@@ -1,0 +1,11 @@
+NYSOA ERP V4.9.1 — CHANTIER / LIEU ET PROJET / TRAVAUX SÉPARÉS
+
+- Chantier / lieu = emplacement réel du chantier (AMPEFY, VISY GASY, AMBOHIMANABE...).
+- Projet / travaux = nature des travaux (PEINTURE, ÉTAGÈRE, OUVRAGE METALLIQUE, CLÔTURE...).
+- Dans Caisse, Dépenses, Achats, Pointage, Paie, Stock, Facturation, toute colonne « Chantier » affiche uniquement le chantier / lieu.
+- Les anciennes données sont migrées automatiquement : ancien Code/ID visible -> Chantier / lieu ; ancien Projet/Intitulé -> Projet / travaux.
+- Les nouveaux chantiers ont un ID interne invisible CH-....
+- Formulaire chantier : deux champs distincts « Chantier / lieu » et « Projet / travaux ».
+- Dropdowns : affichage du Chantier / lieu uniquement.
+
+Validation : node --check app.js = OK.
