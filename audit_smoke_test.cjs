@@ -16,6 +16,8 @@ const context = vm.createContext({console, Date, Math, Intl, JSON, structuredClo
   alert(message){messages.push(message)},confirm(){return false}});
 const src = fs.readFileSync(require('node:path').join(__dirname,'app.js'),'utf8').replace(/\binitFirebaseCloud\(\);/,'');
 vm.runInContext(src,context,{filename:'app.js'});
+vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'pdf-lib.min.js'),'utf8'),context,{filename:'pdf-lib.min.js'});
+vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'quote-pdf.js'),'utf8'),context,{filename:'quote-pdf.js'});
 const run = (js) => vm.runInContext(js,context);
 run(`user={role:'ADMIN',username:'admin',uid:'U1'};
 db.projects=[
@@ -279,13 +281,6 @@ console.log('PASS: client du devis choisi dans CLIENTS, prérempli depuis le cha
 run(`quoteEditor('DEV-SELECT-CLIENT')`);
 assert.match(element('#content').innerHTML,/onclick="printA4AutoFit\(\)"[^>]*>🖨 Imprimer/);
 assert.match(element('#content').innerHTML,/onclick="exportQuotePdf\(\)"[^>]*>⬇ Exporter PDF/);
-let printCount=0;
-context.window.print=()=>{printCount++};
-context.document.documentElement={classList:{add(){},remove(){}}};
-run(`exportQuotePdf()`);
-assert.equal(printCount,1);
-assert.match(messages.at(-1),/Enregistrer au format PDF/);
-console.log('PASS: devis avec deux actions distinctes Imprimer et Exporter PDF via la sortie PDF du navigateur.');
 run(`db.projects.push({id:'P-Z2',chantier:'CHANTIER Z 2',name:'Installation',client:'Mr Zahim'});
 db.projects.push({id:'P-Z-OLD',chantier:'CHANTIER Z SUPPRIMÉ',client:'Mr Zahim',deleted:true});
 globalProjectContextBeforeTest=currentProjectContext;currentProjectContext=()=> 'P-H';
@@ -328,6 +323,32 @@ assert.equal(run(`db.editRequests.length`),2,'Another owner cannot create a corr
 console.log('PASS: édition directe <24 h, demande après 24 h, acceptation/refus Admin, conflit et propriété.');
 run(`user={role:'ADMIN',username:'admin',uid:'U1'}`);
 (async()=>{
+ const logoBytes=fs.readFileSync(require('node:path').join(__dirname,'assets/logo_nysoa_construct.png'));
+ context.logoRaw=Array.from(logoBytes);
+ run(`logoBytes=new Uint8Array(logoRaw)`);
+ const quoteBytes=await run(`buildQuotePdf(db.quotes.find(q=>q.id==='DEV-SELECT-CLIENT'),logoBytes)`);
+ assert.equal(Buffer.from(quoteBytes).subarray(0,5).toString(),'%PDF-');
+ fs.writeFileSync('/tmp/nysoa_quote_pdf_smoke.pdf',Buffer.from(quoteBytes));
+ const parsed=await require('pdf-lib').PDFDocument.load(Buffer.from(quoteBytes));
+ assert.equal(parsed.getPageCount(),1,'Simple devis fits on one PDF page');
+ run(`pdfStressQuote=structuredClone(db.quotes.find(q=>q.id==='DEV-SELECT-CLIENT'));
+ pdfStressQuote.sections[0].items=Array.from({length:45},(_,i)=>({no:'1.'+(i+1),designation:'Travaux de construction et installation électrique numéro '+(i+1),unit:'m²',qty:2,pu:125000}));`);
+ const multiBytes=await run(`buildQuotePdf(pdfStressQuote,logoBytes)`);
+ assert.ok((await require('pdf-lib').PDFDocument.load(Buffer.from(multiBytes))).getPageCount()>1,'Long devis paginates without losing rows');
+ let savedPdf=null,downloadedName='';
+ context.Blob=Blob;
+ context.URL={createObjectURL(blob){savedPdf=blob;return 'blob:quote-test'},revokeObjectURL(){}};
+ context.document.body={appendChild(){}};
+ context.document.createElement=()=>({click(){downloadedName=this.download},remove(){}});
+ context.fetch=async()=>({ok:true,arrayBuffer:async()=>run(`logoBytes.buffer`)});
+ await run(`exportQuotePdf()`);
+ assert.equal(downloadedName,'Devis_DEV-SELECT-CLIENT.pdf');
+ assert.equal(Buffer.from(await savedPdf.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
+ let preview;
+ context.window.open=()=>preview={location:{href:''},close(){}};
+ await run(`printA4AutoFit()`);
+ assert.equal(preview.location.href,'blob:quote-test');
+ console.log('PASS: téléchargement PDF réel, aperçu PDF imprimable, logo et devis multipage.');
  const cloudWrites=[];
  context.navigator.onLine=true;
  context.mockCloudStore={collection(name){return {doc(id){return {async set(payload){cloudWrites.push({name,id,payload})}}}}}};

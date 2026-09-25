@@ -1029,18 +1029,30 @@ async function login(u,p){
   }
 }
 
-function printA4AutoFit(){
- try{
-  document.documentElement.classList.add("print-a4-autofit");
-  window.print();
- }finally{
-  setTimeout(()=>document.documentElement.classList.remove("print-a4-autofit"),500);
- }
+async function quotePdfUrl(){
+ if(user?.role!=="ADMIN"||!activeQuote)throw Error('Ouvrez un devis en tant qu’Admin.');
+ const data=await buildQuotePdf(activeQuote);
+ return URL.createObjectURL(new Blob([data],{type:'application/pdf'}));
 }
-function exportQuotePdf(){
+async function printA4AutoFit(){
  if(user?.role!=="ADMIN"||!activeQuote)return;
- alert('Dans la fenêtre d’impression, choisissez « Enregistrer au format PDF » (sur Mac : menu PDF → Enregistrer au format PDF). Si le navigateur affiche encore la date, le titre ou l’adresse du site, décochez « En-têtes et pieds de page » dans ses options.');
- printA4AutoFit();
+ // Open while handling the click so popup blockers do not reject the PDF viewer.
+ const preview=window.open('','_blank');
+ if(!preview)return alert('Autorisez l’ouverture d’un nouvel onglet pour imprimer le PDF du devis.');
+ try{
+  const url=await quotePdfUrl();
+  preview.location.href=url;
+  setTimeout(()=>URL.revokeObjectURL(url),600000);
+ }catch(err){preview.close();alert('Impossible de préparer le PDF : '+(err?.message||err));}
+}
+async function exportQuotePdf(){
+ if(user?.role!=="ADMIN"||!activeQuote)return;
+ try{
+  const url=await quotePdfUrl();
+  const link=document.createElement('a');link.href=url;link.download=quotePdfFilename(activeQuote);
+  document.body.appendChild(link);link.click();link.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),600000);
+ }catch(err){alert('Impossible d’exporter le PDF : '+(err?.message||err));}
 }
 
 function boot(){
@@ -3567,7 +3579,7 @@ function renderQuoteEditor(){
  const clients=quoteClientCatalog(q),site=(db.projects||[]).find(p=>String(p.id)===String(q.project));
  if(!q.client&&site?.client){const c=clients.find(x=>clientPaymentKey(clientNameFromRecord(x))===clientPaymentKey(site.client));if(c){q.clientId=c.id;q.client=clientNameFromRecord(c);q.clientAddress=clientAddressFromRecord(c);q.clientPhone=clientPhoneFromRecord(c);}}
  const f=quoteFinancials(q);
- document.querySelector('#content').innerHTML=`<div class="quote-toolbar no-print"><div class="left"><button class="btn secondary" onclick="quotes()">← Liste des devis</button><button class="btn primary" onclick="saveQuote()">Enregistrer</button><button class="btn secondary" onclick="printA4AutoFit()">🖨 Imprimer</button><button class="btn secondary" onclick="exportQuotePdf()">⬇ Exporter PDF</button>${activeQuoteOriginalId?`<button class="btn secondary" onclick="materialPlanPage('${q.id}')">Plan matériaux interne</button>`:""}</div><div class="right"><select onchange="activeQuote.status=this.value;renderQuoteEditor()" style="margin:0;width:150px"><option ${q.status==='Brouillon'?'selected':''}>Brouillon</option><option ${q.status==='Envoyé'?'selected':''}>Envoyé</option><option ${q.status==='Accepté'?'selected':''}>Accepté</option><option ${q.status==='Refusé'?'selected':''}>Refusé</option></select></div></div>
+ document.querySelector('#content').innerHTML=`<div class="quote-toolbar no-print"><div class="left"><button class="btn secondary" onclick="quotes()">← Liste des devis</button><button class="btn primary" onclick="saveQuote()">Enregistrer</button><button class="btn secondary" onclick="printA4AutoFit()" title="Ouvre le PDF propre ; utilisez ensuite l’icône Imprimer du lecteur PDF">🖨 Imprimer</button><button class="btn secondary" onclick="exportQuotePdf()" title="Télécharge directement le devis en PDF">⬇ Exporter PDF</button>${activeQuoteOriginalId?`<button class="btn secondary" onclick="materialPlanPage('${q.id}')">Plan matériaux interne</button>`:""}</div><div class="right"><select onchange="activeQuote.status=this.value;renderQuoteEditor()" style="margin:0;width:150px"><option ${q.status==='Brouillon'?'selected':''}>Brouillon</option><option ${q.status==='Envoyé'?'selected':''}>Envoyé</option><option ${q.status==='Accepté'?'selected':''}>Accepté</option><option ${q.status==='Refusé'?'selected':''}>Refusé</option></select></div></div>
  <div class="quote-editor">
   <div class="quote-head"><div class="quote-company"><img src="assets/logo_nysoa_construct.png"><div class="quote-company-info"><strong>ENTREPRISE NYSOA CONSTRUCT</strong><br>Construction - Bâtiment - Génie Civil - Travaux Publics<br>Lot 0708 K Ambohimena, Antsirabe<br>Téléphone / WhatsApp : +261 34 99 498 49<br>E-mail : hhajatiana15@gmail.com<br>Facebook : Entreprise NySoa Antsirabe</div></div><div class="quote-title-box"><h1>DEVIS</h1><div class="quote-no"><input value="${q.id}" ${activeQuoteOriginalId?"readonly":"onchange=\"activeQuote.id=this.value\""} style="text-align:right;font-weight:800"></div><div style="margin-top:8px">Date : <input type="date" value="${q.date}" onchange="activeQuote.date=this.value" style="width:150px;display:inline-block"></div></div></div>
   <div class="quote-meta"><label>Client<select id="quoteClientSelect" onchange="quoteChooseClient(this.value)" required><option value="">Choisir un client enregistré</option>${clients.map(c=>`<option value="${esc(c.id)}" ${String(q.clientId||"")===String(c.id)||(!q.clientId&&clientPaymentKey(q.client)===clientPaymentKey(clientNameFromRecord(c)))?"selected":""}>${esc(clientNameFromRecord(c))}${clientPhoneFromRecord(c)?` — ${esc(clientPhoneFromRecord(c))}`:""}</option>`).join("")}</select></label><label>Adresse<input value="${esc(q.clientAddress)}" readonly></label><label>Téléphone<input value="${esc(q.clientPhone)}" readonly></label><label>Validité<input type="date" value="${q.validUntil||''}" onchange="activeQuote.validUntil=this.value"></label></div>
