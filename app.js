@@ -400,7 +400,7 @@ function dashboardDetail(type){
  if(type==="revenue"){title="DÉTAIL DU CHIFFRE D’AFFAIRES";rows=invoiceRows().filter(r=>!currentProjectContext()||String(r.project)===String(currentProjectContext())).map(r=>({a:projectLabel(r.project),b:invoiceDisplayNo(r),c:money(invoiceLegacyAmount(r)),d:r.date||""}));}
  if(type==="expenses"){title="DÉTAIL DES DÉPENSES RÉELLES";rows=financialExpenseRows(currentProjectContext()).map(r=>({a:projectLabel(r.project),b:r.label||r.category||"",c:money(r.amount),d:r.fundSource||"Admin"}));}
  if(type==="employees"){title="DÉTAIL DES EMPLOYÉS ACTIFS";rows=(db.modules?.employees||[]).filter(e=>!e.deleted&&employeeStatusLabel(e)==="Actif").map(e=>({a:employeeName(e),b:projectLabel(employeeProject(e))||"Non affecté",c:employeeRole(e),d:employeeStatusLabel(e)}));}
- if(type==="projects"){title="DÉTAIL DES CHANTIERS";rows=accessibleProjects().filter(p=>!currentProjectContext()||String(p.id)===String(currentProjectContext())).map(p=>({a:projectChantierName(p),b:p.client||"",c:(p.progress||0)+"%",d:p.status||""}));}
+ if(type==="projects"){title="DÉTAIL DES CHANTIERS";rows=accessibleProjects().map(p=>({a:projectChantierName(p),b:p.client||"",c:(p.progress||0)+"%",d:p.status||""}));}
  $("#content").innerHTML=`<div class="panel"><h3>${title}</h3><div class="table-wrap"><table><thead><tr><th>Nom / Chantier</th><th>Affectation / Client</th><th>Valeur / Fonction</th><th>Statut</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td><b>${esc(r.a)}</b></td><td>${esc(r.b)}</td><td>${esc(r.c)}</td><td>${esc(r.d)}</td></tr>`).join(""):`<tr><td colspan="4">Aucune donnée.</td></tr>`}</tbody></table></div></div>`;
 }
 function cleanupExpiredLocalPhotos(){const days=+(db.appSettings?.photoRetentionDays||3),cutoff=Date.now()-days*86400000;let n=0;(db.siteControls||[]).forEach(r=>{const t=Date.parse(r.createdAt||r.updatedAt||0)||0;if(r.photo&&t&&t<cutoff){r.photo="";r.photoExpiredAt=new Date().toISOString();n++;}});if(n)save();return n;}
@@ -1504,7 +1504,7 @@ function dashboardCore(){
  ${kpi("📈","green","CHIFFRE D’AFFAIRES (TTC)",money(totalRevenue),"Calculé depuis les factures")}
  ${kpi("👛","blue","DÉPENSES TOTALES",money(totalDep),"Suivi réel")}
  ${kpi("💰","orange","BÉNÉFICE NET",money(netProfit),"CA moins dépenses")}
- ${kpi("🏗","purple","NOMBRE DE CHANTIERS",visibleProjects.length,"Total enregistré")}
+ ${kpi("🏗","purple","NOMBRE DE CHANTIERS",accessibleProjects().length,"Total enregistré")}
  ${kpi("👥","teal","EMPLOYÉS ACTIFS",activeEmployees,"Effectif enregistré")}
  </div>
  <div class="grid-3">

@@ -30,6 +30,14 @@ db.clientReceipts=[{id:'R1',project:'P1',client:'Client A',amount:700,date:'2026
 {id:'ROLD',project:'OLD',client:'Essai',amount:9000,date:'2026-01-12',status:'Validé'}];
 db.quotes=[{id:'Q1',project:'P1',client:'Client A',date:'2026-01-01',status:'Accepté',sections:[{items:[{qty:1,pu:1000}]}]}];`);
 const f = run(`financeScope()`);
+run(`globalProjectContextBeforeTest=currentProjectContext;currentProjectContext=()=> 'P1';dashboardCore();`);
+assert.match(element('#content').innerHTML,/NOMBRE DE CHANTIERS/);
+assert.match(element('#content').innerHTML,/NOMBRE DE CHANTIERS[\s\S]{0,180}>2</);
+run(`dashboardDetail('projects')`);
+assert.match(element('#content').innerHTML,/Ambol/);
+assert.match(element('#content').innerHTML,/Autre/);
+assert.doesNotMatch(element('#content').innerHTML,/Ancien/);
+run(`currentProjectContext=globalProjectContextBeforeTest`);
 assert.equal(f.budget,1300);
 assert.equal(f.actual,200);
 assert.equal(f.cash,150);
