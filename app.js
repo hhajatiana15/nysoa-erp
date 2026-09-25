@@ -400,8 +400,8 @@ function dashboardDetail(type){
  if(type==="revenue"){title="DÉTAIL DU CHIFFRE D’AFFAIRES";rows=invoiceRows().filter(r=>!currentProjectContext()||String(r.project)===String(currentProjectContext())).map(r=>({a:projectLabel(r.project),b:invoiceDisplayNo(r),c:money(invoiceLegacyAmount(r)),d:r.date||""}));}
  if(type==="expenses"){title="DÉTAIL DES DÉPENSES RÉELLES";rows=financialExpenseRows(currentProjectContext()).map(r=>({a:projectLabel(r.project),b:r.label||r.category||"",c:money(r.amount),d:r.fundSource||"Admin"}));}
  if(type==="employees"){title="DÉTAIL DES EMPLOYÉS ACTIFS";rows=(db.modules?.employees||[]).filter(e=>!e.deleted&&employeeStatusLabel(e)==="Actif").map(e=>({a:employeeName(e),b:projectLabel(employeeProject(e))||"Non affecté",c:employeeRole(e),d:employeeStatusLabel(e)}));}
- if(type==="projects"){title="DÉTAIL DES CHANTIERS";rows=accessibleProjects().map(p=>({a:projectChantierName(p),b:p.client||"",c:(p.progress||0)+"%",d:p.status||""}));}
- $("#content").innerHTML=`<div class="panel"><h3>${title}</h3><div class="table-wrap"><table><thead><tr><th>Nom / Chantier</th><th>Affectation / Client</th><th>Valeur / Fonction</th><th>Statut</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td><b>${esc(r.a)}</b></td><td>${esc(r.b)}</td><td>${esc(r.c)}</td><td>${esc(r.d)}</td></tr>`).join(""):`<tr><td colspan="4">Aucune donnée.</td></tr>`}</tbody></table></div></div>`;
+ if(type==="projects"){title="DÉTAIL DES CHANTIERS";rows=accessibleProjects().map(p=>({id:p.id,a:projectChantierName(p),b:p.client||"",c:(p.progress||0)+"%",d:p.status||""}));}
+ $("#content").innerHTML=`<div class="panel"><h3>${title}</h3><div class="table-wrap"><table><thead><tr><th>Nom / Chantier</th><th>Affectation / Client</th><th>Valeur / Fonction</th><th>Statut</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${type==="projects"?`<button type="button" class="entity-link" data-id="${esc(encodeURIComponent(r.id))}" onclick="projectClientDetail(decodeURIComponent(this.dataset.id))">${esc(r.a)}</button>`:`<b>${esc(r.a)}</b>`}</td><td>${esc(r.b)}</td><td>${esc(r.c)}</td><td>${esc(r.d)}</td></tr>`).join(""):`<tr><td colspan="4">Aucune donnée.</td></tr>`}</tbody></table></div></div>`;
 }
 function cleanupExpiredLocalPhotos(){const days=+(db.appSettings?.photoRetentionDays||3),cutoff=Date.now()-days*86400000;let n=0;(db.siteControls||[]).forEach(r=>{const t=Date.parse(r.createdAt||r.updatedAt||0)||0;if(r.photo&&t&&t<cutoff){r.photo="";r.photoExpiredAt=new Date().toISOString();n++;}});if(n)save();return n;}
 
@@ -1554,7 +1554,21 @@ function dashboard(){
  }
 }
 
-function projectsTable(compact=false){const ctx=currentProjectContext();return `<div class="table-wrap"><table><thead><tr><th>Chantier</th><th>Client</th><th>Début</th><th>Fin prévue</th><th>Avancement</th><th>Statut</th></tr></thead><tbody>${accessibleProjects().filter(p=>!ctx||String(p.id)===String(ctx)).map(p=>`<tr><td>${esc(projectChantierName(p))}<br>${esc(projectWorkName(p))}</td><td>${esc(p.client||"")}</td><td>${esc(p.start||"")}</td><td>${esc(p.end||"")}</td><td><div class="progress"><span style="width:${+p.progress||0}%"></span></div>${+p.progress||0}%</td><td><span class="badge b-blue">${esc(p.status||"")}</span></td></tr>`).join("")}</tbody></table></div>`}
+function projectClientRecord(p){return (db.modules?.clients||[]).find(c=>!c.deleted&&(p.clientId&&String(p.clientId)===String(c.id)||clientPaymentKey(clientNameFromRecord(c))===clientPaymentKey(p.client)))||null;}
+function clientProjects(client){const name=typeof client==="string"?client:clientNameFromRecord(client);return accessibleProjects().filter(p=>!!name&&(client?.id&&p.clientId&&String(client.id)===String(p.clientId)||clientPaymentKey(p.client)===clientPaymentKey(name)));}
+function projectClientDetail(id){
+ const p=accessibleProjects().find(x=>String(x.id)===String(id));if(!p)return alert("Chantier introuvable.");
+ const client=projectClientRecord(p);
+ $("#content").innerHTML=`<div class="panel"><h3>CHANTIER : ${esc(projectChantierName(p))}</h3><div class="panel-body"><button type="button" class="btn secondary" onclick="go('projects')">← Liste des chantiers</button><p><b>Client :</b> ${p.client?`<button type="button" class="entity-link" data-id="${esc(encodeURIComponent(client?.id||""))}" data-name="${esc(encodeURIComponent(p.client))}" onclick="clientProjectsPage(decodeURIComponent(this.dataset.id),decodeURIComponent(this.dataset.name))">${esc(client?clientNameFromRecord(client):p.client)}</button>`:"Non renseigné"}</p><p><b>Projet / travaux :</b> ${esc(projectWorkName(p))}</p><p><b>Début :</b> ${esc(p.start||"—")} · <b>Fin prévue :</b> ${esc(p.end||"—")}</p></div></div>`;
+}
+function clientProjectsPage(id="",name=""){
+ const client=(db.modules?.clients||[]).find(c=>!c.deleted&&String(c.id)===String(id));
+ const label=client?clientNameFromRecord(client):String(name||"").trim();
+ if(!label)return alert("Client introuvable.");
+ const rows=clientProjects(client||label);
+ $("#content").innerHTML=`<div class="panel"><h3>CHANTIERS DU CLIENT : ${esc(label)}</h3><div class="panel-body"><button type="button" class="btn secondary" onclick="go('clients')">← Liste des clients</button></div><div class="table-wrap"><table><thead><tr><th>Chantier / lieu</th><th>Projet / travaux</th><th>Début</th><th>Fin prévue</th><th>Statut</th></tr></thead><tbody>${rows.length?rows.map(p=>`<tr><td><button type="button" class="entity-link" data-id="${esc(encodeURIComponent(p.id))}" onclick="projectClientDetail(decodeURIComponent(this.dataset.id))">${esc(projectChantierName(p))}</button></td><td>${esc(projectWorkName(p))}</td><td>${esc(p.start||"—")}</td><td>${esc(p.end||"—")}</td><td>${esc(p.status||"—")}</td></tr>`).join(""):'<tr><td colspan="5">Aucun chantier actif pour ce client.</td></tr>'}</tbody></table></div></div>`;
+}
+function projectsTable(compact=false){const ctx=currentProjectContext();return `<div class="table-wrap"><table><thead><tr><th>Chantier</th><th>Client</th><th>Début</th><th>Fin prévue</th><th>Avancement</th><th>Statut</th></tr></thead><tbody>${accessibleProjects().filter(p=>!ctx||String(p.id)===String(ctx)).map(p=>`<tr><td><button type="button" class="entity-link" data-id="${esc(encodeURIComponent(p.id))}" onclick="projectClientDetail(decodeURIComponent(this.dataset.id))">${esc(projectChantierName(p))}</button><br>${esc(projectWorkName(p))}</td><td>${esc(p.client||"")}</td><td>${esc(p.start||"")}</td><td>${esc(p.end||"")}</td><td><div class="progress"><span style="width:${+p.progress||0}%"></span></div>${+p.progress||0}%</td><td><span class="badge b-blue">${esc(p.status||"")}</span></td></tr>`).join("")}</tbody></table></div>`}
 function projects(){
  let budgetCol=user.role==="ADMIN"?"<th>Budget initial</th>":"";
  $("#content").innerHTML=`
@@ -1594,9 +1608,9 @@ function projects(){
              actions="<span>Consultation</span>";
            }
            return `<tr>
-             <td>${esc(projectChantierName(p))}</td>
+             <td><button type="button" class="entity-link" data-id="${esc(encodeURIComponent(p.id))}" onclick="projectClientDetail(decodeURIComponent(this.dataset.id))">${esc(projectChantierName(p))}</button></td>
              <td>${esc(projectWorkName(p))}</td>
-             <td>${esc(p.client)}</td>
+             <td>${p.client?`<button type="button" class="entity-link" data-id="${esc(encodeURIComponent(projectClientRecord(p)?.id||""))}" data-name="${esc(encodeURIComponent(p.client))}" onclick="clientProjectsPage(decodeURIComponent(this.dataset.id),decodeURIComponent(this.dataset.name))">${esc(p.client)}</button>`:"—"}</td>
              ${user.role==="ADMIN"?`<td>${money(projectBudgetAmount(p))}</td>`:""}
              <td>${esc(p.start||"")}</td>
              <td>${esc(p.end||"")}</td>
@@ -3258,11 +3272,11 @@ function generic(page){
  }
  let label=(page==="treasury"?"TRÉSORERIE CAISSE":(menus[user.role].find(x=>x[0]===page)||ADMIN_FINANCE_MENU.concat(ADMIN_TECH_MENU).find(x=>x[0]===page)||[])[2])||page,
  fields=GENERIC_FIELDS[page]||["Référence","Désignation","Observation"],
- rows=(db.modules[page]||[]).filter(r=>!r.deleted&&matchesProjectContext(r));
+ rows=(db.modules[page]||[]).filter(r=>!r.deleted&&(page==="clients"||matchesProjectContext(r)));
  $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>${label}</h3><div class="panel-body">
  <button class="btn primary" onclick="genericForm('${page}')">+ Nouvelle entrée</button><button class="btn secondary" onclick="exportBackup()">Sauvegarder les données</button></div>
  <div class="table-wrap"><table><thead><tr>${page==="clients"?"":`<th>Chantier</th>`}${fields.map(x=>`<th>${x}</th>`).join("")}<th>Statut</th><th>Actions</th></tr></thead><tbody>
- ${rows.length?rows.map(r=>`<tr>${page==="clients"?"":`<td>${esc(projectLabel(r.project))}</td>`}${fields.map((_,j)=>`<td>${esc(r.values[j]||"")}</td>`).join("")}<td>${workflowBadge(r.workflow)}</td><td><div class="edit-actions">${canOpenOwnEdit(r)?`<button class="btn-xs btn-edit" onclick="genericFormById('${page}','${r.id}')">${canUserChange(r)?"Modifier":"Demander correction"}</button>${canUserChange(r)?`<button class="btn-xs btn-delete" onclick="softDeleteGeneric('${page}','${r.id}')">Supprimer</button>`:""}`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showGenericHistory('${page}','${r.id}')">Historique</button></div></td></tr>`).join(""):`<tr><td colspan="${fields.length+3}">Aucune donnée pour ce chantier.</td></tr>`}
+ ${rows.length?rows.map(r=>`<tr>${page==="clients"?"":`<td>${esc(projectLabel(r.project))}</td>`}${fields.map((_,j)=>`<td>${page==="clients"&&j===0?`<button type="button" class="entity-link" data-id="${esc(encodeURIComponent(r.id))}" onclick="clientProjectsPage(decodeURIComponent(this.dataset.id))">${esc(clientNameFromRecord(r))}</button>`:esc(r.values?.[j]||"")}</td>`).join("")}<td>${workflowBadge(r.workflow)}</td><td><div class="edit-actions">${canOpenOwnEdit(r)?`<button class="btn-xs btn-edit" onclick="genericFormById('${page}','${r.id}')">${canUserChange(r)?"Modifier":"Demander correction"}</button>${canUserChange(r)?`<button class="btn-xs btn-delete" onclick="softDeleteGeneric('${page}','${r.id}')">Supprimer</button>`:""}`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showGenericHistory('${page}','${r.id}')">Historique</button></div></td></tr>`).join(""):`<tr><td colspan="${fields.length+3}">Aucune donnée pour ce chantier.</td></tr>`}
  </tbody></table></div></div>`;
 }
 function genericForm(page,index=-1){

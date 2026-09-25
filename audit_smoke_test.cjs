@@ -276,6 +276,22 @@ assert.equal(run(`db.quotes.find(q=>q.id==='DEV-SELECT-CLIENT').clientId`),'CLI-
 assert.equal(run(`db.quotes.find(q=>q.id==='DEV-SELECT-CLIENT').client`),'Mme Hery');
 assert.equal(run(`db.quotes.find(q=>q.id==='DEV-SELECT-CLIENT').clientAddress`),'Tana');
 console.log('PASS: client du devis choisi dans CLIENTS, prérempli depuis le chantier, cohérence et identité enregistrée.');
+run(`db.projects.push({id:'P-Z2',chantier:'CHANTIER Z 2',name:'Installation',client:'Mr Zahim'});
+db.projects.push({id:'P-Z-OLD',chantier:'CHANTIER Z SUPPRIMÉ',client:'Mr Zahim',deleted:true});
+globalProjectContextBeforeTest=currentProjectContext;currentProjectContext=()=> 'P-H';
+clientProjectsPage('CLI-Z');`);
+assert.match(element('#content').innerHTML,/HOMEOPHARMA/);
+assert.match(element('#content').innerHTML,/CHANTIER Z 2/);
+assert.doesNotMatch(element('#content').innerHTML,/CHANTIER Z SUPPRIMÉ/);
+assert.doesNotMatch(element('#content').innerHTML,/AUTRE/);
+run(`projectClientDetail('P-Z')`);
+assert.match(element('#content').innerHTML,/Client :/);
+assert.match(element('#content').innerHTML,/Mr Zahim/);
+run(`sessionStorageGetBeforeTest=sessionStorage.getItem;sessionStorage.getItem=()=> '1';generic('clients')`);
+assert.match(element('#content').innerHTML,/clientProjectsPage\(decodeURIComponent\(this.dataset.id\)\)/);
+assert.match(element('#content').innerHTML,/Mr Zahim/);
+run(`sessionStorage.getItem=sessionStorageGetBeforeTest;currentProjectContext=globalProjectContextBeforeTest`);
+console.log('PASS: chantier cliquable vers client, client cliquable vers tous ses chantiers actifs, indépendamment du filtre.');
 // 24-hour corrections must preserve the posted ledger until the Admin decides.
 run(`cloudReady=false;user={role:'GESTIONNAIRE',username:'manager',uid:'M1'};
 db.editRequests=[];

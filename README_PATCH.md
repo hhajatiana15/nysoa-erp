@@ -115,3 +115,9 @@ Test local : chantier HOMEOPHARMA associé à Mr Zahim, présélection de sa fic
 ## Nombre total de chantiers sur le tableau de bord
 
 La carte « Nombre de chantiers — Total enregistré » compte tous les chantiers actifs accessibles, même lorsqu'un chantier précis est sélectionné dans le filtre global. Son détail affiche la même liste complète. Les graphiques, dépenses et situations financières continuent à suivre le chantier sélectionné. Test local : deux chantiers actifs et un supprimé, filtre sur un seul chantier, compteur et détail affichent les deux chantiers actifs.
+
+## Navigation entre clients et chantiers
+
+Les noms de chantier sont cliquables dans **Gestion des chantiers**, le tableau du dashboard et le détail « Nombre de chantiers ». La fiche affiche le client associé ; cliquer sur son nom ouvre tous les chantiers actifs accessibles de ce client. Dans **CLIENTS**, le nom de chaque client ouvre directement la même liste. Cette liste conserve les autres chantiers du client même si le filtre global est réglé sur un seul chantier ; les chantiers supprimés n'y figurent pas. La correspondance utilise l'identifiant client lorsqu'il existe dans le chantier, et le nom normalisé pour les anciennes fiches chantier. Si deux fiches CLIENTS portent le même nom, il faut corriger le doublon afin d'éviter toute confusion dans les anciens chantiers.
+
+Test local : sélection d'un chantier différent dans le filtre, ouverture d'un client ayant deux chantiers actifs et un supprimé, affichage des deux actifs seulement ; clic sur un chantier puis affichage du client associé.
