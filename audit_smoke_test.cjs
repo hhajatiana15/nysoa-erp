@@ -276,6 +276,16 @@ assert.equal(run(`db.quotes.find(q=>q.id==='DEV-SELECT-CLIENT').clientId`),'CLI-
 assert.equal(run(`db.quotes.find(q=>q.id==='DEV-SELECT-CLIENT').client`),'Mme Hery');
 assert.equal(run(`db.quotes.find(q=>q.id==='DEV-SELECT-CLIENT').clientAddress`),'Tana');
 console.log('PASS: client du devis choisi dans CLIENTS, prérempli depuis le chantier, cohérence et identité enregistrée.');
+run(`quoteEditor('DEV-SELECT-CLIENT')`);
+assert.match(element('#content').innerHTML,/onclick="printA4AutoFit\(\)"[^>]*>🖨 Imprimer/);
+assert.match(element('#content').innerHTML,/onclick="exportQuotePdf\(\)"[^>]*>⬇ Exporter PDF/);
+let printCount=0;
+context.window.print=()=>{printCount++};
+context.document.documentElement={classList:{add(){},remove(){}}};
+run(`exportQuotePdf()`);
+assert.equal(printCount,1);
+assert.match(messages.at(-1),/Enregistrer au format PDF/);
+console.log('PASS: devis avec deux actions distinctes Imprimer et Exporter PDF via la sortie PDF du navigateur.');
 run(`db.projects.push({id:'P-Z2',chantier:'CHANTIER Z 2',name:'Installation',client:'Mr Zahim'});
 db.projects.push({id:'P-Z-OLD',chantier:'CHANTIER Z SUPPRIMÉ',client:'Mr Zahim',deleted:true});
 globalProjectContextBeforeTest=currentProjectContext;currentProjectContext=()=> 'P-H';
