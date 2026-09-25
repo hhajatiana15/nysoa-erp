@@ -47,7 +47,7 @@
         <div class="user-line">Utilisateur : <b id="currentUserLabel"></b> ⚙ ⏻</div>
         <div class="header-cards">
           <div class="mini-card"><span>📅</span><div><small>Date du jour</small><b id="today"></b></div></div>
-          <div class="mini-card"><span>🗂</span><div><small>Exercice</small><b>2026</b></div></div>
+          <div class="mini-card"><span>🗂</span><div><small>Exercice</small><b id="exerciseYear">2026</b></div></div>
           <div class="mini-card cloud-mini"><span>☁</span><div><small>Cloud</small><b id="cloudStatus">Initialisation…</b><span id="cloudLastSync" class="cloud-last-sync"></span></div></div>
         </div>
       </div>
@@ -78,6 +78,7 @@
           <button class="btn primary" onclick="openImportDialog()">⬆ Importer Excel / CSV</button>
           <button id="cloudSyncBtn" class="btn cloud-sync-btn" onclick="cloudSyncNow()" title="Secours uniquement — la synchronisation normale est automatique">☁ Synchronisation de secours</button>
           <button class="btn secondary" onclick="exportBackup()">💾 Sauvegarde complète Admin</button>
+          <button id="resetTestDataBtn" class="btn secondary hidden" onclick="resetTestTransactions()">🧹 Effacer les données d’essai</button>
           <input id="externalImportFile" type="file" accept=".xlsx,.xls,.csv,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/json" class="hidden" onchange="handleExternalImport(event)">
         </div>
         <section id="content"></section>

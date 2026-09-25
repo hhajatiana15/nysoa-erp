@@ -263,7 +263,7 @@ function backupBeforeRemoteOverwrite(collection,localRecord,remoteRecord,reason=
 function pageUsesCollection(page,collection){
  const map={
   projects:["projects","dashboard","dashboardFinance","dashboardTechnique"],
-  quotes:["quotes","dashboard","dashboardFinance"],
+  quotes:["quotes","materials","dashboard","dashboardFinance"],
   invoices:["invoices","dashboard","dashboardFinance"],
   clientReceipts:["clientReceipts","dashboard","dashboardFinance"],
   requests:["appro","dashboard"],
@@ -390,14 +390,16 @@ function startCloudAutoSync(){
 }
 
 function cashTable(){
-  return `<div class="card"><h3>💵 Derniers mouvements de caisse</h3><p>Aucun mouvement disponible.</p></div>`;
+ const rows=cashMovements(currentProjectContext()).slice(-5).reverse();
+ return `<div class="card"><h3>💵 Derniers mouvements de caisse</h3>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Mouvement</th><th>Montant</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(r.label)}</td><td>${r.type==="Sortie"?"−":"+"}${money(r.amount)}</td></tr>`).join("")}</tbody></table></div>`:"<p>Aucun mouvement disponible.</p>"}</div>`;
 }
 
 function dashboardDetail(type){
  let title="",rows=[];
- if(type==="revenue"){title="DÉTAIL DU CHIFFRE D’AFFAIRES";rows=(db.projects||[]).filter(p=>!p.deleted).map(p=>({a:p.name||p.id,b:p.client||"",c:money(+p.budget||0),d:p.status||""}));}
+ if(type==="revenue"){title="DÉTAIL DU CHIFFRE D’AFFAIRES";rows=invoiceRows().filter(r=>!currentProjectContext()||String(r.project)===String(currentProjectContext())).map(r=>({a:projectLabel(r.project),b:invoiceDisplayNo(r),c:money(invoiceLegacyAmount(r)),d:r.date||""}));}
+ if(type==="expenses"){title="DÉTAIL DES DÉPENSES RÉELLES";rows=financialExpenseRows(currentProjectContext()).map(r=>({a:projectLabel(r.project),b:r.label||r.category||"",c:money(r.amount),d:r.fundSource||"Admin"}));}
  if(type==="employees"){title="DÉTAIL DES EMPLOYÉS ACTIFS";rows=(db.modules?.employees||[]).filter(e=>!e.deleted&&employeeStatusLabel(e)==="Actif").map(e=>({a:employeeName(e),b:projectLabel(employeeProject(e))||"Non affecté",c:employeeRole(e),d:employeeStatusLabel(e)}));}
- if(type==="projects"){title="DÉTAIL DES CHANTIERS";rows=(db.projects||[]).filter(p=>!p.deleted).map(p=>({a:p.name||p.id,b:p.client||"",c:(p.progress||0)+"%",d:p.status||""}));}
+ if(type==="projects"){title="DÉTAIL DES CHANTIERS";rows=accessibleProjects().filter(p=>!currentProjectContext()||String(p.id)===String(currentProjectContext())).map(p=>({a:projectChantierName(p),b:p.client||"",c:(p.progress||0)+"%",d:p.status||""}));}
  $("#content").innerHTML=`<div class="panel"><h3>${title}</h3><div class="table-wrap"><table><thead><tr><th>Nom / Chantier</th><th>Affectation / Client</th><th>Valeur / Fonction</th><th>Statut</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td><b>${esc(r.a)}</b></td><td>${esc(r.b)}</td><td>${esc(r.c)}</td><td>${esc(r.d)}</td></tr>`).join(""):`<tr><td colspan="4">Aucune donnée.</td></tr>`}</tbody></table></div></div>`;
 }
 function cleanupExpiredLocalPhotos(){const days=+(db.appSettings?.photoRetentionDays||3),cutoff=Date.now()-days*86400000;let n=0;(db.siteControls||[]).forEach(r=>{const t=Date.parse(r.createdAt||r.updatedAt||0)||0;if(r.photo&&t&&t<cutoff){r.photo="";r.photoExpiredAt=new Date().toISOString();n++;}});if(n)save();return n;}
@@ -867,16 +869,24 @@ const menus={
  TECHNICIEN:[["dashboard","◉","TABLEAU DE BORD"],["technicianMyIdentity","👤","MON IDENTITÉ"],["projects","🏗","CHANTIERS"],["qrAttendance","▣","SCAN BADGE QR"],["attendance","◷","POINTAGE"],["siteControls","📷","SUIVI CHANTIER"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
 };
 
+// Plan interne en lecture seule pour l'équipe terrain, avec édition réservée à l'Admin.
+for(const role of ["ADMIN","GESTIONNAIRE","CONTROLE","TECHNICIEN"]){
+ const after=menus[role].findIndex(item=>item[0]==="quotes"||item[0]==="projects");
+ menus[role].splice(after+1,0,["materials","🧱","PRÉVISION MATÉRIAUX"]);
+}
+
 function projectFinancialDetail(projectId){
- const p=(db.projects||[]).find(x=>String(x.id)===String(projectId));if(!p)return;
+ if(user?.role!=="ADMIN")return alert("La fiche financière et le budget chantier sont réservés à l’Admin.");
+ const p=accessibleProjects().find(x=>String(x.id)===String(projectId));if(!p)return;
  const s=projectFinancialSnapshot(projectId);
- $("#content").innerHTML=`<div class="panel"><h3>FICHE FINANCIÈRE — ${esc(p.name||p.id)}</h3>
+ $("#content").innerHTML=`<div class="panel"><h3>FICHE FINANCIÈRE — ${esc(projectFullLabel(projectId))}</h3>
  <div class="panel-body"><button class="btn secondary" onclick="projects()">Retour</button></div></div>
  <div class="kpis">
- ${kpi("💼","green","BUDGET",money(p.budget||0))}
+ ${kpi("💼","green","BUDGET",money(projectBudgetAmount(p)))}
  ${kpi("✅","teal","DEVIS VALIDÉS",money(s.validated))}
  ${kpi("🧾","blue","FACTURÉ",money(s.invoiced))}
  ${kpi("💳","green","ENCAISSÉ",money(s.received))}
+ ${kpi("📊","blue","RESTE À PAYER CONTRAT",money(s.contractRemaining))}
  ${kpi("⏳","orange","RESTE À FACTURER",money(s.toInvoice))}
  ${kpi("⚠","orange","CRÉANCE CLIENT",money(s.receivable))}
  ${kpi("💸","orange","COÛT RÉEL",money(s.actual))}
@@ -886,13 +896,20 @@ function projectFinancialDetail(projectId){
  </div>
  <div class="panel" style="margin-top:12px"><h3>LOGIQUE</h3><div class="panel-body">
   <p><b>Reste à facturer</b> = Devis validés − Facturation.</p>
-  <p><b>Créance client</b> = Facturation − Encaissements validés.</p>
+  <p><b>Créance facturée</b> = Facturation − Encaissements validés. <b>Reste à payer contrat</b> = Contrat − Encaissements validés.</p>
   <p><b>Coût engagé</b> = Coût réel + Achats approuvés/effectués/livrés non payés.</p>
   <p><b>Marge provisoire</b> = Chiffre d’affaires facturé − Coût réel.</p>
- </div></div>`;
+ </div></div>${financialExpenseDetail(projectId)}`;
 }
 
-function projectMetrics(id){let p=db.projects.find(x=>x.id===id)||{};let app=sum(db.appro.filter(x=>x.project===id&&x.status==="Validée"&&!x.deleted).map(x=>x.amount));let dep=totalOperatingExpenses(id);return{budget:p.budget||0,app,dep,cash:app-dep,remaining:(p.budget||0)-dep}}
+function projectMetrics(id){
+ const p=accessibleProjects().find(x=>String(x.id)===String(id))||{};
+ const entries=cashMovements(id),app=sum(entries.filter(x=>x.type==="Entrée").map(x=>x.amount));
+ const cashOut=sum(entries.filter(x=>x.type==="Sortie").map(x=>x.amount));
+ const dep=sum(financialExpenseRows(id).map(r=>r.amount));
+ const budget=projectBudgetAmount(p);
+ return {budget,app,dep,cash:app-cashOut,remaining:budget-dep};
+}
 async function login(u,p){
   try{
     $("#loginMsg").textContent="Connexion à Firebase…";
@@ -918,7 +935,7 @@ function printA4AutoFit(){
 
 function boot(){
  try{migrateProjectChantierFields();}catch(e){console.warn('migration chantier',e);}
-ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();if(user.role!=="ADMIN"&&(user.role!=="TECHNICIEN"||technicianSessionProfile()))startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");const actor=effectiveUserIdentity();$("#currentUserLabel").textContent=actor.label||user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");renderMenu();
+ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();if(user.role!=="ADMIN"&&(user.role!=="TECHNICIEN"||technicianSessionProfile()))startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");const actor=effectiveUserIdentity();$("#currentUserLabel").textContent=actor.label||user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");$("#exerciseYear").textContent=String(new Date().getFullYear());$("#resetTestDataBtn").classList.toggle("hidden",user.role!=="ADMIN");renderMenu();
 const obsoleteManualButtons=["sendUpdatesBtn","refreshAdminBtn","publishValidationBtn","importValidationBtn","exportUsageBtn","importUsageBtn","exportDailyReportsBtn","importDailyReportsBtn","cloudMigrateBtn"];
 obsoleteManualButtons.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display="none";});
 const cloudSyncBtn=document.getElementById("cloudSyncBtn");
@@ -933,7 +950,8 @@ function renderMenu(){
  }else{
    $("#adminWorkspaceBar").classList.add("hidden");
  }
- $("#menu").innerHTML=list.map(m=>`<button class="menu-btn" data-page="${m[0]}"><span class="ico">${m[1]}</span>${m[2]}</button>`).join("");
+ $("#menu").innerHTML=list.map(m=>`<button class="menu-btn" data-page="${m[0]}"><span class="ico">${m[1]}</span>${m[2]}</button>`).join("")+
+   `<button class="menu-btn" data-page="changePassword"><span class="ico">🔐</span>CHANGER MON MOT DE PASSE</button>`;
  document.querySelectorAll(".menu-btn").forEach(b=>b.onclick=()=>go(b.dataset.page));
  renderCloudBadges();
  document.querySelectorAll(".workspace-tab").forEach(b=>{
@@ -953,14 +971,15 @@ function switchWorkspace(workspace){
 const ALL_PROJECTS_CONTEXT="__ALL__";
 function currentProjectContext(){
  const v=sessionStorage.getItem("nysoa_project_context");
- return (!v||v===ALL_PROJECTS_CONTEXT)?"":v;
+ if(!v||v===ALL_PROJECTS_CONTEXT)return "";
+ return (db.projects||[]).some(p=>String(p.id)===String(v)&&!p.deleted)?v:"";
 }
 function userCanAccessProject(projectId){
  if(!user||user.role!=="CONTROLE")return true;
  const assigned=Array.isArray(user.assignedProjects)?user.assignedProjects:[];
  return assigned.length===0||assigned.map(String).includes(String(projectId));
 }
-function accessibleProjects(){return (db.projects||[]).filter(p=>!p.deleted&&userCanAccessProject(p.id));}
+function accessibleProjects(){return (db.projects||[]).filter(p=>!p.deleted&&!!(p.chantier||p.name||p.projectName||p.client||p.start||p.end)&&userCanAccessProject(p.id));}
 function projectContextOptions(selected=currentProjectContext()){
  return `<option value="${ALL_PROJECTS_CONTEXT}" ${!selected?"selected":""}>Tous les chantiers</option>`+
   accessibleProjects().map(p=>`<option value="${esc(p.id)}" ${String(selected)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("");
@@ -995,10 +1014,45 @@ function projectContextNotice(){
  const p=currentProjectContext();
  if(!p)return "";
  const pr=(db.projects||[]).find(x=>String(x.id)===String(p));
- return `<div class="project-context-note">🏗 Chantier sélectionné : <b>${esc(pr?.name||p)}</b> <button class="btn-xs" onclick="setGlobalProjectContext('')">Afficher tout</button></div>`;
+ return `<div class="project-context-note">🏗 Chantier sélectionné : <b>${esc(pr?projectFullLabel(p):p)}</b> <button class="btn-xs" onclick="setGlobalProjectContext('')">Afficher tout</button></div>`;
 }
 
-function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,invoices:invoicesPage,clientReceipts:clientReceiptsPage,employees:employeesPage,qrAttendance:qrAttendancePage,technicianMyIdentity:technicianMyIdentity,technicians:techniciansPage,payroll:payrollPage,expenses:expensesPage,appro:approPage,cash:cashPage,projects:projects,siteControls:siteControlsPage,reports:reports,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,stock:stockPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage,logicAudit:logicAuditPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
+function go(page){cloudCurrentPage=page;if(user?.role==="ADMIN")markNotificationsRead(page);if(user&&cloudReady)updatePresence(document.hidden?"inactive":"online");document.querySelectorAll(".menu-btn").forEach(b=>b.classList.toggle("active",b.dataset.page===page));({dashboard:dashboard,dashboardFinance:dashboardFinance,dashboardTechnique:dashboardTechnique,quotes:quotes,materials:materialPlanPage,invoices:invoicesPage,clientReceipts:clientReceiptsPage,employees:employeesPage,qrAttendance:qrAttendancePage,technicianMyIdentity:technicianMyIdentity,technicians:techniciansPage,payroll:payrollPage,expenses:expensesPage,appro:approPage,cash:cashPage,projects:projects,siteControls:siteControlsPage,reports:reports,attendance:attendance,technicalRecap:technicalRecap,adminValidations:adminValidationsPage,usageTime:usageTimePage,purchases:purchasesPage,stock:stockPage,dailyReports:dailyReportsPage,presenceUsers:adminPresencePage,trash:trashPage,audit:auditPage,logicAudit:logicAuditPage,changePassword:changePasswordPage}[page]||generic)(page);setTimeout(renderGlobalProjectSelector,0)}
+function changePasswordPage(){
+ const account=fbAuth?.currentUser;
+ if(!account)return alert("Veuillez vous connecter à l’ERP.");
+ $("#content").innerHTML=`<div class="panel"><h3>CHANGER MON MOT DE PASSE</h3><div class="panel-body">
+ <p>Compte : <strong id="passwordAccountEmail"></strong></p>
+ <form id="changePasswordForm" class="form-grid" autocomplete="off">
+ <label>Mot de passe actuel<input name="currentPassword" type="password" autocomplete="current-password" required></label>
+ <label>Nouveau mot de passe<input name="newPassword" type="password" autocomplete="new-password" minlength="6" required></label>
+ <label>Confirmer le nouveau mot de passe<input name="confirmPassword" type="password" autocomplete="new-password" minlength="6" required></label>
+ <div class="form-actions full"><button class="btn primary" type="submit">Enregistrer le nouveau mot de passe</button></div>
+ <p id="changePasswordMessage" class="full" role="status" aria-live="polite"></p>
+ </form></div></div>`;
+ $("#passwordAccountEmail").textContent=account.email||"Adresse non disponible";
+ $("#changePasswordForm").onsubmit=async event=>{
+  event.preventDefault();
+  const form=event.currentTarget,button=form.querySelector('button[type="submit"]'),message=$("#changePasswordMessage");
+  const oldPass=form.elements.currentPassword.value,newPass=form.elements.newPassword.value;
+  if(newPass!==form.elements.confirmPassword.value){message.textContent="Les nouveaux mots de passe ne correspondent pas.";return;}
+  if(newPass.length<6){message.textContent="Le nouveau mot de passe doit contenir au moins 6 caractères.";return;}
+  if(!account.email){message.textContent="Ce compte n’a pas d’adresse e-mail Firebase.";return;}
+  button.disabled=true;message.textContent="Vérification et mise à jour en cours…";
+  try{
+   const credential=firebase.auth.EmailAuthProvider.credential(account.email,oldPass);
+   await account.reauthenticateWithCredential(credential);
+   await account.updatePassword(newPass);
+   form.reset();message.textContent="Mot de passe modifié. Utilisez le nouveau mot de passe à votre prochaine connexion.";
+  }catch(error){
+   const invalid=["auth/invalid-credential","auth/wrong-password","auth/invalid-login-credentials"];
+   message.textContent=invalid.includes(error.code)?"Mot de passe actuel incorrect.":
+    error.code==="auth/weak-password"?"Le nouveau mot de passe est trop faible.":
+    error.code==="auth/network-request-failed"?"Connexion Internet indisponible. Réessayez.":
+    "Modification impossible ("+(error.code||"erreur inconnue")+"). Réessayez plus tard.";
+  }finally{button.disabled=false;}
+ };
+}
 function kpi(icon,color,title,value,note="",page=""){
  const routes={
   "CHANTIERS EN COURS":"projects","NOMBRE DE CHANTIERS":"projects",
@@ -1060,49 +1114,90 @@ function committedCost(projectId=""){
 function provisionalMargin(projectId=""){
  return totalInvoiced(projectId)-actualCost(projectId);
 }
+function receiptRows(){
+ db.clientReceipts=Array.isArray(db.clientReceipts)?db.clientReceipts:[];
+ return db.clientReceipts.filter(r=>!r.deleted);
+}
+function clientPaymentKey(name){return String(name||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").trim().replace(/\s+/g," ").toLocaleLowerCase("fr-FR");}
+function receiptClientName(r){return String(r.client||r.clientName||invoiceRows().find(i=>String(i.id)===String(r.invoiceId))?.client||"").trim();}
+function clientContractAmount(projectId,client,asOf=erpToday()){
+ if(!projectId||!clientPaymentKey(client))return 0;
+ const key=clientPaymentKey(client);
+ const quotes=acceptedQuotesForProject(projectId).filter(q=>!q.deleted&&clientPaymentKey(q.client)===key&&(!q.date||String(q.date).slice(0,10)<=asOf));
+ let total=sum(quotes.map(q=>quoteFinancials(q).ttc));
+ const covered=new Set(quotes.map(q=>String(q.id))),groups=new Map();
+ invoiceRows().filter(i=>String(i.project)===String(projectId)&&clientPaymentKey(i.client||i.values?.[1])===key&&(!i.date||String(i.date).slice(0,10)<=asOf)).forEach(i=>{
+  if(i.quoteId&&covered.has(String(i.quoteId)))return;
+  const group=i.quoteId?"devis:"+i.quoteId:"sans-devis",old=groups.get(group)||{contract:0,invoiced:0};
+  old.contract=Math.max(old.contract,+i.quoteAmount||0);old.invoiced+=invoiceLegacyAmount(i);groups.set(group,old);
+ });
+ const unlinked=groups.get("sans-devis");groups.delete("sans-devis");
+ groups.forEach(g=>{total+=Math.max(g.contract,g.invoiced);});
+ if(unlinked)total=Math.max(total,Math.max(unlinked.contract,unlinked.invoiced));
+ return total;
+}
+function clientPaymentRows(projectId="",asOf=erpToday()){
+ const clients=new Map();
+ const active=new Set(accessibleProjects().map(p=>String(p.id)));
+ const add=(project,client)=>{const name=String(client||"").trim(),key=String(project||"")+"::"+clientPaymentKey(name);if(name&&project&&active.has(String(project))&&!clients.has(key))clients.set(key,{project,client:name});};
+ acceptedQuotesForProject(projectId).filter(q=>!q.deleted).forEach(q=>add(q.project,q.client));
+ invoiceRows().filter(i=>!projectId||String(i.project)===String(projectId)).forEach(i=>add(i.project,i.client||i.values?.[1]));
+ receiptRows().filter(r=>!projectId||String(r.project)===String(projectId)).forEach(r=>add(r.project,receiptClientName(r)));
+ return [...clients.values()].map(row=>{
+  const contract=clientContractAmount(row.project,row.client,asOf);
+  const receipts=receiptRows().filter(r=>r.status==="Validé"&&String(r.project)===String(row.project)&&clientPaymentKey(receiptClientName(r))===clientPaymentKey(row.client)&&(!r.date||String(r.date).slice(0,10)<=asOf));
+  const received=sum(receipts.map(r=>r.amount||r.receivedAmount));
+  return {...row,contract,received,remaining:Math.max(0,contract-received),percent:contract?received/contract*100:null};
+ }).filter(row=>row.contract||row.received);
+}
+function totalValidatedQuotes(projectId=""){
+ return acceptedQuotesForProject(projectId).filter(q=>!q.deleted)
+  .reduce((n,q)=>n+quoteFinancials(q).ttc,0);
+}
 function projectFinancialSnapshot(projectId=""){
- const validated=totalValidatedQuotes(projectId), invoiced=totalInvoiced(projectId), received=totalClientReceipts(projectId,true),
- actual=actualCost(projectId), committed=committedCost(projectId);
+ const f=financeScope(projectId),{validated,invoiced,received,actual,committed}=f;
  return {
   validated,invoiced,received,
   toInvoice:Math.max(0,validated-invoiced),
   receivable:Math.max(0,invoiced-received),
   actual,committed,
   margin:invoiced-actual,
-  cash:projectMetrics(projectId).cash
+  cash:f.cash,
+  remaining:f.budgetRemaining,contractRemaining:f.contractRemaining
  };
 }
 
 function dashboardFinance(){
- const totalBudget=sum((db.projects||[]).filter(x=>!x.deleted).map(x=>x.budget));
- const validated=totalValidatedQuotes();
- const invoiced=totalInvoiced();
- const received=totalClientReceipts("",true);
+ if(user?.role!=="ADMIN")return dashboardCore();
+ const ctx=currentProjectContext(),f=financeScope(ctx);
+ const totalBudget=f.budget,validated=f.validated,invoiced=f.invoiced,received=f.received;
  const receivable=Math.max(0,invoiced-received);
- const actual=actualCost();
- const committed=committedCost();
+ const actual=f.actual,committed=f.committed;
  const margin=invoiced-actual;
- const totalApp=sum((db.appro||[]).filter(x=>x.status==="Validée"&&!x.deleted).map(x=>x.amount));
- const cashBal=totalApp-actual;
- const pendingAppro=(db.requests||[]).filter(x=>x.status==="En attente"&&!x.deleted).length;
- const pendingReceipts=receiptRows().filter(x=>x.status==="En attente").length;
- $("#content").innerHTML=workspaceBanner("finance","ESPACE FINANCE","Pilotage standardisé : contrat, facturation, encaissement, coûts, engagements et trésorerie")+
+ const cashBal=f.cash;
+ const pendingAppro=(db.requests||[]).filter(x=>x.status==="En attente"&&!x.deleted&&(!ctx||String(x.project)===String(ctx))).length;
+ const pendingReceipts=receiptRows().filter(x=>x.status==="En attente"&&(!ctx||String(x.project)===String(ctx))).length;
+ $("#content").innerHTML=workspaceBanner("finance","ESPACE FINANCE","Contrat, facturation, encaissements, coûts et caisse")+projectContextNotice()+
  `<div class="kpis finance-kpis-v460">
  ${kpi("💼","green","BUDGET PROJETS",money(totalBudget),"Prévision chantier")}
+ ${kpi("📉","blue","BUDGET RESTANT",money(f.budgetRemaining),"Budget − toutes dépenses")}
  ${kpi("✅","teal","DEVIS VALIDÉS",money(validated),"Valeur contractuelle")}
  ${kpi("🧾","blue","CHIFFRE D’AFFAIRES",money(invoiced),"Factures / tranches émises")}
  ${kpi("💳","green","ENCAISSEMENTS CLIENTS",money(received),"Vola tena voaray")}
+ ${kpi("📊","blue","RESTE À PAYER CONTRAT",money(f.contractRemaining),"Contrats − encaissements validés")}
  ${kpi("⏳","orange","CRÉANCES CLIENTS",money(receivable),"Facturé non encaissé")}
  ${kpi("💸","orange","COÛT RÉEL",money(actual),"Dépenses + paie")}
  ${kpi("📌","purple","COÛT ENGAGÉ",money(committed),"Réel + achats engagés non payés")}
  ${kpi("📈","teal","MARGE PROVISOIRE",money(margin),"CA − coût réel")}
- ${kpi("👛","purple","SOLDE CAISSE",money(cashBal),"Appro validées − sorties")}
+ ${kpi("👛","purple","SOLDE CAISSE",money(cashBal),"Entrées réelles − dépenses Gestionnaire")}
+ ${kpi("🏦","blue","TRÉSORERIE GÉNÉRALE",money(financeScope().treasury),"Tous clients encaissés − paiements Admin − transferts caisse")}
  ${kpi("📋","blue","À VALIDER",pendingAppro+pendingReceipts,"Appro + encaissements")}
  </div>
  <div class="finance-logic-strip">
   <div><b>Reste à facturer</b><span>${money(Math.max(0,validated-invoiced))}</span></div>
   <div><b>Créances clients</b><span>${money(receivable)}</span></div>
-  <div><b>Achats engagés non payés</b><span>${money(committedPurchases())}</span></div>
+  <div><b>Reste à payer contrats</b><span>${money(f.contractRemaining)}</span></div>
+  <div><b>Achats engagés non payés</b><span>${money(committedPurchases(ctx))}</span></div>
  </div>
  <div class="module-grid">
  ${[
@@ -1120,16 +1215,18 @@ function dashboardFinance(){
  ["treasury","💰","Trésorerie","Disponibilités et prévisions"],
  ["reportsFinance","📊","Rapports financiers","Exports et analyses"]
  ].map(x=>`<div class="module-card finance-accent" onclick="go('${x[0]}')"><div class="module-icon">${x[1]}</div><strong>${x[2]}</strong><small>${x[3]}</small></div>`).join("")}
- </div>`;
+ </div>${financialExpenseDetail(ctx)}`;
 }
 function dashboardTechnique(){
+ const ctx=currentProjectContext(),projects=accessibleProjects().filter(p=>!ctx||String(p.id)===String(ctx));
+ const reports=(db.reports||[]).filter(r=>!r.deleted&&(!ctx||String(r.project)===String(ctx)));
  $("#content").innerHTML=workspaceBanner("technique","ESPACE TECHNIQUE","Pilotage des chantiers, planning, avancement, qualité et rapports de contrôle")+
  `<div class="kpis">
- ${kpi("🏗","green","CHANTIERS EN COURS",db.projects.filter(x=>x.status==="En cours").length)}
- ${kpi("📈","blue","AVANCEMENT MOYEN",Math.round(sum(db.projects.map(x=>x.progress))/Math.max(db.projects.length,1))+"%")}
- ${kpi("📋","orange","RAPPORTS TECHNIQUES",db.reports.length)}
- ${kpi("⚠","purple","NON-CONFORMITÉS",db.reports.filter(x=>x.conformity==="Non conforme").length)}
- ${kpi("✅","teal","RAPPORTS VALIDÉS",db.reports.filter(x=>x.status==="Validé").length)}
+ ${kpi("🏗","green","CHANTIERS EN COURS",projects.filter(x=>x.status==="En cours").length)}
+ ${kpi("📈","blue","AVANCEMENT MOYEN",Math.round(sum(projects.map(x=>x.progress))/Math.max(projects.length,1))+"%")}
+ ${kpi("📋","orange","RAPPORTS TECHNIQUES",reports.length)}
+ ${kpi("⚠","purple","NON-CONFORMITÉS",reports.filter(x=>x.conformity==="Non conforme").length)}
+ ${kpi("✅","teal","RAPPORTS VALIDÉS",reports.filter(x=>x.status==="Validé").length)}
  </div>
  <div class="module-grid">
  ${[
@@ -1165,13 +1262,37 @@ function safeTotalInvoiced(projectId=""){
  catch(e){console.warn("Dashboard total facturé",e);return 0;}
 }
 
-function dashboardAutoCharts(){const projects=(db.projects||[]).filter(p=>!p.deleted),data=projects.map(p=>({label:p.name||p.id,rev:safeTotalInvoiced(p.id),dep:totalOperatingExpenses(p.id)})),mx=Math.max(1,...data.flatMap(x=>[x.rev,x.dep]));const bars=data.length?data.map(x=>`<div class="auto-chart-row"><b>${esc(x.label)}</b><div><div class="auto-chart-track"><div class="auto-chart-bar revenue" style="width:${Math.min(100,x.rev/mx*100)}%"></div></div><small>CA ${money(x.rev)}</small><div class="auto-chart-track"><div class="auto-chart-bar expense" style="width:${Math.min(100,x.dep/mx*100)}%"></div></div><small>Dép. ${money(x.dep)}</small></div></div>`).join(""):'<div class="empty-state">Aucune donnée.</div>';const cats={};unifiedExpenseJournalRows().forEach(r=>{const k=r.category||r.source||"Autre";cats[k]=(cats[k]||0)+(+r.amount||0)});const cm=Math.max(1,...Object.values(cats)),cb=Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="auto-chart-row"><b>${esc(k)}</b><div><div class="auto-chart-track"><div class="auto-chart-bar expense" style="width:${Math.min(100,v/cm*100)}%"></div></div><small>${money(v)}</small></div></div>`).join("")||'<div class="empty-state">Aucune dépense.</div>';return`<div class="grid-2 auto-dashboard-charts"><div class="panel"><h3>📊 CA / DÉPENSES PAR CHANTIER</h3><div class="panel-body">${bars}</div></div><div class="panel"><h3>📉 DÉPENSES PAR CATÉGORIE</h3><div class="panel-body">${cb}</div></div></div>`;}
+function dashboardAutoCharts(){const ctx=currentProjectContext(),projects=accessibleProjects().filter(p=>!ctx||String(p.id)===String(ctx)),data=projects.map(p=>({label:projectChantierName(p),rev:financeScope(p.id).invoiced,dep:financeScope(p.id).actual})),mx=Math.max(1,...data.flatMap(x=>[x.rev,x.dep]));const bars=data.length?data.map(x=>`<div class="auto-chart-row"><b>${esc(x.label)}</b><div><div class="auto-chart-track"><div class="auto-chart-bar revenue" style="width:${Math.min(100,x.rev/mx*100)}%"></div></div><small>CA ${money(x.rev)}</small><div class="auto-chart-track"><div class="auto-chart-bar expense" style="width:${Math.min(100,x.dep/mx*100)}%"></div></div><small>Dép. ${money(x.dep)}</small></div></div>`).join(""):'<div class="empty-state">Aucune donnée.</div>';const cats={};financialExpenseRows(ctx).forEach(r=>{const k=r.category||r.source||"Autre";cats[k]=(cats[k]||0)+(+r.amount||0)});const cm=Math.max(1,...Object.values(cats)),cb=Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="auto-chart-row"><b>${esc(k)}</b><div><div class="auto-chart-track"><div class="auto-chart-bar expense" style="width:${Math.min(100,v/cm*100)}%"></div></div><small>${money(v)}</small></div></div>`).join("")||'<div class="empty-state">Aucune dépense.</div>';return`<div class="grid-2 auto-dashboard-charts"><div class="panel"><h3>📊 CA / DÉPENSES PAR CHANTIER</h3><div class="panel-body">${bars}</div></div><div class="panel"><h3>📉 DÉPENSES PAR CATÉGORIE</h3><div class="panel-body">${cb}</div></div></div>`;}
+
+function monthlyFinanceChart(kind,projectId=""){
+ const year=Number(erpToday().slice(0,4)),months=Array.from({length:12},()=>0);
+ const rows=kind==="revenue"?invoiceRows().filter(r=>financeProjectIsActive(r.project)&&(!projectId||String(r.project)===String(projectId))).map(r=>({date:r.date,amount:invoiceLegacyAmount(r)}))
+  :financialExpenseRows(projectId).map(r=>({date:r.date,amount:+r.amount||0}));
+ let undated=0;
+ rows.forEach(r=>{const d=String(r.date||"").slice(0,10),month=+d.slice(5,7);
+  if(/^\d{4}-\d{2}-\d{2}$/.test(d)&&+d.slice(0,4)===year&&month>=1&&month<=12&&d<=erpToday())months[month-1]+=+r.amount||0;
+  else if(!d)undated+=+r.amount||0;
+ });
+ const budget=kind==="expenses"?financeScope(projectId).budget:0;
+ const max=Math.max(1,budget,...months),ticks=[max,max/2,0];
+ return `<div class="finance-chart" role="img" aria-label="${kind==="revenue"?"Chiffre d’affaires":"Dépenses"} mensuel ${year}">
+ <div class="finance-chart-axis">${ticks.map(v=>`<span>${esc(new Intl.NumberFormat("fr-FR",{notation:"compact",maximumFractionDigits:1}).format(v))}</span>`).join("")}</div>
+ <div class="finance-chart-plot"><div class="finance-chart-columns">${months.map((v,i)=>`<div class="finance-chart-month"><div class="finance-chart-bar ${kind}" style="height:${Math.max(0,Math.min(100,v/max*100))}%" title="${esc(String(i+1).padStart(2,"0"))}/${year} : ${esc(money(v))}"></div><small>${["J","F","M","A","M","J","J","A","S","O","N","D"][i]}</small></div>`).join("")}</div>${kind==="expenses"&&budget?`<div class="finance-chart-budget" style="bottom:${budget/max*100}%" title="Budget initial : ${esc(money(budget))}"></div>`:""}</div>
+ </div><div class="finance-chart-note">${kind==="expenses"?`Barres : dépenses mensuelles · Budget initial total : ${money(budget)}.`:`Factures émises par mois (${year}).`}${undated?` · ${money(undated)} sans date, hors graphique.`:""}</div>`;
+}
+function expenseCategoryChart(projectId=""){
+ const totals=new Map();financialExpenseRows(projectId).forEach(r=>{const key=String(r.category||r.source||"Autre");totals.set(key,(totals.get(key)||0)+(+r.amount||0));});
+ const rows=[...totals].filter(x=>x[1]>0).sort((a,b)=>b[1]-a[1]),total=sum(rows.map(x=>x[1]));
+ const colors=["#1463b8","#e59a1a","#2e9c56","#d63b3b","#8e24aa","#10a9b6"];
+ let offset=0;const stops=rows.map(([name,value],i)=>{const start=offset;offset+=value/total*100;return `${colors[i%colors.length]} ${start}% ${offset}%`;});
+ return `<div class="finance-donut-wrap"><div class="finance-donut" style="background:${total?`conic-gradient(${stops.join(",")})`:"#e7edf3"}" role="img" aria-label="Répartition des dépenses : ${total?money(total):"aucune dépense"}"><span>${total?money(total):"0 Ar"}</span></div>
+ <div class="finance-category-list">${rows.length?rows.map(([name,value],i)=>`<div><i style="background:${colors[i%colors.length]}"></i><span>${esc(name)}</span><b>${money(value)}</b></div>`).join(""):'<div class="finance-no-data">Aucune dépense enregistrée.</div>'}</div></div>`;
+}
 
 
 function totalClientReceipts(projectId=""){
- const rows=(db.clientReceipts||db.modules?.clientReceipts||[]);
- return (Array.isArray(rows)?rows:[])
-   .filter(r=>!r.deleted&&(!projectId||String(r.project||"")===String(projectId)))
+ const rows=receiptRows();
+ return rows.filter(r=>r.status==="Validé"&&(!projectId||String(r.project||"")===String(projectId)))
    .reduce((n,r)=>n+(+r.amount||+r.receivedAmount||+r.values?.[2]||0),0);
 }
 
@@ -1198,82 +1319,88 @@ function safeMetric(fn,fallback=0){
 }
 
 function dashboardCore(){
- let totalBudget=sum(db.projects.map(x=>x.budget));
- let totalApp=sum(db.appro.filter(x=>x.status==="Validée").map(x=>x.amount));
+ const ctx=currentProjectContext(),visibleProjects=accessibleProjects().filter(p=>!ctx||String(p.id)===String(ctx));
+ const finances=financeScope(ctx);
+ let totalBudget=finances.budget;
+ let totalApp=sum(finances.cashRows.filter(x=>x.type==="Entrée").map(x=>x.amount));
  let totalRequests=sum(db.requests.map(x=>+x.amount||0));
- let totalAppDisplayed=user.role==="GESTIONNAIRE"?totalApp+totalRequests:totalApp;
- let totalDep=safeMetric(()=>totalOperatingExpenses(),0);
- let cashBal=totalApp-totalDep;
+ let totalAppDisplayed=totalApp;
+ let totalDep=finances.actual;
+ let cashBal=finances.cash;
  let invoices=db.modules.invoices||[];
  let employees=db.modules.employees||[];
  let stock=db.modules.stock||[];
- let totalRevenue=safeMetric(()=>safeTotalInvoiced(""),0);
- let totalReceived=totalClientReceipts("",true);
+ let totalRevenue=finances.invoiced;
+ let totalReceived=finances.received;
  let netProfit=totalRevenue-totalDep;
- let activeEmployees=employees.filter(e=>employeeStatusLabel(e)==="Actif").length;
- let todayKey=new Date().toISOString().slice(0,10);
- let attendanceToday=(db.modules.attendanceWeekly||[])
-   .reduce((n,r)=>n+(r.entries||[]).filter(e=>e.states?.[todayKey]==="P").length,0);
+ let activeEmployees=employees.filter(e=>!e.deleted&&employeeStatusLabel(e)==="Actif").length;
+ let todayKey=erpToday();
+ const attendanceByEmployee=new Map();
+ (db.modules.attendanceWeekly||[]).filter(r=>!r.deleted).forEach(r=>(r.entries||[]).forEach(e=>{
+  const value=e.states?.[todayKey]==="P"?1:e.states?.[todayKey]==="H"?0.5:0;
+  if(value)attendanceByEmployee.set(String(e.employeeKey),Math.max(attendanceByEmployee.get(String(e.employeeKey))||0,value));
+ }));
+ let attendanceToday=sum([...attendanceByEmployee.values()]);
  let chartEmpty=`<div class="empty-state">Aucune donnée disponible pour le moment.</div>`;
  let alertItems=[];
  if(stock.length){
-   let lowStock=stock.filter(r=>+(r.values?.[1]||0)<=5).length;
+   let lowStock=stock.filter(r=>!r.deleted&&+(r.values?.[1]||0)<=5).length;
    if(lowStock)alertItems.push(`Stock faible : ${lowStock} article(s)`);
  }
- let overdueProjects=db.projects.filter(p=>p.status==="En retard").length;
+ let overdueProjects=visibleProjects.filter(p=>p.status==="En retard").length;
  if(overdueProjects)alertItems.push(`${overdueProjects} chantier(s) en retard`);
- let pendingRequests=db.requests.filter(x=>x.status==="En attente").length;
+ let pendingRequests=db.requests.filter(x=>!x.deleted&&x.status==="En attente"&&(!ctx||String(x.project)===String(ctx))).length;
  if(pendingRequests)alertItems.push(`${pendingRequests} demande(s) d’approvisionnement en attente`);
  const dailyReminder=user.role!=="ADMIN"?dailyReportReminderHtml():"";
 
  if(user.role==="GESTIONNAIRE"){
   $("#content").innerHTML=dailyReminder+workspaceBanner("general","VUE GÉNÉRALE GESTIONNAIRE","Synthèse des opérations autorisées.")+
   `<div class="kpis">
-    ${kpi("💵","green","APPROVISIONNEMENTS SAISIS",money(totalAppDisplayed))}
-    ${kpi("👛","blue","DÉPENSES TOTALES",money(totalDep))}
+    ${kpi("💵","green","ENTRÉES DE CAISSE REÇUES",money(totalAppDisplayed))}
+    ${kpi("👛","blue","DÉPENSES DE CAISSE",money(sum(finances.cashRows.filter(r=>r.type==="Sortie").map(r=>r.amount))))}
     ${kpi("💰","orange","SOLDE CAISSE",money(cashBal))}
     ${kpi("📋","purple","DEMANDES EN ATTENTE",pendingRequests)}
-    ${kpi("👥","teal","POINTAGES DU JOUR",attendanceToday)}
+    ${kpi("👥","teal","JOURS POINTÉS AUJOURD’HUI",attendanceToday)}
   </div>
   <div class="notice">
- Les données enregistrées apparaissent immédiatement. Le montant « Approvisionnements saisis » comprend les approvisionnements validés et les demandes envoyées. Le solde caisse compte uniquement les entrées réellement validées.
+ Les demandes d’approvisionnement ne créditent pas la caisse. Seules les entrées réellement remises au Gestionnaire l’alimentent. Les dépenses Admin ne diminuent pas cette caisse.
  </div>
   ${cashTable()}${dashboardAutoCharts()}`;return;
  }
  if(user.role==="CONTROLE"){
   $("#content").innerHTML=`<div class="kpis">
-    ${kpi("🏗","green","CHANTIERS EN COURS",db.projects.filter(x=>x.status==="En cours").length)}
+    ${kpi("🏗","green","CHANTIERS EN COURS",visibleProjects.filter(x=>x.status==="En cours").length)}
     ${kpi("📊","blue","RAPPORTS TECHNIQUES",db.reports.length)}
     ${kpi("✅","orange","RAPPORTS VALIDÉS",db.reports.filter(x=>x.status==="Validé").length)}
     ${kpi("⚠","purple","NON-CONFORMITÉS",db.reports.filter(x=>x.conformity==="Non conforme").length)}
     ${kpi("👷","teal","TECHNICIENS ACTIFS",user.role==="CONTROLE"?1:0)}
   </div>${reportsTable()}`;return;
  }
- $("#content").innerHTML=`<div class="sync-guide">
+ $("#content").innerHTML=projectContextNotice()+`<div class="sync-guide">
  <b>☁ Synchronisation automatique :</b> les données sont enregistrées dans le Cloud et mises à jour en temps réel sur les appareils connectés. Aucun fichier à télécharger ou importer.
 </div>
 <div class="kpis">
  ${kpi("📈","green","CHIFFRE D’AFFAIRES (TTC)",money(totalRevenue),"Calculé depuis les factures")}
  ${kpi("👛","blue","DÉPENSES TOTALES",money(totalDep),"Suivi réel")}
  ${kpi("💰","orange","BÉNÉFICE NET",money(netProfit),"CA moins dépenses")}
- ${kpi("🏗","purple","NOMBRE DE CHANTIERS",db.projects.length,"Total enregistré")}
+ ${kpi("🏗","purple","NOMBRE DE CHANTIERS",visibleProjects.length,"Total enregistré")}
  ${kpi("👥","teal","EMPLOYÉS ACTIFS",activeEmployees,"Effectif enregistré")}
  </div>
  <div class="grid-3">
-  <div class="panel"><h3>CHIFFRE D’AFFAIRES (TTC) PAR MOIS</h3>${totalRevenue?`<div class="empty-state">Les statistiques mensuelles apparaîtront après l’enregistrement des dates de facturation.</div>`:chartEmpty}</div>
-  <div class="panel"><h3>DÉPENSES VS BUDGET (PAR MOIS)</h3>${totalDep||totalBudget?`<div class="empty-state">Les statistiques mensuelles apparaîtront après l’enregistrement régulier des opérations.</div>`:chartEmpty}</div>
-  <div class="panel"><h3>RÉPARTITION DES DÉPENSES</h3>${totalDep?`<div class="empty-state">La répartition sera calculée à partir des catégories de dépenses.</div>`:chartEmpty}</div>
+  <div class="panel"><h3>CHIFFRE D’AFFAIRES (TTC) PAR MOIS</h3>${monthlyFinanceChart("revenue",ctx)}</div>
+  <div class="panel"><h3>DÉPENSES VS BUDGET (PAR MOIS)</h3>${monthlyFinanceChart("expenses",ctx)}</div>
+  <div class="panel"><h3>RÉPARTITION DES DÉPENSES</h3>${expenseCategoryChart(ctx)}</div>
  </div>
  <div class="grid-2" style="margin-top:12px">
-  <div class="panel"><h3>AVANCEMENT DES CHANTIERS</h3>${db.projects.length?projectsTable(true):chartEmpty}</div>
+  <div class="panel"><h3>AVANCEMENT DES CHANTIERS</h3>${visibleProjects.length?projectsTable(true):chartEmpty}</div>
   <div>
    <div class="panel"><h3>SITUATION FINANCIÈRE GLOBALE</h3><div class="panel-body">
-    <table><tr><td>Total budget projets</td><td><b>${money(totalBudget)}</b></td></tr><tr><td>Approvisionnements caisse</td><td>${money(totalApp)}</td></tr><tr><td>Dépenses réelles (dont salaires)</td><td>${money(totalDep)}</td></tr><tr><td>Disponible caisse</td><td style="color:#078b4c"><b>${money(cashBal)}</b></td></tr></table>
+    <table><tr><td>Total budget projets</td><td><b>${money(totalBudget)}</b></td></tr><tr><td>Budget restant</td><td><b>${money(finances.budgetRemaining)}</b></td></tr><tr><td>Encaissements clients validés</td><td>${money(totalReceived)}</td></tr><tr><td>Transferts vers caisse gestionnaire</td><td>${money(totalApp)}</td></tr><tr><td>Dépenses réelles (dont salaires)</td><td>${money(totalDep)}</td></tr><tr><td>Trésorerie générale (tous chantiers)</td><td><b>${money(financeScope().treasury)}</b></td></tr><tr><td>Disponible caisse gestionnaire</td><td style="color:#078b4c"><b>${money(cashBal)}</b></td></tr></table>
    </div></div>
   </div>
  </div>
  <div class="grid-3" style="margin-top:12px">
-  <div class="panel"><h3>TOP CHANTIERS PAR RENTABILITÉ</h3><div class="panel-body">${db.projects.length?db.projects.slice(0,5).map(p=>{let m=projectMetrics(p.id),rate=m.budget?((m.budget-m.dep)/m.budget*100):0;return `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #eee"><span>${p.name}</span><b>${rate.toFixed(1)}%</b></div>`}).join(""):`<div class="empty-state">Aucun chantier enregistré.</div>`}</div></div>
+  <div class="panel"><h3>BUDGET RESTANT PAR CHANTIER</h3><div class="panel-body">${visibleProjects.length?visibleProjects.slice(0,5).map(p=>{let m=projectMetrics(p.id);return `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #eee"><span>${esc(projectChantierName(p))}</span><b>${money(m.remaining)}</b></div>`}).join(""):`<div class="empty-state">Aucun chantier enregistré.</div>`}</div></div>
   <div class="panel"><h3>ACTIONS RAPIDES</h3><div class="actions-grid">${[
     ["Nouveau Devis","📄","quotes"],
     ["Nouvelle Facture","🧾","invoices"],
@@ -1306,7 +1433,7 @@ function dashboard(){
  }
 }
 
-function projectsTable(compact=false){return `<div class="table-wrap"><table><thead><tr><th>Chantier</th><th>Client</th><th>Début</th><th>Fin prévue</th><th>Avancement</th><th>Statut</th></tr></thead><tbody>${db.projects.map(p=>`<tr><td>${p.id}<br>${p.name}</td><td>${p.client}</td><td>${p.start}</td><td>${p.end}</td><td><div class="progress"><span style="width:${p.progress}%"></span></div>${p.progress}%</td><td><span class="badge b-blue">${p.status}</span></td></tr>`).join("")}</tbody></table></div>`}
+function projectsTable(compact=false){const ctx=currentProjectContext();return `<div class="table-wrap"><table><thead><tr><th>Chantier</th><th>Client</th><th>Début</th><th>Fin prévue</th><th>Avancement</th><th>Statut</th></tr></thead><tbody>${accessibleProjects().filter(p=>!ctx||String(p.id)===String(ctx)).map(p=>`<tr><td>${esc(projectChantierName(p))}<br>${esc(projectWorkName(p))}</td><td>${esc(p.client||"")}</td><td>${esc(p.start||"")}</td><td>${esc(p.end||"")}</td><td><div class="progress"><span style="width:${+p.progress||0}%"></span></div>${+p.progress||0}%</td><td><span class="badge b-blue">${esc(p.status||"")}</span></td></tr>`).join("")}</tbody></table></div>`}
 function projects(){
  let budgetCol=user.role==="ADMIN"?"<th>Budget initial</th>":"";
  $("#content").innerHTML=`
@@ -1346,10 +1473,10 @@ function projects(){
              actions="<span>Consultation</span>";
            }
            return `<tr>
-             <td>${esc(p.id)}</td>
-             <td>${esc(p.name)}</td>
+             <td>${esc(projectChantierName(p))}</td>
+             <td>${esc(projectWorkName(p))}</td>
              <td>${esc(p.client)}</td>
-             ${user.role==="ADMIN"?`<td>${money(p.budget||0)}</td>`:""}
+             ${user.role==="ADMIN"?`<td>${money(projectBudgetAmount(p))}</td>`:""}
              <td>${esc(p.start||"")}</td>
              <td>${esc(p.end||"")}</td>
              <td>${p.progress||0}%</td>
@@ -1370,8 +1497,9 @@ function projectForm(id=""){
    return projects();
  }
 
+ const quoteBudget=p&&acceptedQuotesForProject(p.id).length>0;
  const budgetField=user.role==="ADMIN"
-   ?`<label>Budget initial<input name="budget" type="number" min="0" value="${p?.budget||""}" required></label>`
+   ?`<label>Budget chantier${quoteBudget?' (devis acceptés)':' initial'}<input name="budget" type="number" min="0" value="${p?projectBudgetAmount(p):""}" ${quoteBudget?'readonly':'required'}></label>${quoteBudget?'<div class="notice full">Budget calculé automatiquement depuis les devis acceptés, remises incluses. Modifier le devis pour ajuster ce montant.</div>':''}`
    :"";
 
  $("#content").innerHTML=`<div class="panel">
@@ -1411,7 +1539,7 @@ function projectForm(id=""){
      name:name,
      projectName:name,
      client:f.get("client").trim(),
-     budget:user.role==="ADMIN"?+f.get("budget"):(p?.budget||0),
+     budget:quoteBudget?projectBudgetAmount(p):user.role==="ADMIN"?+f.get("budget"):(p?.budget||0),
      start:f.get("start"),
      end:f.get("end"),
      progress:+f.get("progress"),
@@ -1589,8 +1717,9 @@ function logicAuditIssues(){
  (db.projects||[]).filter(x=>!x.deleted).forEach(p=>{
   const s=projectFinancialSnapshot(p.id);
   if(s.invoiced>s.validated+0.01&&s.validated>0)add("Critique","Facturation",p.id,"Facturation supérieure aux devis validés.");
-  if(s.received>s.invoiced+0.01)add("Critique","Encaissements",p.id,"Encaissements supérieurs au montant facturé.");
+  if(s.received>s.contract+0.01&&s.contract>0)add("Critique","Encaissements",p.id,"Encaissements supérieurs aux contrats clients.");
   if(s.cash<0)add("Alerte","Caisse",p.id,"Solde caisse négatif.");
+  if(s.remaining<0)add("Alerte","Budget",p.id,"Dépenses réelles supérieures au budget initial.");
  });
  const requireProject=[
   ["Dépenses",expenseRows()],
@@ -1607,7 +1736,7 @@ function logicAuditIssues(){
   if(paid>gross+0.01)add("Critique","Paie",p.id,"Avance + solde dépasse le salaire dû.");
  });
  (db.modules?.purchases||[]).filter(x=>!x.deleted).forEach(p=>{
-  if(p.paymentStatus==="Payé"&&!p.linkedExpenseId)add("Alerte","Achats",p.id,"Achat marqué payé sans écriture de dépense liée.");
+  if(p.paymentStatus==="Payé"&&!paidPurchaseJournalRows(p.project).some(x=>x.reference===p.id))add("Critique","Achats",p.id,"Achat payé absent du journal des dépenses.");
  });
  return issues;
 }
@@ -1660,7 +1789,7 @@ function technicalRecap(){
  </tbody></table></div></div>`;
 }
 function reports(){$("#content").innerHTML=`<div class="panel"><h3>${user.role==="CONTROLE"?"RAPPORTS TECHNIQUES CONTRÔLE & SUIVI":"RAPPORTS"}</h3>${user.role==="CONTROLE"?'<div class="panel-body"><button class="btn primary" onclick="reportForm()">Nouveau rapport</button></div>':""}${reportsTable()}</div>`}
-function reportsTable(){return `<div class="table-wrap"><table><thead><tr><th>N°</th><th>Date</th><th>Chantier</th><th>Avancement</th><th>Travaux contrôlés</th><th>Conformité</th><th>Incident</th><th>Action</th><th>Statut</th><th>Observation Admin</th><th>Actions</th></tr></thead><tbody>${db.reports.filter(r=>!r.deleted&&userCanAccessProject(r.project)).map(r=>`<tr><td>${r.id}</td><td>${r.date}</td><td>${r.project}</td><td>${r.progress}%</td><td>${r.work}</td><td>${r.conformity}</td><td>${r.issue}</td><td>${r.action}</td><td>${workflowBadge(r.workflow||r.status)}</td><td>${esc(r.adminObservation||"")}</td><td><div class="edit-actions">${canUserChange(r)?`<button class="btn-xs btn-edit" onclick="reportForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteRecord('reports','reports','${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showRecordHistory('reports','${r.id}')">Historique</button></div></td></tr>`).join("")}</tbody></table></div>`}
+function reportsTable(){return `<div class="table-wrap"><table><thead><tr><th>N°</th><th>Date</th><th>Chantier</th><th>Avancement</th><th>Travaux contrôlés</th><th>Conformité</th><th>Incident</th><th>Action</th><th>Statut</th><th>Observation Admin</th><th>Actions</th></tr></thead><tbody>${db.reports.filter(r=>!r.deleted&&userCanAccessProject(r.project)).map(r=>`<tr><td>${r.id}</td><td>${r.date}</td><td>${esc(projectLabel(r.project))}</td><td>${r.progress}%</td><td>${r.work}</td><td>${r.conformity}</td><td>${r.issue}</td><td>${r.action}</td><td>${workflowBadge(r.workflow||r.status)}</td><td>${esc(r.adminObservation||"")}</td><td><div class="edit-actions">${canUserChange(r)?`<button class="btn-xs btn-edit" onclick="reportForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="softDeleteRecord('reports','reports','${r.id}')">Supprimer</button>`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showRecordHistory('reports','${r.id}')">Historique</button></div></td></tr>`).join("")}</tbody></table></div>`}
 function reportForm(id=""){let r=id?db.reports.find(x=>x.id===id):null;if(r&&!canUserChange(r))return alert("Ce rapport est verrouillé ou ne vous appartient pas.");let opts=accessibleProjects().map(p=>`<option value="${p.id}">${p.id} - ${p.name}</option>`).join("");$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEAU"} RAPPORT CONTRÔLE & SUIVI</h3><form id="fReport" class="form-grid"><label>Date<input name="date" type="date" value="${r?.date||""}" required></label><label>Chantier<select name="project">${accessibleProjects().map(p=>`<option value="${p.id}" ${r?.project===p.id?"selected":""}>${p.id} - ${p.name}</option>`).join("")}</select></label><label>Avancement réel (%)<input name="progress" type="number" min="0" max="100" value="${r?.progress??0}" required></label><label>Conformité<select name="conformity"><option ${r?.conformity==="Conforme"?"selected":""}>Conforme</option><option ${r?.conformity==="Non conforme"?"selected":""}>Non conforme</option></select></label><label class="full">Travaux contrôlés<textarea name="work" required>${r?.work||""}</textarea></label><label>Incident / Blocage<input name="issue" value="${r?.issue||""}"></label><label>Action corrective<input name="action" value="${r?.action||""}" required></label><button class="btn primary">Enregistrer</button></form></div>`;$("#fReport").onsubmit=e=>{e.preventDefault();let f=new FormData(e.target);let obj={id:r?.id||"RAP-"+String(db.reports.length+1).padStart(3,"0"),owner:r?.owner||user.username,date:f.get("date"),project:f.get("project"),progress:+f.get("progress"),work:f.get("work"),conformity:f.get("conformity"),issue:f.get("issue")||"Aucun",action:f.get("action"),status:r?.status||"À valider",updatedAt:new Date().toISOString()};const before=r?cloneRecord(r):null;obj.workflow=r?.workflow||"Soumis";obj.updatedBy=user.username;if(r){pushHistory(r,"Modification",before);Object.assign(r,obj);audit("Modification","reports",r.id,"Rapport modifié",before,r)}else{obj.createdAt=new Date().toISOString();obj.history=[];pushHistory(obj,"Création");db.reports.push(obj);audit("Création","reports",obj.id,"Rapport créé",null,obj)}logTechnicalEntry(r?"Modification":"Création","Rapport technique",obj.id,`Chantier ${obj.project}, avancement ${obj.progress}%, ${obj.conformity}`);save();cloudWriteGeneric("reports",r||obj,"Nouveau rapport technique");reports()}}
 function deleteReport(id){if(confirm("Supprimer ce rapport ?")){db.reports=db.reports.filter(x=>x.id!==id);save();reports()}}
 function mondayOf(dateStr){
@@ -1747,7 +1876,7 @@ function attendance(){
   return `<tr><td>${esc(employeeMatricule(e)||e.id||"")}</td><td><b>${esc(employeeName(e))}</b></td><td>${esc(employeeRole(e))}</td><td>${employeeStatusLabel(e)==="Actif"?'<span class="qr-in">Actif</span>':'<span class="qr-out">Passif</span>'}</td>
   ${days.map(d=>{const st=states[d.date]||"A",af=assign[d.date]??defaultProject;return `<td class="center"><select class="att-state" data-key="${esc(key)}" data-date="${d.date}" onchange="refreshAttendanceRow('${esc(key)}')"><option value="A" ${st==="A"?"selected":""}>Absent (0)</option><option value="H" ${st==="H"?"selected":""}>½ journée (0,5)</option><option value="P" ${st==="P"?"selected":""}>Présent (1)</option></select>${attendanceAssignmentControl(key,d.date,af,projects)}</td>`}).join("")}
   <td class="attendance-total" data-key="${esc(key)}"><b>${total.toFixed(1)}</b></td></tr>`;
- }).join(""):'<tr><td colspan="12">Aucun employé.</td></tr>'}
+ }).join(""):'<tr><td colspan="12">Aucun employé actif dans le registre. Ajoutez ou synchronisez les employés pour pointer leur présence.</td></tr>'}
  </tbody></table></div></div>`;
 
  $("#attendanceDate").onchange=e=>{sessionStorage.setItem("nysoa_attendance_date",e.target.value);attendance()};
@@ -1934,7 +2063,7 @@ function purchaseBadge(status){
 function purchaseCanEdit(record){if(!record||record.deleted)return false;if(user.role==="ADMIN")return true;return user.role==="GESTIONNAIRE"&&record.owner===user.username;}
 function purchasesPage(){
  db.modules.purchases=Array.isArray(db.modules.purchases)?db.modules.purchases:[];
- const rows=db.modules.purchases.filter(x=>!x.deleted);
+ const ctx=currentProjectContext(),rows=db.modules.purchases.filter(x=>!x.deleted&&(!ctx||String(x.project)===String(ctx)));
  $("#content").innerHTML=`<div class="panel"><h3>ACHATS</h3>
  <div class="panel-body">
  ${["ADMIN","GESTIONNAIRE"].includes(user.role)?`<button class="btn primary" onclick="purchaseForm()">+ Nouvel achat</button>`:""}
@@ -1946,7 +2075,7 @@ function purchasesPage(){
  <th>Modifié par</th><th>Observation</th><th>Actions</th>
  </tr></thead><tbody>
  ${rows.length?rows.map(r=>`<tr>
- <td>${esc(r.id)}</td><td>${esc(r.date||"")}</td><td>${esc(r.project||"")}</td>
+ <td>${esc(r.id)}</td><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td>
  <td>${esc(r.designation||"")}</td><td>${esc(r.supplier||"")}</td>
  <td>${esc(r.quantity||"")} ${esc(r.unit||"")}</td><td>${money(r.amount)}</td>
  <td>${purchaseBadge(r.status)}</td><td>${workflowBadge(r.paymentStatus||"Non payé")}</td>
@@ -1964,7 +2093,7 @@ function purchaseForm(id=""){
  db.modules.purchases=Array.isArray(db.modules.purchases)?db.modules.purchases:[];
  const r=id?db.modules.purchases.find(x=>String(x.id)===String(id)):null;
  if(r&&!purchaseCanEdit(r))return alert("Cet achat ne vous appartient pas.");
- const projectOptions=db.projects.filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${r?.project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name||"")}</option>`).join("");
+ const projectOptions=db.projects.filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${r?.project===p.id?"selected":""}>${esc(projectChantierName(p))} — ${esc(projectWorkName(p))}</option>`).join("");
  $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER L’ACHAT":"NOUVEL ACHAT"}</h3>
  <form id="purchaseForm" class="form-grid">
  <label>Référence<input name="reference" value="${esc(r?.id||"")}" placeholder="Automatique si vide"></label>
@@ -1975,7 +2104,7 @@ function purchaseForm(id=""){
  <label>Quantité<input name="quantity" type="number" step="0.01" value="${esc(r?.quantity||"")}" required></label>
  <label>Unité<input name="unit" value="${esc(r?.unit||"Unité")}" required></label>
  <label>Montant total<input name="amount" type="number" step="0.01" value="${esc(r?.amount||"")}" required></label>
- <label>Situation<select name="status">${PURCHASE_STATUSES.map(s=>`<option ${r?.status===s?"selected":""}>${s}</option>`).join("")}</select></label><label>État paiement<select name="paymentStatus"><option ${r?.paymentStatus==="Non payé"?"selected":""}>Non payé</option><option ${r?.paymentStatus==="Payé"?"selected":""}>Payé</option></select></label><label>Source des fonds<select name="fundSource"><option ${r?.fundSource==="Caisse Gestionnaire"||(!r&&user.role==="GESTIONNAIRE")?"selected":""}>Caisse Gestionnaire</option><option ${r?.fundSource==="Admin"||(!r&&user.role==="ADMIN")?"selected":""}>Admin</option></select></label>
+ <label>Situation<select name="status">${PURCHASE_STATUSES.map(s=>`<option ${r?.status===s?"selected":""}>${s}</option>`).join("")}</select></label><label>État paiement<select name="paymentStatus"><option ${r?.paymentStatus==="Non payé"?"selected":""}>Non payé</option><option ${r?.paymentStatus==="Payé"?"selected":""}>Payé</option></select></label><label>Date du paiement<input name="paymentDate" type="date" value="${esc(r?.paymentDate||erpToday())}"></label><label>Source des fonds<select name="fundSource">${user.role==="GESTIONNAIRE"?'<option>Caisse Gestionnaire</option>':`<option ${r?.fundSource==="Admin"||!r?"selected":""}>Admin</option><option ${r?.fundSource==="Caisse Gestionnaire"?"selected":""}>Caisse Gestionnaire</option>`}</select></label>
  <label class="full">Observation<input name="observation" value="${esc(r?.observation||"")}" placeholder="Ex. Validation téléphonique Admin"></label>
  <div id="approvalFields" class="approval-fields full">
  <label>Approuvé par<input name="approvedBy" value="${esc(r?.approvedBy||"Admin / Direction")}"></label>
@@ -1992,12 +2121,16 @@ function purchaseForm(id=""){
   const f=new FormData(e.target);
   const now=new Date().toISOString();
   const newStatus=f.get("status");
-  const oldStatus=r?.status||null;
+  const oldStatus=r?.status||null,amount=+f.get("amount")||0,quantity=+f.get("quantity")||0,paymentStatus=f.get("paymentStatus")||"Non payé";
+  if(amount<=0||quantity<=0)return alert("Quantité et montant doivent être positifs.");
+  if(paymentStatus==="Payé"&&["Refusé","Annulé"].includes(newStatus))return alert("Un achat refusé ou annulé ne peut pas être marqué payé.");
+  const fundSource=user.role==="GESTIONNAIRE"?"Caisse Gestionnaire":f.get("fundSource")||"Admin";
+  if(paymentStatus==="Payé"&&fundSource==="Caisse Gestionnaire"&&!canSpendManagerCash(amount,r?.paymentStatus==="Payé"&&r?.fundSource==="Caisse Gestionnaire"?+r.amount||0:0))return alert("Solde caisse insuffisant pour payer cet achat.");
   const obj={
    id:(f.get("reference")||"").trim()||r?.id||"ACH-"+String(db.modules.purchases.length+1).padStart(4,"0"),
    date:f.get("date"),project:f.get("project"),designation:f.get("designation"),
-   supplier:f.get("supplier"),quantity:+f.get("quantity"),unit:f.get("unit"),
-   amount:+f.get("amount"),status:newStatus,workflow:newStatus,paymentStatus:f.get("paymentStatus")||"Non payé",fundSource:f.get("fundSource")||((user.role==="GESTIONNAIRE")?"Caisse Gestionnaire":"Admin"),
+   supplier:f.get("supplier"),quantity,unit:f.get("unit"),
+   amount,status:newStatus,workflow:newStatus,paymentStatus,paymentDate:paymentStatus==="Payé"?(f.get("paymentDate")||erpToday()):"",fundSource,
    observation:f.get("observation"),owner:r?.owner||user.username,
    updatedBy:user.username,updatedAt:now,
    approvedBy:newStatus==="Approuvé"?(f.get("approvedBy")||"Admin / Direction"):r?.approvedBy||"",
@@ -2066,6 +2199,7 @@ function projectLabel(id){
  const p=(db.projects||[]).find(x=>String(x.id)===String(id));
  return p?projectChantierName(p):(id||"Non affecté");
 }
+function financeProjectIsActive(id){return !id||(db.projects||[]).some(p=>!p.deleted&&String(p.id)===String(id));}
 function projectFullLabel(id){
  const p=(db.projects||[]).find(x=>String(x.id)===String(id));
  if(!p)return id||"Non affecté";
@@ -2088,24 +2222,61 @@ function migrateProjectChantierFields(){
 }
 
 function expenseRows(){db.expenses=Array.isArray(db.expenses)?db.expenses:[];return db.expenses.filter(x=>!x.deleted);}
-function manualExpenseRows(){return expenseRows().filter(x=>!x.sourcePurchaseId&&!x.sourcePayrollId);}
+function manualExpenseRows(){return expenseRows().filter(x=>!x.sourcePurchaseId&&!x.sourcePayrollId&&!x.legacyLinkedArchived);}
 function paidPurchaseJournalRows(projectId=""){return (db.modules?.purchases||[]).filter(p=>!p.deleted&&p.paymentStatus==="Payé"&&(!projectId||String(p.project)===String(projectId))).map(p=>({id:"JRN-ACH-"+p.id,date:p.paymentDate||p.date||"",project:p.project,category:"Achats",label:`Achat ${p.designation||p.id}`,amount:+p.amount||0,paymentMode:p.paymentMode||"À préciser",fundSource:p.fundSource||"Admin",reference:p.id,status:"Payée",source:"Achat",readonly:true}));}
 function payrollActualMovements(projectId=""){const out=[];(db.modules?.payroll||[]).filter(p=>!p.deleted&&(!projectId||String(p.project)===String(projectId))).forEach(p=>{const legacy=p.advancePaid===undefined&&p.balancePaid===undefined;if(legacy){if(p.workflow!=="En attente"){const amt=+p.netPaid||+p.grossAmount||0;if(amt)out.push({date:p.date||p.createdAt?.slice(0,10)||"",project:p.project,type:"Sortie",source:"Paie",label:`Salaire ${p.employeeName||""} — ${p.periodLabel||""}`,amount:amt,reference:p.id,fundSource:p.fundSource||"Caisse Gestionnaire"})}return}if(p.advancePaid&&+p.advanceAmount>0)out.push({date:p.advanceDate||p.date||"",project:p.project,type:"Sortie",source:"Avance salaire",label:`Avance ${p.employeeName||""} — ${p.periodLabel||""}`,amount:+p.advanceAmount,reference:p.id,fundSource:p.fundSource||"Caisse Gestionnaire"});if(p.balancePaid&&+p.balanceAmount>0)out.push({date:p.balanceDate||p.date||"",project:p.project,type:"Sortie",source:"Solde salaire",label:`Solde ${p.employeeName||""} — ${p.periodLabel||""}`,amount:+p.balanceAmount,reference:p.id,fundSource:p.fundSource||"Caisse Gestionnaire"})});return out;}
 function payrollExpenseJournalRows(projectId=""){return payrollActualMovements(projectId).map(m=>({id:"JRN-PAY-"+m.reference+"-"+m.source,date:m.date,project:m.project,category:"Salaires",label:m.label,amount:m.amount,paymentMode:"Paie",fundSource:m.fundSource,reference:m.reference,status:"Payée",source:m.source,readonly:true}));}
-function unifiedExpenseJournalRows(projectId=""){const direct=manualExpenseRows().filter(e=>e.status!=="En attente"&&(!projectId||String(e.project)===String(projectId))).map(e=>({...e,source:"Dépense",fundSource:e.fundSource||"Admin",readonly:false}));return[...direct,...paidPurchaseJournalRows(projectId),...payrollExpenseJournalRows(projectId)].sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));}
+function unifiedExpenseJournalRows(projectId=""){const direct=manualExpenseRows().filter(e=>e.status!=="En attente"&&(!projectId||String(e.project)===String(projectId))).map(e=>({...e,source:"Dépense",fundSource:e.fundSource||"Admin",readonly:false}));return[...direct,...paidPurchaseJournalRows(projectId),...payrollExpenseJournalRows(projectId)].filter(e=>financeProjectIsActive(e.project)).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));}
+function erpToday(){
+ const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function financialExpenseRows(projectId="",asOf=erpToday()){
+ const generic=(db.modules?.expenses||[]).filter(r=>!r.deleted&&financeProjectIsActive(r.project)&&(!projectId||String(r.project)===String(projectId)))
+  .map(r=>({id:r.id,date:r.date||r.createdAt?.slice(0,10)||"",project:r.project,category:r.category||"Autre",label:r.label||r.values?.[1]||r.id,amount:moduleExpenseAmount(r),fundSource:r.fundSource||"Admin",source:"Autre dépense"}));
+ return [...unifiedExpenseJournalRows(projectId),...generic]
+  .filter(r=>!r.date||String(r.date).slice(0,10)<=asOf)
+  .sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
+}
+function financeScope(projectId="",asOf=erpToday()){
+ const projects=accessibleProjects().filter(p=>!projectId||String(p.id)===String(projectId));
+ const budget=sum(projects.map(projectBudgetAmount));
+ const expenses=financialExpenseRows(projectId,asOf),actual=sum(expenses.map(r=>r.amount));
+ const adminExpense=sum(expenses.filter(r=>r.fundSource!=="Caisse Gestionnaire").map(r=>r.amount));
+ const invoiced=invoiceRows().filter(r=>financeProjectIsActive(r.project)&&(!projectId||String(r.project)===String(projectId))&&(!r.date||String(r.date).slice(0,10)<=asOf))
+  .reduce((n,r)=>n+invoiceLegacyAmount(r),0);
+ const received=receiptRows().filter(r=>financeProjectIsActive(r.project)&&r.status==="Validé"&&(!projectId||String(r.project)===String(projectId))&&(!r.date||String(r.date).slice(0,10)<=asOf))
+  .reduce((n,r)=>n+(+r.amount||+r.receivedAmount||0),0);
+ const clientPayments=clientPaymentRows(projectId,asOf),contract=sum(clientPayments.map(row=>row.contract));
+ const contractRemaining=sum(clientPayments.map(row=>row.remaining));
+ const validated=acceptedQuotesForProject(projectId).filter(q=>!q.deleted&&(!q.date||String(q.date).slice(0,10)<=asOf))
+  .reduce((n,q)=>n+quoteFinancials(q).ttc,0);
+ const cashRows=cashMovements(projectId).filter(r=>!r.date||String(r.date).slice(0,10)<=asOf);
+ const cashFunding=sum(cashRows.filter(r=>r.type==="Entrée").map(r=>r.amount));
+ const cash=cashFunding-sum(cashRows.filter(r=>r.type==="Sortie").map(r=>r.amount));
+ const treasury=received-adminExpense-cashFunding;
+ const committed=actual+sum((db.modules?.purchases||[]).filter(r=>!r.deleted&&(!projectId||String(r.project)===String(projectId))&&["Approuvé","Effectué","Livré"].includes(r.status)&&r.paymentStatus!=="Payé"&&(!r.date||String(r.date).slice(0,10)<=asOf)).map(r=>r.amount));
+ return {projectId,asOf,budget,budgetRemaining:budget-actual,adminExpense,expenses,actual,invoiced,received,validated,contract,contractRemaining,clientPayments,cash,cashFunding,treasury,committed,cashRows};
+}
+function financialExpenseDetail(projectId=""){
+ const f=financeScope(projectId),rows=f.expenses;
+ return `<div class="panel" style="margin-top:12px"><h3>DÉPENSES JUSQU’AU ${esc(f.asOf)} — ${esc(projectId?projectChantierName(accessibleProjects().find(p=>String(p.id)===String(projectId))):"TOUS LES CHANTIERS")}</h3>
+ <div class="panel-body"><b>Total imputé au budget : ${money(f.actual)}</b> · Paiement Admin : ${money(f.adminExpense)} · Caisse Gestionnaire : ${money(f.actual-f.adminExpense)}</div>
+ <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Catégorie</th><th>Libellé</th><th>Source des fonds</th><th>Montant</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc(r.date||"Sans date")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(r.category||r.source||"")}</td><td>${esc(r.label||"")}</td><td>${esc(r.fundSource||"Admin")}</td><td>${money(r.amount)}</td></tr>`).join(""):'<tr><td colspan="6">Aucune dépense enregistrée.</td></tr>'}</tbody></table></div></div>`;
+}
 function unifiedExpenseTotal(projectId=""){return unifiedExpenseJournalRows(projectId).reduce((n,r)=>n+(+r.amount||0),0);}
-function expensesPage(){const ctx=currentProjectContext(),rows=unifiedExpenseJournalRows(ctx),total=rows.reduce((n,r)=>n+(+r.amount||0),0);$("#content").innerHTML=`${caisseNav("expenses")}${projectContextNotice()}<div class="kpis">${kpi("📒","orange","TOTAL DÉPENSES",money(total),"Journal général")}</div><div class="panel"><h3>DÉPENSES — JOURNAL GÉNÉRAL</h3><div class="panel-body"><button class="btn primary" onclick="expenseForm()">+ Nouvelle dépense</button><div class="notice">Tous les achats payés, salaires payés et autres dépenses apparaissent ici. <b>Source des fonds</b> distingue Caisse Gestionnaire et Admin.</div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Source</th><th>Catégorie</th><th>Libellé</th><th>Montant</th><th>Source des fonds</th><th>Référence</th><th>Action</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(r.source||"")}</td><td>${esc(r.category||"")}</td><td>${esc(r.label||"")}</td><td><b>${money(r.amount)}</b></td><td><b>${esc(r.fundSource||"Admin")}</b></td><td>${esc(r.reference||"")}</td><td>${r.readonly?'<span class="muted">Automatique</span>':`<button class="btn-xs btn-edit" onclick="expenseForm('${r.id}')">Modifier</button> <button class="btn-xs btn-delete" onclick="deleteExpense('${r.id}')">Supprimer</button>`}</td></tr>`).join(""):'<tr><td colspan="9">Aucune dépense.</td></tr>'}</tbody></table></div></div>`;}
-function expenseForm(id=""){const r=id?expenseRows().find(x=>String(x.id)===String(id)):null,project=r?.project||currentProjectContext()||"";$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} DÉPENSE</h3><form id="fExpense" class="form-grid"><label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label><label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label><label>Catégorie<select name="category">${["Achats","Carburant","Transport","Main-d’œuvre externe","Matériels","Frais chantier","Autre"].map(x=>`<option ${r?.category===x?"selected":""}>${x}</option>`).join("")}</select></label><label>Libellé<input name="label" value="${esc(r?.label||"")}" required></label><label>Montant<input name="amount" type="number" min="1" value="${+r?.amount||""}" required></label><label>Mode<select name="paymentMode">${["Espèces","Virement","Mobile Money","Chèque","Autre"].map(x=>`<option ${r?.paymentMode===x?"selected":""}>${x}</option>`).join("")}</select></label><label>Source des fonds<select name="fundSource"><option ${r?.fundSource==="Caisse Gestionnaire"||(!r&&user.role==="GESTIONNAIRE")?"selected":""}>Caisse Gestionnaire</option><option ${r?.fundSource==="Admin"||(!r&&user.role==="ADMIN")?"selected":""}>Admin</option></select></label><label>Référence<input name="reference" value="${esc(r?.reference||"")}"></label><label>Statut<select name="status"><option ${r?.status==="Payée"?"selected":""}>Payée</option><option ${r?.status==="En attente"?"selected":""}>En attente</option></select></label><label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="expensesPage()">Annuler</button></div></form></div>`;$("#fExpense").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),obj={id:r?.id||"DEP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),category:f.get("category"),label:f.get("label"),amount:+f.get("amount")||0,paymentMode:f.get("paymentMode"),fundSource:f.get("fundSource")||"Admin",reference:f.get("reference")||"",status:f.get("status"),note:f.get("note")||"",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};const before=r?cloneRecord(r):null;if(r)Object.assign(r,obj);else{obj.createdAt=now;db.expenses.push(obj)}audit(r?"Modification dépense":"Création dépense","expenses",obj.id,`${obj.label} — ${money(obj.amount)} — ${obj.fundSource}`,before,obj);saveLocalOnly();cloudWriteGeneric("expenses",obj,"Dépense");expensesPage()};}
-function deleteExpense(id){const r=expenseRows().find(x=>String(x.id)===String(id));if(!r||!confirm("Supprimer cette dépense ?"))return;const before=cloneRecord(r);r.deleted=true;r.deletedAt=new Date().toISOString();r.updatedAt=r.deletedAt;audit("Suppression dépense","expenses",r.id,r.label,before,r);saveLocalOnly();cloudWriteGeneric("expenses",r,"Dépense supprimée");expensesPage();}
+function expensesPage(){const ctx=currentProjectContext(),rows=unifiedExpenseJournalRows(ctx),total=rows.reduce((n,r)=>n+(+r.amount||0),0);$("#content").innerHTML=`${caisseNav("expenses")}${projectContextNotice()}<div class="kpis">${kpi("📒","orange","TOTAL DÉPENSES",money(total),"Journal général")}</div><div class="panel"><h3>DÉPENSES — JOURNAL GÉNÉRAL</h3><div class="panel-body"><button class="btn primary" onclick="expenseForm()">+ Nouvelle dépense</button><div class="notice">Tous les achats payés, salaires payés et autres dépenses apparaissent ici. <b>Source des fonds</b> distingue Caisse Gestionnaire et Admin.</div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Source</th><th>Catégorie</th><th>Libellé</th><th>Montant</th><th>Source des fonds</th><th>Référence</th><th>Action</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(r.source||"")}</td><td>${esc(r.category||"")}</td><td>${esc(r.label||"")}</td><td><b>${money(r.amount)}</b></td><td><b>${esc(r.fundSource||"Admin")}</b></td><td>${esc(r.reference||"")}</td><td>${r.readonly?'<span class="muted">Automatique</span>':user.role==="ADMIN"||r.owner===user.username?`<button class="btn-xs btn-edit" onclick="expenseForm('${r.id}')">Modifier</button> <button class="btn-xs btn-delete" onclick="deleteExpense('${r.id}')">Supprimer</button>`:'<span class="muted">Consultation</span>'}</td></tr>`).join(""):'<tr><td colspan="9">Aucune dépense.</td></tr>'}</tbody></table></div></div>`;}
+function expenseForm(id=""){const r=id?expenseRows().find(x=>String(x.id)===String(id)):null;if(id&&!r)return alert("Dépense introuvable.");if(r&&user.role!=="ADMIN"&&r.owner!==user.username)return alert("Cette dépense ne vous appartient pas.");const project=r?.project||currentProjectContext()||"";$("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} DÉPENSE</h3><form id="fExpense" class="form-grid"><label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label><label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label><label>Catégorie<select name="category">${["Achats","Carburant","Transport","Main-d’œuvre externe","Matériels","Frais chantier","Autre"].map(x=>`<option ${r?.category===x?"selected":""}>${x}</option>`).join("")}</select></label><label>Libellé<input name="label" value="${esc(r?.label||"")}" required></label><label>Montant<input name="amount" type="number" min="1" value="${+r?.amount||""}" required></label><label>Mode<select name="paymentMode">${["Espèces","Virement","Mobile Money","Chèque","Autre"].map(x=>`<option ${r?.paymentMode===x?"selected":""}>${x}</option>`).join("")}</select></label><label>Source des fonds<select name="fundSource"><option ${r?.fundSource==="Caisse Gestionnaire"||(!r&&user.role==="GESTIONNAIRE")?"selected":""}>Caisse Gestionnaire</option><option ${r?.fundSource==="Admin"||(!r&&user.role==="ADMIN")?"selected":""}>Admin</option></select></label><label>Référence<input name="reference" value="${esc(r?.reference||"")}"></label><label>Statut<select name="status"><option ${r?.status==="Payée"?"selected":""}>Payée</option><option ${r?.status==="En attente"?"selected":""}>En attente</option></select></label><label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="expensesPage()">Annuler</button></div></form></div>`;$("#fExpense").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),obj={id:r?.id||"DEP-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),category:f.get("category"),label:f.get("label"),amount:+f.get("amount")||0,paymentMode:f.get("paymentMode"),fundSource:user.role==="GESTIONNAIRE"?"Caisse Gestionnaire":f.get("fundSource")||"Admin",reference:f.get("reference")||"",status:f.get("status"),note:f.get("note")||"",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};const before=r?cloneRecord(r):null;if(obj.status!=="En attente"&&obj.fundSource==="Caisse Gestionnaire"&&!canSpendManagerCash(obj.amount,r&&r.status!=="En attente"&&r.fundSource==="Caisse Gestionnaire"?+r.amount||0:0))return alert("Solde caisse insuffisant. L’Admin doit enregistrer l’approvisionnement réellement remis.");if(r)Object.assign(r,obj);else{obj.createdAt=now;db.expenses.push(obj)}audit(r?"Modification dépense":"Création dépense","expenses",obj.id,`${obj.label} — ${money(obj.amount)} — ${obj.fundSource}`,before,obj);saveLocalOnly();cloudWriteGeneric("expenses",obj,"Dépense");expensesPage()};}
+function deleteExpense(id){const r=expenseRows().find(x=>String(x.id)===String(id));if(!r||user.role!=="ADMIN"&&r.owner!==user.username||!confirm("Supprimer cette dépense ?"))return;const before=cloneRecord(r);r.deleted=true;r.deletedAt=new Date().toISOString();r.updatedAt=r.deletedAt;audit("Suppression dépense","expenses",r.id,r.label,before,r);saveLocalOnly();cloudWriteGeneric("expenses",r,"Dépense supprimée");expensesPage();}
 function caisseNav(active="journal"){const b=(k,l,f)=>`<button class="btn ${active===k?"primary":"secondary"}" onclick="${f}">${l}</button>`;return`<div class="panel caisse-hub"><h3>💵 MODULE CAISSE</h3><div class="panel-body form-actions">${b("journal","Journal caisse","cashPage()")}${b("appro","Demandes appro","approPage()")}${b("expenses","Dépenses","expensesPage()")}${b("treasury","Trésorerie","cashTreasuryPage()")}</div></div>`;}
 function cashEntryRows(){db.modules.cashEntries=Array.isArray(db.modules.cashEntries)?db.modules.cashEntries:[];return db.modules.cashEntries.filter(x=>!x.deleted);}
-function cashEntryForm(){$("#content").innerHTML=`<div class="panel"><h3>ENTRÉE CAISSE MANUELLE</h3><div class="notice">Montant réellement remis à la caisse Gestionnaire. Indépendant de la demande d’approvisionnement.</div><form id="fCashEntry" class="form-grid"><label>Date<input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label>Montant<input name="amount" type="number" min="1" required></label><label>Chantier<select name="project"><option value="">Caisse générale</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}">${esc(projectChantierName(p))}</option>`).join("")}</select></label><label>Référence<input name="reference"></label><label class="full">Observation<textarea name="note"></textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="cashPage()">Annuler</button></div></form></div>`;$("#fCashEntry").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),a=effectiveUserIdentity(),o={id:"CIN-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),amount:+f.get("amount")||0,project:f.get("project")||"",reference:f.get("reference")||"",note:f.get("note")||"",enteredBy:a.label||a.username||user.username,createdAt:now,updatedAt:now};db.modules.cashEntries.push(o);audit("Entrée caisse","cashEntries",o.id,money(o.amount),null,o);saveLocalOnly();cloudWriteGeneric("cashEntries",o,"Entrée caisse");cashPage()};}
+function cashEntryForm(){if(user?.role!=="ADMIN")return alert("L’Admin enregistre la remise réelle à la caisse Gestionnaire.");$("#content").innerHTML=`<div class="panel"><h3>ENTRÉE CAISSE MANUELLE</h3><div class="notice">Montant réellement remis à la caisse Gestionnaire. Indépendant de la demande d’approvisionnement.</div><form id="fCashEntry" class="form-grid"><label>Date<input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label>Montant<input name="amount" type="number" min="1" required></label><label>Chantier<select name="project"><option value="">Caisse générale</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}">${esc(projectChantierName(p))}</option>`).join("")}</select></label><label>Référence<input name="reference"></label><label class="full">Observation<textarea name="note"></textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="cashPage()">Annuler</button></div></form></div>`;$("#fCashEntry").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),a=effectiveUserIdentity(),o={id:"CIN-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),amount:+f.get("amount")||0,project:f.get("project")||"",reference:f.get("reference")||"",note:f.get("note")||"",enteredBy:a.label||a.username||user.username,createdAt:now,updatedAt:now};db.modules.cashEntries.push(o);audit("Entrée caisse","cashEntries",o.id,money(o.amount),null,o);saveLocalOnly();cloudWriteGeneric("cashEntries",o,"Entrée caisse");cashPage()};}
 function cashTreasuryPage(){generic("treasury");const c=document.getElementById("content");if(c)c.innerHTML=caisseNav("treasury")+c.innerHTML;}
 function approPage(){db.requests=Array.isArray(db.requests)?db.requests:[];const ctx=currentProjectContext(),req=db.requests.filter(x=>!x.deleted&&(!ctx||String(x.project)===String(ctx))).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));$("#content").innerHTML=`${caisseNav("appro")}${projectContextNotice()}<div class="panel"><h3>DEMANDES D’APPROVISIONNEMENT</h3><div class="panel-body">${user.role!=="ADMIN"?'<button class="btn primary" onclick="approForm()">+ Nouvelle demande</button>':""}<div class="notice">Validation Admin simple : <b>OK</b> ou <b>Non</b>. Une validation ne crédite jamais automatiquement la caisse.</div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Montant</th><th>Motif</th><th>Statut</th><th>Action</th></tr></thead><tbody>${req.length?req.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td><b>${money(r.amount)}</b></td><td>${esc(r.purpose||r.note||"")}</td><td>${workflowBadge(r.status||"En attente")}</td><td>${user.role==="ADMIN"&&r.status==="En attente"?`<button class="btn-xs btn-edit" onclick="validateApproRequest('${r.id}',true)">OK</button> <button class="btn-xs btn-delete" onclick="validateApproRequest('${r.id}',false)">Non</button>`:r.status==="En attente"?`<button class="btn-xs btn-edit" onclick="approForm('${r.id}')">Modifier</button>`:""}</td></tr>`).join(""):'<tr><td colspan="6">Aucune demande.</td></tr>'}</tbody></table></div></div>`;}
 function approForm(id=""){const r=id?(db.requests||[]).find(x=>String(x.id)===String(id)):null,project=r?.project||currentProjectContext()||"";$("#content").innerHTML=`<div class="panel"><h3>DEMANDE D’APPROVISIONNEMENT</h3><form id="fAppro" class="form-grid"><label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label><label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label><label>Montant<input name="amount" type="number" min="1" value="${+r?.amount||""}" required></label><label>Motif<input name="purpose" value="${esc(r?.purpose||"")}" required></label><label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label><div class="form-actions full"><button class="btn primary">Envoyer</button><button type="button" class="btn secondary" onclick="approPage()">Annuler</button></div></form></div>`;$("#fAppro").onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString(),o={id:r?.id||"DEM-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project:f.get("project"),amount:+f.get("amount")||0,purpose:f.get("purpose"),note:f.get("note")||"",status:r?.status||"En attente",owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};const before=r?cloneRecord(r):null;if(r)Object.assign(r,o);else{o.createdAt=now;db.requests.push(o)}audit(r?"Modification demande appro":"Création demande appro","requests",o.id,`${projectLabel(o.project)} — ${money(o.amount)}`,before,o);saveLocalOnly();cloudWriteGeneric("requests",o,"Demande appro");approPage()};}
 function validateApproRequest(id,accept){if(user.role!=="ADMIN")return;const r=(db.requests||[]).find(x=>String(x.id)===String(id));if(!r)return;const now=new Date().toISOString(),before=cloneRecord(r);r.status=accept?"Validée":"Rejetée";r.updatedAt=now;if(accept){r.validatedAt=now;r.validatedBy=user.username}else{r.rejectedAt=now;r.rejectedBy=user.username}audit(accept?"Validation demande appro":"Rejet demande appro","requests",r.id,accept?"OK":"Non",before,r);saveLocalOnly();cloudWriteGeneric("requests",r,"Décision appro");approPage();}
-function cashMovements(projectId=""){const rows=[];cashEntryRows().filter(a=>!projectId||!a.project||String(a.project)===String(projectId)).forEach(a=>rows.push({date:a.date,project:a.project,type:"Entrée",source:"Entrée caisse manuelle",label:a.note||"Entrée caisse",amount:+a.amount||0,reference:a.reference||a.id}));unifiedExpenseJournalRows(projectId).filter(e=>(e.fundSource||"Admin")==="Caisse Gestionnaire").forEach(e=>rows.push({date:e.date,project:e.project,type:"Sortie",source:e.source||"Dépense",label:e.label||e.category||"Dépense",amount:+e.amount||0,reference:e.reference||e.id}));return rows.sort((a,b)=>String(a.date||"").localeCompare(String(b.date||"")));}
-function cashPage(){const ctx=currentProjectContext(),rows=cashMovements(ctx);let running=0;const rendered=rows.map(r=>{running+=r.type==="Entrée"?+r.amount:-r.amount;return{...r,balance:running}}),ins=rows.filter(r=>r.type==="Entrée").reduce((n,r)=>n+r.amount,0),outs=rows.filter(r=>r.type==="Sortie").reduce((n,r)=>n+r.amount,0);$("#content").innerHTML=`${caisseNav("journal")}${projectContextNotice()}<div class="kpis">${kpi("⬇","green","ENTRÉES CAISSE",money(ins))}${kpi("⬆","orange","SORTIES CAISSE",money(outs))}${kpi("💵","blue","SOLDE CAISSE",money(ins-outs))}</div><div class="panel"><h3>JOURNAL CAISSE GESTIONNAIRE</h3><div class="panel-body"><button class="btn primary" onclick="cashEntryForm()">+ Entrée caisse manuelle</button><div class="notice">La caisse est indépendante des demandes appro. Seules les dépenses marquées <b>Caisse Gestionnaire</b> diminuent ce solde. Les dépenses Admin restent dans le Journal général sans diminuer cette caisse.</div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Type</th><th>Source</th><th>Libellé</th><th>Entrée</th><th>Sortie</th><th>Solde</th><th>Référence</th></tr></thead><tbody>${rendered.length?rendered.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${r.type}</td><td>${esc(r.source)}</td><td>${esc(r.label)}</td><td>${r.type==="Entrée"?money(r.amount):""}</td><td>${r.type==="Sortie"?money(r.amount):""}</td><td><b>${money(r.balance)}</b></td><td>${esc(r.reference||"")}</td></tr>`).join(""):'<tr><td colspan="9">Aucun mouvement.</td></tr>'}</tbody></table></div></div>`;}
+function canSpendManagerCash(amount,previousPaid=0){return (+amount||0)<=financeScope().cash+(+previousPaid||0)+0.01;}
+function cashMovements(projectId=""){const rows=[];cashEntryRows().filter(a=>financeProjectIsActive(a.project)&&(!projectId||String(a.project)===String(projectId))).forEach(a=>rows.push({date:a.date,project:a.project,type:"Entrée",source:"Entrée caisse manuelle",label:a.note||"Entrée caisse",amount:+a.amount||0,reference:a.reference||a.id}));unifiedExpenseJournalRows(projectId).filter(e=>(e.fundSource||"Admin")==="Caisse Gestionnaire").forEach(e=>rows.push({date:e.date,project:e.project,type:"Sortie",source:e.source||"Dépense",label:e.label||e.category||"Dépense",amount:+e.amount||0,reference:e.reference||e.id}));return rows.sort((a,b)=>String(a.date||"").localeCompare(String(b.date||"")));}
+function cashPage(){const ctx=currentProjectContext(),rows=cashMovements(ctx);let running=0;const rendered=rows.map(r=>{running+=r.type==="Entrée"?+r.amount:-r.amount;return{...r,balance:running}}),ins=rows.filter(r=>r.type==="Entrée").reduce((n,r)=>n+r.amount,0),outs=rows.filter(r=>r.type==="Sortie").reduce((n,r)=>n+r.amount,0);$("#content").innerHTML=`${caisseNav("journal")}${projectContextNotice()}<div class="kpis">${kpi("⬇","green","ENTRÉES CAISSE",money(ins))}${kpi("⬆","orange","SORTIES CAISSE",money(outs))}${kpi("💵","blue","SOLDE CAISSE",money(ins-outs))}</div><div class="panel"><h3>JOURNAL CAISSE GESTIONNAIRE</h3><div class="panel-body">${user.role==="ADMIN"?'<button class="btn primary" onclick="cashEntryForm()">+ Entrée caisse manuelle</button>':""}<div class="notice">La caisse est indépendante des demandes appro. Seules les dépenses marquées <b>Caisse Gestionnaire</b> diminuent ce solde. Les dépenses Admin restent dans le Journal général sans diminuer cette caisse.</div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Type</th><th>Source</th><th>Libellé</th><th>Entrée</th><th>Sortie</th><th>Solde</th><th>Référence</th></tr></thead><tbody>${rendered.length?rendered.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${r.type}</td><td>${esc(r.source)}</td><td>${esc(r.label)}</td><td>${r.type==="Entrée"?money(r.amount):""}</td><td>${r.type==="Sortie"?money(r.amount):""}</td><td><b>${money(r.balance)}</b></td><td>${esc(r.reference||"")}</td></tr>`).join(""):'<tr><td colspan="9">Aucun mouvement.</td></tr>'}</tbody></table></div></div>`;}
 
 function employeeRows(){
  db.modules.employees=Array.isArray(db.modules.employees)?db.modules.employees:[];
@@ -2264,11 +2435,11 @@ function advanceHistoryPage(employeeId){const e=employeeRows().find(x=>String(x.
 function removePayrollAdvanceRepayments(payrollId){employeeAdvanceRows().forEach(a=>{const old=(a.repayments||[]).length;a.repayments=(a.repayments||[]).filter(r=>String(r.payrollId)!==String(payrollId));if(old!==a.repayments.length){a.status=advanceBalance(a)<=.01?"Remboursée":advanceRepaid(a)>0?"Partiel":"À rembourser";a.updatedAt=new Date().toISOString();cloudWriteGeneric("employeeAdvances",a,"Correction remboursement")}});}
 function applyAdvanceRepayment(employeeId,amount,date,payrollId){let remaining=+amount||0;const rows=employeeAdvanceRows().filter(a=>String(a.employeeId)===String(employeeId)&&advanceBalance(a)>0).sort((a,b)=>String(a.date).localeCompare(String(b.date)));for(const a of rows){if(remaining<=0)break;const part=Math.min(remaining,advanceBalance(a));a.repayments=Array.isArray(a.repayments)?a.repayments:[];a.repayments.push({id:"REP-"+Date.now()+"-"+Math.random().toString(36).slice(2,5),date,amount:part,payrollId});remaining-=part;a.status=advanceBalance(a)<=.01?"Remboursée":"Partiel";a.updatedAt=new Date().toISOString();cloudWriteGeneric("employeeAdvances",a,"Remboursement avance")}}
 function employeeAdvancesTotal(employeeId,excludePayrollId=""){return employeeAdvanceBalance(employeeId);}
-function payrollPage(){const ctx=currentProjectContext(),rows=payrollRows().filter(p=>!ctx||String(p.project)===String(ctx));$("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>PAIE</h3><div class="panel-body"><button class="btn primary" onclick="payrollForm()">+ Nouvelle période de paie</button><div class="notice">Suivi complet des avances et remboursements partiels. La déduction d’avance réduit la dette mais n’est pas une nouvelle sortie de caisse.</div></div><div class="table-wrap"><table><thead><tr><th>Employé</th><th>Période</th><th>Salaire dû</th><th>Payé</th><th>Déduction avance</th><th>Reste salaire</th><th>Dette avance</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${rows.length?rows.map(p=>{const gross=+p.grossAmount||0,adv=p.advancePaid?+p.advanceAmount||0:0,bal=p.balancePaid?+p.balanceAmount||0:0,ded=+p.advanceDeduction||0,paid=adv+bal,remain=Math.max(0,gross-paid-ded);return`<tr><td><b>${esc(p.employeeName||employeeName(employeeRows().find(e=>e.id===p.employeeId))||"")}</b></td><td>${esc(p.periodLabel||"")}</td><td>${money(gross)}</td><td>${money(paid)}</td><td>${money(ded)}</td><td>${money(remain)}</td><td><b>${money(employeeAdvanceBalance(p.employeeId))}</b></td><td>${workflowBadge(p.workflow||"En attente")}</td><td><button class="btn-xs btn-edit" onclick="payrollForm('${p.id}','${p.employeeId}')">Modifier</button> <button class="btn-xs" onclick="advanceHistoryPage('${p.employeeId}')">Avances</button> <button class="btn-xs btn-delete" onclick="deletePayroll('${p.id}')">Supprimer</button></td></tr>`}).join(""):'<tr><td colspan="9">Aucune paie.</td></tr>'}</tbody></table></div></div>`;}
-function payrollForm(id="",employeeId=""){const p=id?payrollRows().find(x=>String(x.id)===String(id)):null,eid=p?.employeeId||employeeId||"",e=employeeRows().find(x=>String(x.id)===String(eid)),cycle=p?.payCycle||employeePayCycle(e)||"Hebdomadaire",salary=+p?.grossAmount||employeeBaseSalary(e)||0,project=p?.project||employeeProject(e)||currentProjectContext()||"";$("#content").innerHTML=`<div class="panel"><h3>${p?"MODIFIER":"NOUVELLE"} PAIE</h3><form id="fPayroll" class="form-grid"><label>Employé<select name="employeeId" id="payEmployee" required onchange="payrollEmployeeChanged(this.value)"><option value="">Choisir</option>${employeeRows().filter(x=>x.workflow!=="Inactif").map(x=>`<option value="${esc(x.id)}" ${String(eid)===String(x.id)?"selected":""}>${esc(employeeName(x))} — ${esc(employeeRole(x))}</option>`).join("")}</select></label><label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(x=>!x.deleted).map(x=>`<option value="${esc(x.id)}" ${String(project)===String(x.id)?"selected":""}>${esc(x.id)} — ${esc(x.name||"")}</option>`).join("")}</select></label><label>Poste<input id="payRole" value="${esc(employeeRole(e)||"")}" readonly></label><label>Mode<input id="payCycle" value="${esc(cycle)}" readonly></label><label>Période<input name="periodLabel" value="${esc(p?.periodLabel||"")}" required></label><label>Salaire dû<input name="grossAmount" id="grossAmount" type="number" min="0" value="${salary||""}" oninput="recalcPayrollV456()" required></label><label class="checkline"><input name="advancePaid" id="advancePaid" type="checkbox" ${p?.advancePaid?"checked":""} onchange="recalcPayrollV456()"> Avance salaire versée</label><label>Date avance<input name="advanceDate" type="date" value="${esc(p?.advanceDate||"")}"></label><label>Montant avance salaire<input name="advanceAmount" id="advanceAmount" type="number" min="0" value="${+p?.advanceAmount||0}" oninput="recalcPayrollV456()"></label><label class="checkline"><input name="balancePaid" id="balancePaid" type="checkbox" ${p?.balancePaid?"checked":""} onchange="recalcPayrollV456()"> Solde payé</label><label>Date solde<input name="balanceDate" type="date" value="${esc(p?.balanceDate||"")}"></label><label>Montant solde<input name="balanceAmount" id="balanceAmount" type="number" min="0" value="${+p?.balanceAmount||0}" oninput="recalcPayrollV456()"></label><label>Dette avance à rembourser<input id="advanceDebtOutstanding" value="${employeeAdvanceBalance(eid)}" readonly></label><label>Déduction avance<input name="advanceDeduction" id="advanceDeduction" type="number" min="0" value="${+p?.advanceDeduction||0}" oninput="recalcPayrollV456()"></label><label>Date remboursement<input name="advanceRepaymentDate" type="date" value="${esc(p?.advanceRepaymentDate||"")}"></label><label>Source des fonds<select name="fundSource"><option ${p?.fundSource==="Caisse Gestionnaire"||(!p&&user.role==="GESTIONNAIRE")?"selected":""}>Caisse Gestionnaire</option><option ${p?.fundSource==="Admin"||(!p&&user.role==="ADMIN")?"selected":""}>Admin</option></select></label><label>Total réellement payé<input id="payrollTotalPaid" readonly></label><label>Reste salaire<input id="payrollRemaining" readonly></label><label>Statut<input id="payrollStatus" readonly></label><label class="full">Observation<textarea name="note">${esc(p?.note||"")}</textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="payrollPage()">Annuler</button></div></form></div>`;recalcPayrollV456();$("#fPayroll").onsubmit=ev=>{ev.preventDefault();const f=new FormData(ev.target),emp=employeeRows().find(x=>String(x.id)===String(f.get("employeeId")));if(!emp)return alert("Choisir un employé.");const gross=+f.get("grossAmount")||0,ap=!!f.get("advancePaid"),bp=!!f.get("balancePaid"),advance=ap?(+f.get("advanceAmount")||0):0,balance=bp?(+f.get("balanceAmount")||0):0,ded=+f.get("advanceDeduction")||0;if(ded>employeeAdvanceBalance(emp.id)+.01)return alert("Déduction supérieure à la dette d’avance.");if(advance+balance+ded>gross+.01)return alert("Paiements + déduction dépassent le salaire dû.");if(ap&&!f.get("advanceDate"))return alert("Date avance requise.");if(bp&&!f.get("balanceDate"))return alert("Date solde requise.");if(ded>0&&!f.get("advanceRepaymentDate"))return alert("Date remboursement requise.");const paid=advance+balance,remain=Math.max(0,gross-paid-ded),workflow=(paid+ded)<=0?"En attente":remain<=.01?"Payé":"Partiel",now=new Date().toISOString(),o={id:p?.id||"PAY-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),employeeId:emp.id,employeeName:employeeName(emp),jobTitle:employeeRole(emp),project:f.get("project"),payCycle:employeePayCycle(emp),periodLabel:f.get("periodLabel"),grossAmount:gross,advancePaid:ap,advanceDate:f.get("advanceDate")||"",advanceAmount:advance,balancePaid:bp,balanceDate:f.get("balanceDate")||"",balanceAmount:balance,advanceDeduction:ded,advanceRepaymentDate:f.get("advanceRepaymentDate")||"",fundSource:f.get("fundSource")||"Caisse Gestionnaire",totalPaid:paid,remainingSalary:remain,workflow,note:f.get("note")||"",owner:p?.owner||user.username,updatedBy:user.username,updatedAt:now};const before=p?cloneRecord(p):null;if(p)Object.assign(p,o);else{o.createdAt=now;db.modules.payroll.push(o)}removePayrollAdvanceRepayments(o.id);if(ded>0)applyAdvanceRepayment(emp.id,ded,o.advanceRepaymentDate,o.id);audit(p?"Modification paie":"Création paie","payroll",o.id,`${o.employeeName} — ${money(o.totalPaid)} — remboursement ${money(ded)}`,before,o);saveLocalOnly();cloudWriteGeneric("payroll",o,"Paie");payrollPage()};}
+function payrollPage(){const ctx=currentProjectContext(),rows=payrollRows().filter(p=>!ctx||String(p.project)===String(ctx));$("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>PAIE</h3><div class="panel-body"><button class="btn primary" onclick="payrollForm()">+ Nouvelle période de paie</button><div class="notice">Suivi complet des avances et remboursements partiels. La déduction d’avance réduit la dette mais n’est pas une nouvelle sortie de caisse.</div></div><div class="table-wrap"><table><thead><tr><th>Employé</th><th>Période</th><th>Salaire dû</th><th>Payé</th><th>Déduction avance</th><th>Reste salaire</th><th>Dette avance</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${rows.length?rows.map(p=>{const gross=+p.grossAmount||0,adv=p.advancePaid?+p.advanceAmount||0:0,bal=p.balancePaid?+p.balanceAmount||0:0,ded=+p.advanceDeduction||0,paid=adv+bal,remain=Math.max(0,gross-paid-ded);return`<tr><td><b>${esc(p.employeeName||employeeName(employeeRows().find(e=>e.id===p.employeeId))||"")}</b></td><td>${esc(p.periodLabel||"")}</td><td>${money(gross)}</td><td>${money(paid)}</td><td>${money(ded)}</td><td>${money(remain)}</td><td><b>${money(employeeAdvanceBalance(p.employeeId))}</b></td><td>${workflowBadge(p.workflow||"En attente")}</td><td>${user.role==="ADMIN"||p.owner===user.username?`<button class="btn-xs btn-edit" onclick="payrollForm('${p.id}','${p.employeeId}')">Modifier</button> `:""}<button class="btn-xs" onclick="advanceHistoryPage('${p.employeeId}')">Avances</button>${user.role==="ADMIN"||p.owner===user.username?` <button class="btn-xs btn-delete" onclick="deletePayroll('${p.id}')">Supprimer</button>`:""}</td></tr>`}).join(""):'<tr><td colspan="9">Aucune paie.</td></tr>'}</tbody></table></div></div>`;}
+function payrollForm(id="",employeeId=""){const p=id?payrollRows().find(x=>String(x.id)===String(id)):null;if(id&&!p)return alert("Paie introuvable.");if(p&&user.role!=="ADMIN"&&p.owner!==user.username)return alert("Cette paie ne vous appartient pas.");const eid=p?.employeeId||employeeId||"",e=employeeRows().find(x=>String(x.id)===String(eid)),cycle=p?.payCycle||employeePayCycle(e)||"Hebdomadaire",salary=+p?.grossAmount||employeeBaseSalary(e)||0,project=p?.project||employeeProject(e)||currentProjectContext()||"";$("#content").innerHTML=`<div class="panel"><h3>${p?"MODIFIER":"NOUVELLE"} PAIE</h3><form id="fPayroll" class="form-grid"><label>Employé<select name="employeeId" id="payEmployee" required onchange="payrollEmployeeChanged(this.value)"><option value="">Choisir</option>${employeeRows().filter(x=>x.workflow!=="Inactif").map(x=>`<option value="${esc(x.id)}" ${String(eid)===String(x.id)?"selected":""}>${esc(employeeName(x))} — ${esc(employeeRole(x))}</option>`).join("")}</select></label><label>Chantier<select name="project" required><option value="">Choisir</option>${(db.projects||[]).filter(x=>!x.deleted).map(x=>`<option value="${esc(x.id)}" ${String(project)===String(x.id)?"selected":""}>${esc(projectChantierName(x))} — ${esc(projectWorkName(x))}</option>`).join("")}</select></label><label>Poste<input id="payRole" value="${esc(employeeRole(e)||"")}" readonly></label><label>Mode<input id="payCycle" value="${esc(cycle)}" readonly></label><label>Période<input name="periodLabel" value="${esc(p?.periodLabel||"")}" required></label><label>Salaire dû<input name="grossAmount" id="grossAmount" type="number" min="0" value="${salary||""}" oninput="recalcPayrollV456()" required></label><label class="checkline"><input name="advancePaid" id="advancePaid" type="checkbox" ${p?.advancePaid?"checked":""} onchange="recalcPayrollV456()"> Avance salaire versée</label><label>Date avance<input name="advanceDate" type="date" value="${esc(p?.advanceDate||"")}"></label><label>Montant avance salaire<input name="advanceAmount" id="advanceAmount" type="number" min="0" value="${+p?.advanceAmount||0}" oninput="recalcPayrollV456()"></label><label class="checkline"><input name="balancePaid" id="balancePaid" type="checkbox" ${p?.balancePaid?"checked":""} onchange="recalcPayrollV456()"> Solde payé</label><label>Date solde<input name="balanceDate" type="date" value="${esc(p?.balanceDate||"")}"></label><label>Montant solde<input name="balanceAmount" id="balanceAmount" type="number" min="0" value="${+p?.balanceAmount||0}" oninput="recalcPayrollV456()"></label><label>Dette avance à rembourser<input id="advanceDebtOutstanding" value="${employeeAdvanceBalance(eid)}" readonly></label><label>Déduction avance<input name="advanceDeduction" id="advanceDeduction" type="number" min="0" value="${+p?.advanceDeduction||0}" oninput="recalcPayrollV456()"></label><label>Date remboursement<input name="advanceRepaymentDate" type="date" value="${esc(p?.advanceRepaymentDate||"")}"></label><label>Source des fonds<select name="fundSource"><option ${p?.fundSource==="Caisse Gestionnaire"||(!p&&user.role==="GESTIONNAIRE")?"selected":""}>Caisse Gestionnaire</option><option ${p?.fundSource==="Admin"||(!p&&user.role==="ADMIN")?"selected":""}>Admin</option></select></label><label>Total réellement payé<input id="payrollTotalPaid" readonly></label><label>Reste salaire<input id="payrollRemaining" readonly></label><label>Statut<input id="payrollStatus" readonly></label><label class="full">Observation<textarea name="note">${esc(p?.note||"")}</textarea></label><div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="payrollPage()">Annuler</button></div></form></div>`;recalcPayrollV456();$("#fPayroll").onsubmit=ev=>{ev.preventDefault();const f=new FormData(ev.target),emp=employeeRows().find(x=>String(x.id)===String(f.get("employeeId")));if(!emp)return alert("Choisir un employé.");const gross=+f.get("grossAmount")||0,ap=!!f.get("advancePaid"),bp=!!f.get("balancePaid"),advance=ap?(+f.get("advanceAmount")||0):0,balance=bp?(+f.get("balanceAmount")||0):0,ded=+f.get("advanceDeduction")||0;if(ded>employeeAdvanceBalance(emp.id)+.01)return alert("Déduction supérieure à la dette d’avance.");if(advance+balance+ded>gross+.01)return alert("Paiements + déduction dépassent le salaire dû.");if(ap&&!f.get("advanceDate"))return alert("Date avance requise.");if(bp&&!f.get("balanceDate"))return alert("Date solde requise.");if(ded>0&&!f.get("advanceRepaymentDate"))return alert("Date remboursement requise.");const paid=advance+balance,remain=Math.max(0,gross-paid-ded),workflow=(paid+ded)<=0?"En attente":remain<=.01?"Payé":"Partiel",now=new Date().toISOString(),o={id:p?.id||"PAY-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),employeeId:emp.id,employeeName:employeeName(emp),jobTitle:employeeRole(emp),project:f.get("project"),payCycle:employeePayCycle(emp),periodLabel:f.get("periodLabel"),grossAmount:gross,advancePaid:ap,advanceDate:f.get("advanceDate")||"",advanceAmount:advance,balancePaid:bp,balanceDate:f.get("balanceDate")||"",balanceAmount:balance,advanceDeduction:ded,advanceRepaymentDate:f.get("advanceRepaymentDate")||"",fundSource:user.role==="GESTIONNAIRE"?"Caisse Gestionnaire":f.get("fundSource")||"Caisse Gestionnaire",totalPaid:paid,remainingSalary:remain,workflow,note:f.get("note")||"",owner:p?.owner||user.username,updatedBy:user.username,updatedAt:now};const before=p?cloneRecord(p):null;const previousPaid=p?.fundSource==="Caisse Gestionnaire"?((p.advancePaid?+p.advanceAmount||0:0)+(p.balancePaid?+p.balanceAmount||0:0)):0;if(o.fundSource==="Caisse Gestionnaire"&&!canSpendManagerCash(paid,previousPaid))return alert("Solde caisse insuffisant pour verser cette paie.");if(p)Object.assign(p,o);else{o.createdAt=now;db.modules.payroll.push(o)}removePayrollAdvanceRepayments(o.id);if(ded>0)applyAdvanceRepayment(emp.id,ded,o.advanceRepaymentDate,o.id);audit(p?"Modification paie":"Création paie","payroll",o.id,`${o.employeeName} — ${money(o.totalPaid)} — remboursement ${money(ded)}`,before,o);saveLocalOnly();cloudWriteGeneric("payroll",o,"Paie");payrollPage()};}
 function payrollEmployeeChanged(id){const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return;document.getElementById("payRole").value=employeeRole(e);document.getElementById("payCycle").value=employeePayCycle(e);document.getElementById("grossAmount").value=employeeBaseSalary(e);document.getElementById("advanceDebtOutstanding").value=employeeAdvanceBalance(e.id);recalcPayrollV456();}
 function recalcPayrollV456(){const gross=+document.getElementById("grossAmount")?.value||0,adv=document.getElementById("advancePaid")?.checked?(+document.getElementById("advanceAmount")?.value||0):0,bal=document.getElementById("balancePaid")?.checked?(+document.getElementById("balanceAmount")?.value||0):0,ded=+document.getElementById("advanceDeduction")?.value||0,paid=adv+bal,remain=Math.max(0,gross-paid-ded);if(document.getElementById("payrollTotalPaid"))document.getElementById("payrollTotalPaid").value=paid.toFixed(0);if(document.getElementById("payrollRemaining"))document.getElementById("payrollRemaining").value=remain.toFixed(0);if(document.getElementById("payrollStatus"))document.getElementById("payrollStatus").value=(paid+ded)<=0?"En attente":remain<=.01?"Payé":"Partiel";}
-function deletePayroll(id){const p=payrollRows().find(x=>String(x.id)===String(id));if(!p||!confirm("Supprimer cette paie ?"))return;removePayrollAdvanceRepayments(p.id);const before=cloneRecord(p);p.deleted=true;p.deletedAt=new Date().toISOString();p.updatedAt=p.deletedAt;audit("Suppression paie","payroll",p.id,p.employeeName,before,p);saveLocalOnly();cloudWriteGeneric("payroll",p,"Paie supprimée");payrollPage();}
+function deletePayroll(id){const p=payrollRows().find(x=>String(x.id)===String(id));if(!p||user.role!=="ADMIN"&&p.owner!==user.username||!confirm("Supprimer cette paie ?"))return;removePayrollAdvanceRepayments(p.id);const before=cloneRecord(p);p.deleted=true;p.deletedAt=new Date().toISOString();p.updatedAt=p.deletedAt;audit("Suppression paie","payroll",p.id,p.employeeName,before,p);saveLocalOnly();cloudWriteGeneric("payroll",p,"Paie supprimée");payrollPage();}
 
 
 // ===== ENCAISSEMENTS CLIENTS V4.6.0 =====
@@ -2278,48 +2449,85 @@ function clientReceiptsPage(){
  const rows=receiptRows().filter(r=>!ctx||String(r.project)===String(ctx)).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
  const received=rows.filter(r=>r.status==="Validé").reduce((n,r)=>n+(+r.amount||0),0);
  const pending=rows.filter(r=>r.status==="En attente").reduce((n,r)=>n+(+r.amount||0),0);
+ const clientBalances=clientPaymentRows(ctx);
  $("#content").innerHTML=`${projectContextNotice()}<div class="kpis">
   ${kpi("💳","green","ENCAISSÉ VALIDÉ",money(received))}
+  ${kpi("📊","blue","RESTE À PAYER CONTRATS",money(sum(clientBalances.map(r=>r.remaining))))}
   ${kpi("⏳","orange","EN ATTENTE",money(pending))}
   ${kpi("📄","blue","FACTURÉ",money(totalInvoiced(ctx)))}
-  ${kpi("⚠","purple","CRÉANCE",money(Math.max(0,totalInvoiced(ctx)-received)))}
+  ${kpi("⚠","purple","CRÉANCE FACTURÉE",money(Math.max(0,totalInvoiced(ctx)-received)))}
  </div>
+ <div class="panel"><h3>SUIVI DES PAIEMENTS PAR CLIENT ET CHANTIER</h3><div class="table-wrap"><table><thead><tr><th>Chantier</th><th>Client</th><th>Montant du contrat</th><th>Encaissé validé</th><th>Pourcentage payé</th><th>Reste à payer</th></tr></thead><tbody>
+ ${clientBalances.length?clientBalances.map(r=>`<tr><td>${esc(projectLabel(r.project))}</td><td>${esc(r.client)}</td><td>${r.contract?money(r.contract):"Contrat à renseigner"}</td><td>${money(r.received)}</td><td>${r.percent===null?"—":r.percent.toFixed(2)+" %"}</td><td><b>${r.contract?money(r.remaining):"—"}</b></td></tr>`).join(""):'<tr><td colspan="6">Aucun contrat ni encaissement enregistré.</td></tr>'}
+ </tbody></table></div></div>
  <div class="panel"><h3>ENCAISSEMENTS CLIENTS</h3>
  <div class="panel-body">
   <button class="btn primary" onclick="clientReceiptForm()">+ Nouvel encaissement</button>
-  <div class="notice">Un encaissement = argent réellement reçu du client. Il ne doit pas être confondu avec la facturation.</div>
+  <div class="notice">Pourcentage payé = somme des encaissements validés / montant du contrat client. Le reste à payer contrat est distinct de la créance déjà facturée.</div>
  </div>
- <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Client</th><th>Facture</th><th>Montant reçu</th><th>Mode</th><th>Référence</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
- ${rows.length?rows.map(r=>`<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(r.client||"")}</td><td>${esc(r.invoiceId||"")}</td><td><b>${money(r.amount||0)}</b></td><td>${esc(r.paymentMode||"")}</td><td>${esc(r.reference||"")}</td><td>${workflowBadge(r.status||"En attente")}</td><td><div class="edit-actions">
+ <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Client</th><th>Facture</th><th>Montant reçu</th><th>% du contrat</th><th>Mode</th><th>Référence</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
+ ${rows.length?rows.map(r=>{const base=clientContractAmount(r.project,receiptClientName(r));return `<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(receiptClientName(r))}</td><td>${esc(r.invoiceId||"")}</td><td><b>${money(r.amount||0)}</b></td><td>${base?((+r.amount||0)/base*100).toFixed(2)+" %":"—"}</td><td>${esc(r.paymentMode||"")}</td><td>${esc(r.reference||"")}</td><td>${workflowBadge(r.status||"En attente")}</td><td><div class="edit-actions">
  ${user.role==="ADMIN"&&r.status==="En attente"?`<button class="btn-xs btn-edit" onclick="validateClientReceipt('${r.id}',true)">Valider</button><button class="btn-xs btn-delete" onclick="validateClientReceipt('${r.id}',false)">Rejeter</button>`:""}
- ${r.status==="En attente"&&(user.role==="GESTIONNAIRE"||user.role==="ADMIN")?`<button class="btn-xs" onclick="clientReceiptForm('${r.id}')">Modifier</button>`:""}
- </div></td></tr>`).join(""):`<tr><td colspan="9">Aucun encaissement.</td></tr>`}
+ ${r.status==="En attente"&&(user.role==="ADMIN"||r.owner===user.username)?`<button class="btn-xs" onclick="clientReceiptForm('${r.id}')">Modifier</button>`:""}
+ </div></td></tr>`;}).join(""):`<tr><td colspan="10">Aucun encaissement.</td></tr>`}
  </tbody></table></div></div>`;
 }
 function clientReceiptForm(id="",projectOverride=""){
  const r=id?receiptRows().find(x=>String(x.id)===String(id)):null;
+ if(id&&!r)return alert("Encaissement introuvable.");
+ if(r&&(r.status!=="En attente"||(user.role!=="ADMIN"&&r.owner!==user.username)))return alert("Cet encaissement ne peut pas être modifié.");
  const project=r?.project||projectOverride||sessionStorage.getItem("nysoa_receipt_form_project")||currentProjectContext()||"";
  const inv=invoiceRows().filter(x=>!project||String(x.project)===String(project));
- $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEL"} ENCAISSEMENT CLIENT</h3><form id="fReceipt" class="form-grid">
+ const suggestedClient=r?.client||inv.find(i=>i.id===r?.invoiceId)?.client||(db.projects||[]).find(p=>String(p.id)===String(project))?.client||"";
+ const clientSuggestions=[...new Set([...(db.modules?.clients||[]).filter(c=>!c.deleted).map(clientNameFromRecord),(db.projects||[]).find(p=>String(p.id)===String(project))?.client,...acceptedQuotesForProject(project).filter(q=>!q.deleted).map(q=>q.client),...inv.map(i=>i.client)].filter(Boolean))];
+ $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEL"} ENCAISSEMENT CLIENT</h3><form id="fReceipt" data-receipt-id="${esc(r?.id||"")}" class="form-grid">
  <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
  <label>Chantier<select name="project" required onchange="receiptProjectChanged(this.value)"><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label>
  <label>Facture / tranche<select name="invoiceId" onchange="receiptInvoiceChanged(this.value)"><option value="">Paiement global chantier</option>${inv.map(i=>`<option value="${esc(i.id)}" ${i.id===r?.invoiceId?"selected":""}>${esc(i.id)} — ${money(i.trancheAmount||0)}</option>`).join("")}</select></label>
- <label>Client<input name="client" id="receiptClient" value="${esc(r?.client||inv.find(i=>i.id===r?.invoiceId)?.client||"")}" required></label>
- <label>Montant reçu (Ar)<input name="amount" type="number" min="1" step="1" value="${+r?.amount||""}" required></label>
+ <label>Client<input name="client" id="receiptClient" list="receiptClientList" value="${esc(suggestedClient)}" oninput="recalcReceiptPayment()" required><datalist id="receiptClientList">${clientSuggestions.map(name=>`<option value="${esc(name)}"></option>`).join("")}</datalist></label>
+ <label>Montant reçu (Ar)<input name="amount" id="receiptAmount" type="number" min="1" step="0.01" value="${+r?.amount||""}" oninput="recalcReceiptPayment()" required></label>
+ <label>Pourcentage de ce versement sur le contrat (%)<input name="paymentPercent" id="receiptPercent" type="number" min="0.01" max="100" step="0.01" oninput="receiptPercentChanged()"><small>Vous pouvez saisir le montant ou le pourcentage.</small></label>
+ <label>Montant du contrat client<input id="receiptContract" readonly></label>
+ <label>Déjà encaissé validé<input id="receiptPreviouslyPaid" readonly></label>
+ <label>Reste à payer après ce versement<input id="receiptRemaining" readonly></label>
  <label>Mode<select name="paymentMode">${["Espèces","Virement","Mobile Money","Chèque","Autre"].map(x=>`<option ${r?.paymentMode===x?"selected":""}>${x}</option>`).join("")}</select></label>
  <label>Référence / reçu<input name="reference" value="${esc(r?.reference||"")}" required></label>
  <label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label>
  <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="sessionStorage.removeItem('nysoa_receipt_form_project');clientReceiptsPage()">Annuler</button></div></form></div>`;
+ recalcReceiptPayment();
  $("#fReceipt").onsubmit=e=>{
   e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString();
-  const project=f.get("project"),amount=+f.get("amount")||0;
-  const already=totalClientReceipts(project,true)+(r?.status==="Validé"?-(+r.amount||0):0);
+  const project=f.get("project"),client=String(f.get("client")||"").trim(),amount=+f.get("amount")||0,invoiceId=f.get("invoiceId")||"";
+  const invoice=invoiceId?invoiceRows().find(i=>String(i.id)===String(invoiceId)):null;
+  if(invoiceId&&!invoice)return alert("Facture introuvable ou supprimée.");
+  if(invoice&&(!String(invoice.project||"")||String(invoice.project)!==String(project)||clientPaymentKey(invoice.client)!==clientPaymentKey(client)))return alert("La facture choisie doit appartenir à ce chantier et à ce client.");
+  const base=clientContractAmount(project,client);
+  const already=sum(receiptRows().filter(x=>x.id!==r?.id&&x.status==="Validé"&&String(x.project)===String(project)&&clientPaymentKey(receiptClientName(x))===clientPaymentKey(client)).map(x=>x.amount));
   if(amount<=0)return alert("Montant invalide.");
-  if(already+amount>totalInvoiced(project)+0.01)return alert("L’encaissement dépasse le montant facturé pour ce chantier.");
-  const obj={id:r?.id||"ENC-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project,invoiceId:f.get("invoiceId")||"",client:f.get("client"),amount,paymentMode:f.get("paymentMode"),reference:f.get("reference"),note:f.get("note")||"",status:r?.status|| (user.role==="ADMIN"?"Validé":"En attente"),owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};
+  if(!base)return alert("Ajoutez un devis accepté ou une facture avec montant du contrat pour ce client et ce chantier.");
+  if(already+amount>base+0.01)return alert("L’encaissement de ce client dépasse le montant du contrat sur ce chantier.");
+  if(invoice&&invoiceReceiptPaid(invoice.id,r?.id)+amount>invoiceLegacyAmount(invoice)+0.01)return alert("Le total des paiements attribués à cette facture dépasse son montant. Choisissez « Paiement global chantier » pour une avance non attribuée.");
+  const obj={id:r?.id||"ENC-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project,invoiceId,client,amount,paymentPercent:+(amount/base*100).toFixed(4),paymentMode:f.get("paymentMode"),reference:f.get("reference"),note:f.get("note")||"",status:r?.status|| (user.role==="ADMIN"?"Validé":"En attente"),owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};
   if(r)Object.assign(r,obj);else{obj.createdAt=now;db.clientReceipts.push(obj);}
   save();clientReceiptsPage();
  };
+}
+function recalcReceiptPayment(){
+ const f=document.getElementById("fReceipt");if(!f)return;
+ const project=f.elements.project.value,client=f.elements.client.value,base=clientContractAmount(project,client);
+ const currentId=f.dataset.receiptId||"";
+ const already=sum(receiptRows().filter(r=>r.status==="Validé"&&String(r.id)!==currentId&&String(r.project)===String(project)&&clientPaymentKey(receiptClientName(r))===clientPaymentKey(client)).map(r=>r.amount));
+ document.getElementById("receiptContract").value=base?money(base):"Contrat à renseigner";
+ document.getElementById("receiptPreviouslyPaid").value=money(already);
+ document.getElementById("receiptPercent").value=base&&+f.elements.amount.value?((+f.elements.amount.value)/base*100).toFixed(2):"";
+ document.getElementById("receiptRemaining").value=base?money(Math.max(0,base-already-(+f.elements.amount.value||0))):"—";
+}
+function receiptPercentChanged(){
+ const f=document.getElementById("fReceipt");if(!f)return;
+ const base=clientContractAmount(f.elements.project.value,f.elements.client.value),percent=+document.getElementById("receiptPercent").value||0;
+ if(!base){document.getElementById("receiptPercent").value="";return alert("Choisissez d’abord un client avec un devis accepté ou une facture avec montant du contrat.");}
+ f.elements.amount.value=percent?+(base*percent/100).toFixed(2):"";
+ recalcReceiptPayment();
 }
 function receiptProjectChanged(projectId){
  sessionStorage.setItem("nysoa_receipt_form_project",String(projectId||""));
@@ -2328,13 +2536,16 @@ function receiptProjectChanged(projectId){
 function receiptInvoiceChanged(id){
  const inv=invoiceRows().find(x=>String(x.id)===String(id));
  if(inv){const el=document.getElementById("receiptClient");if(el)el.value=inv.client||"";}
+ recalcReceiptPayment();
 }
 function validateClientReceipt(id,accept){
  if(user.role!=="ADMIN")return;
  const r=receiptRows().find(x=>String(x.id)===String(id));if(!r)return;
  if(accept){
-  const other=totalClientReceipts(r.project,true);
-  if(other+(+r.amount||0)>totalInvoiced(r.project)+0.01)return alert("Validation impossible : le total encaissé dépasserait le montant facturé.");
+  const base=clientContractAmount(r.project,receiptClientName(r));
+  const other=sum(receiptRows().filter(x=>x.id!==r.id&&x.status==="Validé"&&String(x.project)===String(r.project)&&clientPaymentKey(receiptClientName(x))===clientPaymentKey(receiptClientName(r))).map(x=>x.amount));
+  if(!base||other+(+r.amount||0)>base+0.01)return alert("Validation impossible : montant du contrat introuvable ou total encaissé supérieur au contrat de ce client.");
+  if(r.invoiceId){const inv=invoiceRows().find(i=>String(i.id)===String(r.invoiceId));if(!inv||invoiceReceiptPaid(r.invoiceId,r.id)+(+r.amount||0)>invoiceLegacyAmount(inv)+0.01)return alert("Validation impossible : les paiements attribués dépassent le montant de cette facture.");}
   r.status="Validé";r.validatedAt=new Date().toISOString();r.validatedBy=user.username;
  }else{
   r.status="Rejeté";r.rejectedAt=new Date().toISOString();r.rejectedBy=user.username;
@@ -2345,7 +2556,28 @@ function validateClientReceipt(id,accept){
 
 // ===== FACTURATION PAR CHANTIER / DEVIS VALIDÉ =====
 function acceptedQuotesForProject(projectId){
- return (db.quotes||[]).filter(q=>q.status==="Accepté"&&(!projectId||String(q.project)===String(projectId)));
+ return (db.quotes||[]).filter(q=>!q.deleted&&financeProjectIsActive(q.project)&&q.status==="Accepté"&&(!projectId||String(q.project)===String(projectId)));
+}
+function projectBudgetAmount(project){
+ if(!project?.id)return +project?.budget||0;
+ const accepted=acceptedQuotesForProject(project.id);
+ if(accepted.length)return sum(accepted.map(q=>quoteFinancials(q).ttc));
+ return project.budgetSource==="devis"?(+project.budgetBeforeQuote||0):(+project.budget||0);
+}
+function syncProjectQuoteBudget(projectId){
+ const p=(db.projects||[]).find(row=>!row.deleted&&String(row.id)===String(projectId));
+ if(!p)return;
+ const accepted=acceptedQuotesForProject(projectId),previous=+p.budget||0;
+ if(accepted.length){
+  if(p.budgetSource!=="devis")p.budgetBeforeQuote=previous;
+  p.budget=sum(accepted.map(q=>quoteFinancials(q).ttc));p.budgetSource="devis";
+ }else if(p.budgetSource==="devis"){
+  p.budget=+p.budgetBeforeQuote||0;p.budgetSource="manuel";
+ }else return;
+ if(p.budget!==previous||p.budgetSource!=="devis"||!p.budgetQuoteSyncedAt){
+  p.budgetQuoteSyncedAt=new Date().toISOString();p.updatedAt=p.budgetQuoteSyncedAt;
+  saveLocalOnly();cloudSyncRecord("projects",p);
+ }
 }
 function invoiceDisplayNo(r){return String(r?.invoiceNo||r?.id||"");}
 function generateInvoiceInternalId(){
@@ -2445,9 +2677,40 @@ async function restoreInvoiceCandidate(index){
  invoicesPage();
 }
 
-function invoicePaidForProject(projectId,excludeId=""){
- return invoiceRows().filter(r=>String(r.project)===String(projectId)&&String(r.id)!==String(excludeId))
+function invoicePaidForProject(projectId,excludeId="",client="",quoteId=""){
+ return invoiceRows().filter(r=>String(r.project)===String(projectId)&&String(r.id)!==String(excludeId)
+  &&(!client||clientPaymentKey(r.client||r.values?.[1])===clientPaymentKey(client))
+  &&(!quoteId||String(r.quoteId||"")===String(quoteId)))
   .reduce((n,r)=>n+invoiceLegacyAmount(r),0);
+}
+function invoiceReceiptPaid(invoiceId,excludeReceiptId=""){
+ return sum(receiptRows().filter(r=>r.status==="Validé"&&String(r.invoiceId)===String(invoiceId)&&String(r.id)!==String(excludeReceiptId)).map(r=>r.amount||r.receivedAmount));
+}
+function invoiceDesignationText(r){
+ return String(r?.invoiceDesignation||(db.quotes||[]).find(q=>String(q.id)===String(r?.quoteId))?.object||r?.object||"").trim();
+}
+function invoiceQuoteLines(q){
+ return (q?.sections||[]).flatMap(s=>(s.items||[]).map(i=>({section:String(s.title||""),no:String(i.no||""),designation:String(i.designation||""),unit:String(i.unit||""),qty:+i.qty||0,pu:+i.pu||0,amount:(+i.qty||0)*(+i.pu||0)})));
+}
+function invoiceQuoteLinesHtml(q,record){
+ const snapshot=record?.quoteLines?.length&&(!q||String(record.quoteId)===String(q.id));
+ const lines=snapshot?record.quoteLines:q?invoiceQuoteLines(q):[];
+ if(!lines.length)return '<div class="notice">Sélectionnez un devis accepté pour afficher automatiquement les désignations, quantités et prix unitaires.</div>';
+ const f=snapshot?{ht:+record.quotedHt||0,discount:+record.quotedDiscount||0,vat:+record.quotedVat||0,ttc:+record.quoteAmount||0}:q?quoteFinancials(q):{ht:0,discount:0,vat:0,ttc:0};
+ return `<div class="notice">Détail du devis accepté : les quantités ci-dessous sont celles du contrat. Le montant de la facture peut représenter une tranche et ne signifie pas que toutes ces quantités ont été livrées.</div><div class="table-wrap"><table><thead><tr><th>Lot</th><th>N°</th><th>Désignation du devis</th><th>Unité</th><th>Quantité prévue</th><th>PU devis</th><th>Montant prévu</th></tr></thead><tbody>${lines.map(i=>`<tr><td>${esc(i.section)}</td><td>${esc(i.no)}</td><td>${esc(i.designation)}</td><td>${esc(i.unit)}</td><td>${i.qty}</td><td>${money(i.pu)}</td><td>${money(i.amount)}</td></tr>`).join("")}</tbody></table></div><div class="notice">Sous-total : ${money(f.ht)} · Réduction : ${money(f.discount)} · TVA : ${money(f.vat)} · Contrat final : <b>${money(f.ttc)}</b></div>`;
+}
+function invoiceBilledQuantity(quoteId,lineIndex,excludeInvoiceId=""){
+ return invoiceRows().filter(i=>String(i.quoteId)===String(quoteId)&&String(i.id)!==String(excludeInvoiceId)&&i.invoiceType==="Attachement")
+  .reduce((n,i)=>n+(+i.billedLines?.[lineIndex]?.billedQty||0),0);
+}
+function invoiceAttachmentHtml(q,record){
+ if(!q)return '<div class="notice">Un devis accepté est nécessaire pour saisir un attachement.</div>';
+ const f=quoteFinancials(q),ratio=f.ht?f.ttc/f.ht:0;
+ return `<div class="notice">Indiquez les quantités <b>réellement exécutées</b>. Le PU du devis est repris automatiquement ; la réduction et la TVA sont réparties au prorata. Les factures d’attachement précédentes diminuent les quantités encore disponibles.</div><div class="table-wrap"><table><thead><tr><th>N°</th><th>Désignation</th><th>Unité</th><th>Qté prévue</th><th>Déjà facturée</th><th>Qté de cette facture</th><th>PU devis</th><th>PU final / total</th></tr></thead><tbody>${invoiceQuoteLines(q).map((line,index)=>{const billed=invoiceBilledQuantity(q.id,index,record?.id),available=Math.max(0,line.qty-billed),current=+record?.billedLines?.[index]?.billedQty||0;return `<tr><td>${esc(line.no)}</td><td>${esc(line.designation)}</td><td>${esc(line.unit)}</td><td>${line.qty}</td><td>${billed}</td><td><input type="number" name="billedQty_${index}" data-invoice-billed-line="${index}" min="0" max="${available}" step="any" value="${current}" oninput="recalcInvoiceForm('lines')" style="min-width:90px"></td><td>${money(line.pu)}</td><td>${money(line.pu*ratio)} / ${money(current*line.pu*ratio)}</td></tr>`}).join("")}</tbody></table></div>`;
+}
+function invoiceAttachmentValue(quote,billedLines){
+ const f=quoteFinancials(quote),ratio=f.ht?f.ttc/f.ht:0;
+ return Math.round(sum(billedLines.map(line=>(+line.billedQty||0)*(+line.pu||0)))*ratio*100)/100;
 }
 function validatedQuoteAmount(projectId,quoteId=""){
  const q=quoteId?(db.quotes||[]).find(x=>x.id===quoteId):acceptedQuotesForProject(projectId).slice(-1)[0];
@@ -2583,50 +2846,82 @@ async function invoicesPage(){
  ${legacyInvoiceRows().length?`<button class="btn secondary" onclick="legacyInvoiceReviewPage()">⚠ ${legacyInvoiceRows().length} ancienne(s) donnée(s) isolée(s)</button>`:""}
  ${restoredInvoices?`<div class="notice"><b>${restoredInvoices} facture(s) historique(s) récupérée(s) automatiquement.</b></div>`:""}
  <div class="notice"><b>Source actuelle : Cloud Firebase + données locales fusionnées.</b> « Tous les chantiers » affiche toutes les factures actives. Les anciennes versions restent accessibles dans Historique / récupération sans être comptées deux fois.</div></div>
- <div class="table-wrap"><table><thead><tr><th>N° facture</th><th>Date</th><th>Chantier</th><th>Client</th><th>Devis validé</th><th>Montant devis</th><th>Tranche</th><th>Montant tranche</th><th>Total facturé</th><th>Reste à facturer</th><th>Actions</th></tr></thead><tbody>
+ <div class="table-wrap"><table><thead><tr><th>N° facture</th><th>Date</th><th>Chantier</th><th>Client</th><th>Désignation facture</th><th>Devis validé</th><th>Contrat final</th><th>Tranche</th><th>Montant facture</th><th>Attribué à la facture</th><th>Reste facture</th><th>Total facturé</th><th>Reste à facturer</th><th>Reste à payer contrat</th><th>Actions</th></tr></thead><tbody>
  ${rows.length?rows.map(r=>{
   const qa=+r.quoteAmount||validatedQuoteAmount(r.project,r.quoteId);
-  const projectInvoices=invoiceRows().filter(x=>String(x.project)===String(r.project));
+  const projectInvoices=invoiceRows().filter(x=>String(x.project)===String(r.project)&&clientPaymentKey(x.client||x.values?.[1])===clientPaymentKey(r.client||r.values?.[1])&&(!r.quoteId||String(x.quoteId||"")===String(r.quoteId)));
   const paid=projectInvoices.reduce((n,x)=>n+invoiceLegacyAmount(x),0);
   const remain=Math.max(0,qa-paid),pr=(db.projects||[]).find(p=>String(p.id)===String(r.project));
-  return `<tr><td><b>${esc(invoiceDisplayNo(r))}</b></td><td>${esc(r.date||"")}</td><td>${esc(pr?.name||r.project||"")}</td><td>${esc(r.client||r.values?.[1]||"")}</td><td>${esc(r.quoteId||"")}</td><td>${money(qa||(+r.quoteAmount||0))}</td><td><b>${(+r.tranchePercent||0).toFixed(2)}%</b></td><td>${money(invoiceLegacyAmount(r))}</td><td>${money(paid)}</td><td><b>${money(remain)}</b></td><td>${r.__syncConflict?'<span class="badge b-orange">Conflit sync</span> ':""}<div class="edit-actions"><button class="btn-xs btn-edit" onclick="invoiceForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="deleteInvoice('${r.id}')">Supprimer</button></div></td></tr>`;
- }).join(""):`<tr><td colspan="11">Aucune facture active pour ce filtre. Vérifiez « Historique / récupération » si une ancienne facture a été remplacée ou supprimée.</td></tr>`}
+  const balance=clientPaymentRows(r.project).find(x=>clientPaymentKey(x.client)===clientPaymentKey(r.client||r.values?.[1]));
+  const allocated=invoiceReceiptPaid(r.id);
+  return `<tr><td><b>${esc(invoiceDisplayNo(r))}</b></td><td>${esc(r.date||"")}</td><td>${esc(projectChantierName(pr)||r.project||"")}</td><td>${esc(r.billingClientName||r.client||r.values?.[1]||"")}</td><td>${esc(invoiceDesignationText(r))}</td><td>${esc(r.quoteId||"")}</td><td>${money(qa||(+r.quoteAmount||0))}</td><td><b>${(+r.tranchePercent||0).toFixed(2)}%</b></td><td>${money(invoiceLegacyAmount(r))}</td><td>${money(allocated)}</td><td><b>${money(Math.max(0,invoiceLegacyAmount(r)-allocated))}</b></td><td>${money(paid)}</td><td><b>${money(remain)}</b></td><td><b>${balance?.contract?money(balance.remaining):'Contrat à renseigner'}</b></td><td>${r.__syncConflict?'<span class="badge b-orange">Conflit sync</span> ':""}<div class="edit-actions"><button class="btn-xs" onclick="invoiceDetail('${r.id}')">Voir détail</button><button class="btn-xs btn-edit" onclick="invoiceForm('${r.id}')">Modifier</button><button class="btn-xs btn-delete" onclick="deleteInvoice('${r.id}')">Supprimer</button></div></td></tr>`;
+ }).join(""):`<tr><td colspan="15">Aucune facture active pour ce filtre. Vérifiez « Historique / récupération » si une ancienne facture a été remplacée ou supprimée.</td></tr>`}
  </tbody></table></div></div>`;
+}
+function invoiceDetail(id){
+ if(user?.role!=="ADMIN")return;
+ const r=invoiceRows().find(i=>String(i.id)===String(id));if(!r)return alert("Facture introuvable.");
+ const position=clientPaymentRows(r.project).find(x=>clientPaymentKey(x.client)===clientPaymentKey(r.client));
+ const contract=+r.quoteAmount||0,already=invoicePaidForProject(r.project,"",r.client,r.quoteId),amount=invoiceLegacyAmount(r);
+ $("#content").innerHTML=`<div class="panel invoice-detail"><div class="panel-body no-print"><button class="btn secondary" onclick="invoicesPage()">← Facturation</button> <button class="btn primary" onclick="invoiceForm('${esc(r.id)}')">Modifier</button> <button class="btn primary" onclick="window.print()">Imprimer / PDF</button></div><h3>FACTURE ${esc(invoiceDisplayNo(r))} — ${esc(r.date||"")}</h3><div class="panel-body"><p><b>Chantier :</b> ${esc(projectFullLabel(r.project))} · <b>Client :</b> ${esc(r.billingClientName||r.client)} · <b>Devis :</b> ${esc(r.quoteId||"Saisie manuelle")} · <b>Type :</b> ${esc(r.invoiceType||"Tranche / acompte")}</p><div class="invoice-object"><small>DÉSIGNATION DE LA FACTURE</small><strong>${esc(invoiceDesignationText(r)||"Objet à renseigner")}</strong></div>${r.note?`<p><b>Précision :</b> ${esc(r.note)}</p>`:""}<div class="invoice-detail-summary"><div>Montant de cette facture<br><strong>${money(amount)}</strong></div><div>Encaissé et attribué à cette facture<br><strong>${money(invoiceReceiptPaid(r.id))}</strong></div><div>Reste sur cette facture<br><strong>${money(Math.max(0,amount-invoiceReceiptPaid(r.id)))}</strong></div><div>Reste à facturer sur ce devis<br><strong>${money(Math.max(0,contract-already))}</strong></div><div>Déjà payé par ce client sur ce chantier<br><strong>${money(position?.received||0)}</strong></div><div>Reste à payer sur son contrat<br><strong>${position?.contract?money(position.remaining):"Contrat à renseigner"}</strong></div></div><div class="notice no-print">Les lignes techniques du devis restent disponibles pour le calcul d’un attachement, sans être imprimées comme désignation de cette facture. Un paiement global non attribué à cette facture est compté dans le total payé du client.</div></div></div>`;
 }
 function invoiceForm(id="",projectOverride=""){
  if(user.role!=="ADMIN")return;
  db.modules.invoices=Array.isArray(db.modules.invoices)?db.modules.invoices:[];
  const r=id?db.modules.invoices.find(x=>String(x.id)===String(id)):null;
  const projectId=r?.project||projectOverride||sessionStorage.getItem("nysoa_invoice_form_project")||currentProjectContext()||"",quotes=acceptedQuotesForProject(projectId);
- const selectedQuoteId=r?.quoteId||quotes.slice(-1)[0]?.id||"",selectedQuote=(db.quotes||[]).find(q=>q.id===selectedQuoteId);
- const qa=r?.quoteAmount||(selectedQuote?quoteFinancials(selectedQuote).ttc:0),pct=+r?.tranchePercent||0;
- $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} FACTURATION</h3><div class="notice">Vous pouvez sélectionner un devis accepté pour remplir automatiquement les champs, ou saisir manuellement le client et le montant du devis validé.</div><form id="fInvoice" class="form-grid">
+ const selectedQuoteId=r?.quoteId||(quotes.length===1?quotes[0].id:""),selectedQuote=(db.quotes||[]).find(q=>q.id===selectedQuoteId);
+ const qa=selectedQuote?quoteFinancials(selectedQuote).ttc:(+r?.quoteAmount||0),pct=+r?.tranchePercent||0;
+ $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} FACTURATION</h3><div class="notice">Le champ « Désignation de la facture » reprend d’abord l’OBJET du devis. Vous pouvez ensuite réécrire librement ce texte pour chaque facture. Les détails techniques du devis servent seulement au calcul de l’attachement.</div><form id="fInvoice" class="form-grid">
  <input type="hidden" name="recordId" value="${esc(r?.id||generateInvoiceInternalId())}">
- <label>N° facture<input name="invoiceNo" value="${esc(r?.invoiceNo||r?.id?.startsWith("FAC-")?r.id:generateInvoiceNumber())}" required></label>
+ <label>N° facture<input name="invoiceNo" value="${esc(r?.invoiceNo||(r?.id?.startsWith("FAC-")?r.id:generateInvoiceNumber()))}" required></label>
  <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
  <label>Chantier<select name="project" required onchange="invoiceProjectChanged(this.value)"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(projectId)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label>
  <label>Devis validé<select name="quoteId" onchange="invoiceQuoteChanged(this.value)"><option value="">Saisie manuelle / aucun devis lié</option>${quotes.map(q=>`<option value="${esc(q.id)}" ${q.id===selectedQuoteId?"selected":""}>${esc(q.id)} — ${money(quoteFinancials(q).ttc)}</option>`).join("")}</select></label>
- <label>Client<input name="client" id="invoiceClient" value="${esc(r?.client||selectedQuote?.client||"")}" placeholder="Nom du client" required></label>
- <label>Montant du devis validé<input name="quoteAmount" id="invoiceQuoteAmount" type="number" min="0" step="0.01" value="${+qa||0}" oninput="recalcInvoiceForm()" required></label>
- <label>Tranche de paiement (%)<input name="tranchePercent" id="invoiceTranchePercent" type="number" min="0.01" max="100" step="0.01" value="${pct||""}" oninput="recalcInvoiceForm()" required></label>
- <label>Montant de cette tranche<input name="trancheAmount" id="invoiceTrancheAmount" type="number" value="${r?.trancheAmount||((+qa||0)*pct/100)||0}" readonly></label>
- <label>Total déjà facturé avant cette tranche<input id="invoiceAlreadyPaid" value="${invoicePaidForProject(projectId,r?.id||"")}" readonly></label>
- <label>Reste à facturer après cette tranche<input id="invoiceRemaining" value="0" readonly></label>
+ <label>Client du devis (suivi comptable)<input name="client" id="invoiceClient" value="${esc(r?.client||selectedQuote?.client||"")}" placeholder="Nom du client" ${selectedQuote?'readonly':''} oninput="recalcInvoiceForm()" required></label>
+ <label>Client affiché sur la facture<input name="billingClientName" id="invoiceBillingClient" value="${esc(r?.billingClientName||r?.client||selectedQuote?.client||"")}" required></label>
+ <label class="full">Désignation de la facture<textarea name="invoiceDesignation" id="invoiceDesignation" required placeholder="Ex. Première tranche sur paiement des travaux de finition d’un bâtiment">${esc(r?.invoiceDesignation||selectedQuote?.object||invoiceDesignationText(r))}</textarea></label>
+ <label>Budget du chantier (devis acceptés)<input id="invoiceProjectBudget" value="${projectId?projectBudgetAmount((db.projects||[]).find(p=>p.id===projectId)):0}" readonly></label>
+ <label>Contrat du devis accepté<input name="quoteAmount" id="invoiceQuoteAmount" type="number" min="0" step="0.01" value="${+qa||0}" ${selectedQuote?'readonly':''} oninput="recalcInvoiceForm()" required></label>
+ <details class="full invoice-quote-reference"><summary>Voir les lignes du devis (référence interne pour le calcul)</summary><div id="invoiceQuoteLines">${invoiceQuoteLinesHtml(selectedQuote,r)}</div></details>
+ <label>Nature de la facture<select name="invoiceType" id="invoiceType" onchange="invoiceModeChanged(this.value)"><option value="Tranche" ${r?.invoiceType!=="Attachement"?"selected":""}>Tranche / acompte (montant direct)</option><option value="Attachement" ${r?.invoiceType==="Attachement"?"selected":""}>Attachement (quantités exécutées)</option></select></label>
+ <div id="invoiceAttachmentLines" class="full" style="display:${r?.invoiceType==="Attachement"?'block':'none'}">${invoiceAttachmentHtml(selectedQuote,r)}</div>
+ <label>Montant exact de cette facture (Ar)<input name="trancheAmount" id="invoiceTrancheAmount" type="number" min="0.01" step="0.01" value="${+r?.trancheAmount||""}" oninput="recalcInvoiceForm('amount')" required></label>
+ <label>Part du devis facturée (%)<input name="tranchePercent" id="invoiceTranchePercent" type="number" min="0" max="100" step="0.000001" value="${pct||""}" oninput="recalcInvoiceForm('percent')"></label>
+ <label>Total déjà facturé avant cette facture<input id="invoiceAlreadyPaid" value="${invoicePaidForProject(projectId,r?.id||"",r?.client||selectedQuote?.client||"",selectedQuoteId)}" readonly></label>
+ <label>Reste à facturer après cette facture<input id="invoiceRemaining" value="0" readonly></label>
+ <label>Déjà encaissé du client (validé)<input id="invoiceClientReceived" value="0" readonly></label>
+ <label>Reste à payer du client sur son contrat<input id="invoiceClientDue" value="0" readonly></label>
+ <div class="notice full">« Reste à facturer » = contrat − factures. « Reste à payer du client » = contrat − encaissements validés. Émettre une facture ne signifie pas que le client a payé.</div>
  <label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label>
  <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="sessionStorage.removeItem('nysoa_invoice_form_project');invoicesPage()">Annuler</button></div></form></div>`;
  recalcInvoiceForm();
  $("#fInvoice").onsubmit=e=>{
   e.preventDefault();const f=new FormData(e.target),project=f.get("project"),quoteId=f.get("quoteId"),q=(db.quotes||[]).find(x=>x.id===quoteId);
-  if(q&&q.status!=="Accepté")return alert("Le devis sélectionné doit être accepté.");
-  const client=(f.get("client")||q?.client||"").trim(),amount=+f.get("quoteAmount")||0,pct=+f.get("tranchePercent")||0,tranche=amount*pct/100,already=invoicePaidForProject(project,r?.id||"");
+  if(q&&(q.deleted||q.status!=="Accepté"))return alert("Le devis sélectionné doit être actif et accepté.");
+  const client=(f.get("client")||q?.client||"").trim(),billingClientName=String(f.get("billingClientName")||client).trim(),invoiceDesignation=String(f.get("invoiceDesignation")||q?.object||"").trim(),amount=+f.get("quoteAmount")||0,invoiceType=f.get("invoiceType")==="Attachement"?"Attachement":"Tranche";
+  if(invoiceType==="Attachement"&&!q)return alert("Choisissez un devis accepté pour saisir un attachement.");
+  const billedLines=invoiceType==="Attachement"?invoiceQuoteLines(q).map((line,index)=>({...line,billedQty:+f.get(`billedQty_${index}`)||0})):[];
+  if(billedLines.some((line,index)=>line.billedQty<0||line.billedQty+invoiceBilledQuantity(quoteId,index,r?.id)>line.qty+0.000001))return alert("Une quantité facturée dépasse la quantité restante du devis.");
+  const tranche=invoiceType==="Attachement"?invoiceAttachmentValue(q,billedLines):+f.get("trancheAmount")||0,pct=amount?tranche/amount*100:0,already=invoicePaidForProject(project,r?.id||"",client,quoteId);
+  if(q&&(String(q.project)!==String(project)||clientPaymentKey(q.client)!==clientPaymentKey(client)))return alert("Le devis choisi doit appartenir à ce chantier et à ce client.");
+  if(q&&Math.abs(amount-quoteFinancials(q).ttc)>0.01)return alert("Le montant du contrat doit correspondre au devis accepté sélectionné.");
+  if(!q&&acceptedQuotesForProject(project).length)return alert("Choisissez le devis accepté correspondant à ce client pour lier correctement la facture au budget du chantier.");
   if(!client)return alert("Veuillez renseigner le client.");
+  if(!billingClientName||!invoiceDesignation)return alert("Renseignez le client à afficher et la désignation de cette facture.");
   if(amount<=0)return alert("Veuillez renseigner le montant du devis validé.");
-  if(already+tranche>amount+0.01)return alert("Cette tranche dépasse le reste à payer.");
+  if(tranche<=0||!Number.isFinite(tranche))return alert("Saisissez un montant positif pour cette facture.");
+  const alreadyReceivedForInvoice=receiptRows().filter(rec=>rec.status==="Validé"&&String(rec.invoiceId)===String(r?.id||"")&&r?.id).reduce((n,rec)=>n+(+rec.amount||0),0);
+  if(r&&alreadyReceivedForInvoice>0&&(String(r.project)!==String(project)||clientPaymentKey(r.client)!==clientPaymentKey(client)||String(r.quoteId||"")!==String(quoteId||"")))return alert("Facture liée à des paiements : chantier, client et devis ne peuvent plus être modifiés.");
+  if(r&&alreadyReceivedForInvoice>tranche+0.01)return alert("Des encaissements validés sont déjà liés à cette facture et dépassent son nouveau montant.");
+  if(q&&Math.abs(projectBudgetAmount((db.projects||[]).find(p=>p.id===project))-sum(acceptedQuotesForProject(project).map(x=>quoteFinancials(x).ttc)))>0.01)return alert("Budget chantier et devis acceptés ne correspondent pas.");
+  if(already+tranche>amount+0.01)return alert("Cette tranche dépasse le reste à facturer pour ce client et ce devis.");
   const before=r?cloneRecord(r):null,actor=effectiveUserIdentity();
   const obj={
    id:r?.id||f.get("recordId")||generateInvoiceInternalId(),
    invoiceNo:String(f.get("invoiceNo")||r?.invoiceNo||r?.id||generateInvoiceNumber()).trim(),
-   date:f.get("date"),project,quoteId:quoteId||"",client,quoteAmount:amount,tranchePercent:pct,trancheAmount:tranche,
+   date:f.get("date"),project,quoteId:quoteId||"",client,billingClientName,invoiceDesignation,quoteAmount:amount,tranchePercent:pct,trancheAmount:tranche,invoiceType,billedLines,
+   quoteLines:r?.quoteLines?.length&&r.quoteId===quoteId?r.quoteLines:q?invoiceQuoteLines(q):[],quotedHt:r?.quoteLines?.length&&r.quoteId===quoteId?r.quotedHt:q?quoteFinancials(q).ht:0,quotedDiscount:r?.quoteLines?.length&&r.quoteId===quoteId?r.quotedDiscount:q?quoteFinancials(q).discount:0,quotedVat:r?.quoteLines?.length&&r.quoteId===quoteId?r.quotedVat:q?quoteFinancials(q).vat:0,
    note:f.get("note")||"",workflow:r?.workflow||"Validé",owner:r?.owner||actor.username||user.username,
    updatedBy:actor.label||actor.username||user.username,updatedAt:new Date().toISOString()
   };
@@ -2645,22 +2940,55 @@ function invoiceProjectChanged(projectId){
  const quotes=acceptedQuotesForProject(projectId);
  qsel.innerHTML='<option value="">Saisie manuelle / aucun devis lié</option>'+
   quotes.map(q=>`<option value="${esc(q.id)}">${esc(q.id)} — ${money(quoteFinancials(q).ttc)}</option>`).join("");
- const already=document.getElementById("invoiceAlreadyPaid");
- if(already)already.value=invoicePaidForProject(projectId,"");
+ qsel.value=quotes.length===1?quotes[0].id:"";
+ const budget=document.getElementById("invoiceProjectBudget");
+ if(budget)budget.value=projectBudgetAmount((db.projects||[]).find(p=>String(p.id)===String(projectId)));
+ const invoiceAmount=document.getElementById("invoiceTrancheAmount");if(invoiceAmount)invoiceAmount.value="";
+ const invoicePercent=document.getElementById("invoiceTranchePercent");if(invoicePercent)invoicePercent.value="";
+ invoiceQuoteChanged(qsel.value);
  recalcInvoiceForm();
 }
 function invoiceQuoteChanged(quoteId){
- const q=(db.quotes||[]).find(x=>x.id===quoteId);
+ const q=acceptedQuotesForProject().find(x=>x.id===quoteId);
+ const client=document.getElementById("invoiceClient"),base=document.getElementById("invoiceQuoteAmount"),lines=document.getElementById("invoiceQuoteLines");
  if(q){
-  document.getElementById("invoiceClient").value=q.client||"";
-  document.getElementById("invoiceQuoteAmount").value=quoteFinancials(q).ttc;
- }
+  client.value=q.client||"";base.value=quoteFinancials(q).ttc;
+ }else{client.value="";base.value="";}
+ const displayedClient=document.getElementById("invoiceBillingClient"),designation=document.getElementById("invoiceDesignation");
+ if(displayedClient)displayedClient.value=q?.client||"";
+ if(designation)designation.value=q?.object||"";
+ client.readOnly=!!q;base.readOnly=!!q;
+ if(lines)lines.innerHTML=invoiceQuoteLinesHtml(q,null);
+ const attachment=document.getElementById("invoiceAttachmentLines");if(attachment)attachment.innerHTML=invoiceAttachmentHtml(q,null);
+ const amount=document.getElementById("invoiceTrancheAmount");if(amount)amount.value="";
+ const percent=document.getElementById("invoiceTranchePercent");if(percent)percent.value="";
  recalcInvoiceForm();
 }
-function recalcInvoiceForm(){
- const amount=+document.getElementById("invoiceQuoteAmount")?.value||0,pct=+document.getElementById("invoiceTranchePercent")?.value||0,already=+document.getElementById("invoiceAlreadyPaid")?.value||0,tranche=amount*pct/100;
- const ta=document.getElementById("invoiceTrancheAmount");if(ta)ta.value=tranche.toFixed(2);
+function invoiceModeChanged(mode){
+ const f=document.getElementById("fInvoice"),quoteId=f?.elements?.quoteId?.value||"",q=acceptedQuotesForProject().find(x=>x.id===quoteId),attachment=document.getElementById("invoiceAttachmentLines");
+ if(attachment){attachment.style.display=mode==="Attachement"?"block":"none";if(mode==="Attachement")attachment.innerHTML=invoiceAttachmentHtml(q,(db.modules?.invoices||[]).find(i=>String(i.id)===String(f?.elements?.recordId?.value||"")));}
+ const amount=document.getElementById("invoiceTrancheAmount");if(amount){amount.readOnly=mode==="Attachement";if(mode==="Attachement")amount.value="";}
+ const pct=document.getElementById("invoiceTranchePercent");if(pct)pct.readOnly=mode==="Attachement";
+ recalcInvoiceForm(mode==="Attachement"?"lines":"");
+}
+function recalcInvoiceForm(changed=""){
+ const f=document.getElementById("fInvoice"),project=f?.elements?.project?.value||"",client=document.getElementById("invoiceClient")?.value||"",quoteId=f?.elements?.quoteId?.value||"";
+ const existing=(db.modules?.invoices||[]).find(i=>String(i.id)===String(f?.elements?.recordId?.value||""));
+ const already=invoicePaidForProject(project,existing?.id||"",client,quoteId);
+ const alreadyEl=document.getElementById("invoiceAlreadyPaid");if(alreadyEl)alreadyEl.value=already;
+ const amount=+document.getElementById("invoiceQuoteAmount")?.value||0,ta=document.getElementById("invoiceTrancheAmount"),pctEl=document.getElementById("invoiceTranchePercent"),mode=f?.elements?.invoiceType?.value||"Tranche";
+ if(mode==="Attachement"&&ta){
+  const q=acceptedQuotesForProject(project).find(x=>x.id===quoteId);
+  const inputs=[...document.querySelectorAll("[data-invoice-billed-line]")];
+  const lines=q?invoiceQuoteLines(q).map((line,index)=>({...line,billedQty:+inputs.find(el=>+el.dataset.invoiceBilledLine===index)?.value||0})):[];
+  ta.value=lines.length?invoiceAttachmentValue(q,lines).toFixed(2):"";
+ }else if(changed==="percent"&&ta)ta.value=amount>0&&+pctEl?.value>0?(Math.round(amount*(+pctEl.value)/100*100)/100).toFixed(2):"";
+ const tranche=+ta?.value||0;
+ if(changed!=="percent"&&pctEl)pctEl.value=amount>0&&tranche>0?String(+(tranche/amount*100).toFixed(6)):"";
  const rem=document.getElementById("invoiceRemaining");if(rem)rem.value=Math.max(0,amount-already-tranche).toFixed(2);
+ const position=clientPaymentRows(project).find(x=>clientPaymentKey(x.client)===clientPaymentKey(client));
+ const received=document.getElementById("invoiceClientReceived");if(received)received.value=(position?.received||0).toFixed(2);
+ const due=document.getElementById("invoiceClientDue");if(due)due.value=position?.contract?position.remaining.toFixed(2):"Contrat à renseigner";
 }
 function deleteInvoice(id){
  if(user.role!=="ADMIN")return;
@@ -2772,6 +3100,40 @@ function genericForm(page,index=-1){
 }
 function genericDelete(page,index){if(user.role!=="ADMIN")return;if(confirm("Supprimer cette entrée ?")){db.modules[page].splice(index,1);save();generic(page)}}
 function exportBackup(){let blob=new Blob([JSON.stringify(db,null,2)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="NYSOA_CONSTRUCT_SAUVEGARDE_"+new Date().toISOString().slice(0,10)+".json";a.click();URL.revokeObjectURL(a.href)}
+async function resetTestTransactions(){
+ if(user?.role!=="ADMIN"||!cloudReady||!fbStore||!navigator.onLine){alert("Connectez-vous en tant qu’Admin au Cloud avant de réinitialiser les données d’essai.");return;}
+ const button=document.getElementById("resetTestDataBtn"),keep=new Set(["projects","suppliers","employees"]);
+ const collections=CLOUD_BUSINESS_COLLECTIONS.filter(name=>!keep.has(name));
+ if(button)button.disabled=true;
+ try{
+  const snapshots=[];
+  for(const name of CLOUD_BUSINESS_COLLECTIONS){
+   const snap=await fbStore.collection(name).get();
+   snapshots.push({name,rows:snap.docs.map(doc=>({id:doc.id,...doc.data()}))});
+  }
+  const backup={createdAt:new Date().toISOString(),purpose:"Sauvegarde avant effacement des données d’essai",cloud:snapshots,local:db};
+  const blob=new Blob([JSON.stringify(backup,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob),link=document.createElement("a");
+  link.href=url;link.download=`NYSOA_AVANT_REINITIALISATION_${erpToday()}.json`;document.body.appendChild(link);link.click();link.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+  if(prompt("Vérifiez que la sauvegarde JSON est bien téléchargée. Cette action masquera les données d’essai sur tous les appareils. Les chantiers, fournisseurs, employés et comptes restent conservés. Tapez REINITIALISER pour continuer :")!=="REINITIALISER")return;
+  const now=new Date().toISOString(),tasks=[];
+  snapshots.filter(s=>!keep.has(s.name)).forEach(s=>s.rows.filter(r=>!r.deleted).forEach(r=>tasks.push({name:s.name,id:r.id})));
+  for(let i=0;i<tasks.length;i+=400){
+   const batch=fbStore.batch();
+   tasks.slice(i,i+400).forEach(({name,id})=>batch.set(fbStore.collection(name).doc(String(id)),{deleted:true,deletedAt:now,updatedAt:now},{merge:true}));
+   await batch.commit();
+  }
+  collections.forEach(name=>{
+   const rows=cloudCollectionLocalRows(name);
+   rows.forEach(row=>{row.deleted=true;row.deletedAt=now;row.updatedAt=now;});
+  });
+  saveLocalOnly();
+  cloudMarkSynced();go("dashboard");
+  alert("Données d’essai effacées. Chantiers, fournisseurs, employés et comptes conservés. Gardez la sauvegarde JSON en lieu sûr.");
+ }catch(error){console.error("Réinitialisation",error);alert("Opération interrompue : "+(error?.message||error)+". Gardez la sauvegarde JSON et vérifiez les données synchronisées avant de recommencer.");}
+ finally{if(button)button.disabled=false;}
+}
 $("#showLoginPass").onchange=e=>{
   $("#loginPass").type=e.target.checked?"text":"password";
 };
@@ -2790,28 +3152,223 @@ initFirebaseCloud();
 if(!Array.isArray(db.quotes)){db.quotes=[];save();}
 function quoteTotal(q){return q.sections.reduce((t,s)=>t+s.items.reduce((a,i)=>a+(+i.qty||0)*(+i.pu||0),0),0)}
 function quoteFinancials(q){let ht=quoteTotal(q),discount=+q.discount||0,net=Math.max(0,ht-discount),vat=q.vatEnabled?net*(+q.vatRate||0)/100:0;return{ht,discount,net,vat,ttc:net+vat}}
+// Une prévision est attachée au devis, mais elle reste un document interne distinct.
+// Les coefficients sont des hypothèses modifiables : jamais des métrés contractuels.
+// Nomenclature indicative pour la construction générale. Aucune consommation
+// n'est inventée lorsque l'unité, les plans ou les spécifications manquent.
+const MATERIAL_WORK_PRESETS=[
+ {key:'installation',match:/installation (?:de |du )?chantier|base vie|implantation|repli (?:de |du )?chantier/,materials:['Clôture et signalisation provisoires','Base vie et protections provisoires','Raccordement provisoire eau / électricité'],tools:['Barrières de chantier','Coffret électrique provisoire','Mètre et niveau','EPI']},
+ {key:'terrassement',match:/terrassement|decapage|fouille|deblai|remblai|nivellement/,materials:['Matériaux de remblai','Géotextile selon étude','Évacuation des déblais'],tools:['Pelle ou excavatrice','Compacteur','Niveau et matériel de topographie','EPI']},
+ {key:'fondation',match:/fondation|semelle|longrine|radier/,materials:['Béton selon étude de structure','Armatures acier selon plans','Coffrage et accessoires'],tools:['Bétonnière ou pompe selon ouvrage','Matériel de coffrage','Vibrateur à béton','EPI']},
+ {key:'structure',match:/beton|poteau|poutre|dalle|plancher|coffrage|ferraillage/,materials:['Béton selon étude de structure','Armatures acier selon plans','Coffrage et accessoires'],tools:['Bétonnière ou pompe selon ouvrage','Vibrateur à béton','Matériel de coffrage','EPI']},
+ {key:'maconnerie',match:/maconnerie|mur|cloison|parpaing|brique/,materials:['Blocs, briques ou parpaings selon plans','Ciment pour mortier','Sable pour mortier','Armatures de liaison selon plans'],tools:['Truelles','Fil à plomb et niveau','Échafaudage selon hauteur','EPI']},
+ {key:'enduit',match:/enduit|crepi|ragr[eé]age/,materials:['Ciment ou enduit prémélangé','Sable fin','Primaire ou adjuvant selon support'],tools:['Taloche','Règle de maçon','Malaxeur','Échafaudage','EPI']},
+ {key:'carrelage',match:/carrelage|carreau|fa[iï]ence/,materials:['Carreaux selon format à confirmer','Ciment colle selon support','Mortier de joint','Croisillons'],tools:['Coupe-carreaux','Peigne à colle','Système de nivellement','Malaxeur','Niveau','EPI']},
+ {key:'peinture',match:/peinture|peindre/,materials:['Peinture selon système et nombre de couches','Sous-couche ou primaire','Enduit de rebouchage','Bâches et ruban de protection'],tools:['Rouleaux et recharges','Pinceaux','Bac à peinture','Échelle ou échafaudage','Masque et gants']},
+ {key:'electricite',match:/[eé]lectricit[eé]|[eé]lectrique|[eé]clairage|prise|tableau [eé]lectrique/,materials:['Câbles selon schéma électrique','Gaines et conduits','Tableau et protections électriques','Prises, interrupteurs ou luminaires'],tools:['Multimètre','Tire-fil','Pince à sertir','Outillage isolé','EPI']},
+ {key:'plomberie',match:/plomberie|sanitaire|alimentation eau|evacuation eau/,materials:['Tubes selon plans','Raccords et vannes','Appareils sanitaires selon choix','Étanchéité des raccords'],tools:['Coupe-tube','Pince à sertir ou souder selon réseau','Clés de plomberie','EPI']},
+ {key:'toiture',match:/toiture|couverture|charpente|zinguerie/,materials:['Couverture selon plans','Charpente ou liteaux','Fixations et accessoires','Gouttières selon plans'],tools:['Échafaudage','Harnais de sécurité','Outillage de couverture','EPI']},
+ {key:'menuiserie',match:/menuiserie|porte|fen[eê]tre|alu|minium|vitrage/,materials:['Menuiserie selon dimensions','Quincaillerie et fixations','Vitrage selon plans','Joints et mastic'],tools:['Perceuse et visseuse','Niveau','Outils de pose','EPI']},
+ {key:'etancheite',match:/[eé]tanch[eé]it[eé]|imperm[eé]abilisation/,materials:['Membrane ou produit d’étanchéité selon système','Primaire selon support','Bande et accessoires de relevé'],tools:['Outils de préparation du support','Rouleaux et applicateurs','EPI']},
+ {key:'voirie',match:/voirie|pavage|drainage|assainissement|vrd/,materials:['Granulats selon étude','Éléments de revêtement ou pavés','Canalisations et accessoires selon plans'],tools:['Compacteur','Matériel de nivellement','EPI']}
+];
+function forecastSource(q){return JSON.stringify((q.sections||[]).flatMap((s,si)=>(s.items||[]).map((i,ii)=>[si,ii,String(i.designation||''),String(i.unit||''),Number(i.qty)||0])))}
+function forecastLines(q){return (q.sections||[]).flatMap((s,si)=>(s.items||[]).map((i,ii)=>({key:`${si}:${ii}`,name:String(i.designation||'').trim(),unit:String(i.unit||'').trim(),qty:Number(i.qty)||0}))).filter(x=>x.name)}
+function forecastKind(line){const d=line.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');return MATERIAL_WORK_PRESETS.find(p=>p.key==='carrelage'&&p.match.test(d))?.key||MATERIAL_WORK_PRESETS.find(p=>p.key==='peinture'&&p.match.test(d))?.key||MATERIAL_WORK_PRESETS.find(p=>p.match.test(d))?.key||'autres'}
+function forecastPreset(kind){return MATERIAL_WORK_PRESETS.find(p=>p.key===kind)}
+function forecastMaterial(id,line,name,unit,coefficient,loss,packSize,roundStep,notes=''){
+ return {id,lineKey:line.key,name,unit,coefficient,loss,packSize,roundStep,notes,manualQuantity:''};
+}
+function ganttQuoteTasks(q){return (q.sections||[]).flatMap((section,si)=>(section.items||[]).map((item,ii)=>({key:`${si}:${ii}`,name:String(item.designation||'').trim(),lot:String(section.title||'Lot '+(si+1)).trim()}))).filter(item=>item.name);}
+function ganttDate(value){
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(String(value||'')))return null;
+ const date=new Date(`${value}T00:00:00Z`);
+ return Number.isFinite(date.getTime())&&date.toISOString().slice(0,10)===value?date:null;
+}
+function ganttIso(date){return date.toISOString().slice(0,10)}
+function ganttAddDays(date,n){return new Date(date.getTime()+n*86400000)}
+function ganttDayNumber(value){const date=ganttDate(value);return date?Math.round(date.getTime()/86400000):NaN}
+function generateForecastGantt(q){
+ const project=(db.projects||[]).find(p=>String(p.id)===String(q.project)&&!p.deleted),lines=ganttQuoteTasks(q);
+ const start=ganttDate(project?.start)||ganttDate(q.date)||ganttDate(erpToday());
+ const projectEnd=ganttDate(project?.end),dated=!!ganttDate(project?.start)&&!!projectEnd&&projectEnd>=start;
+ const days=dated?Math.round((projectEnd-start)/86400000)+1:Math.max(1,lines.length)*7;
+ return {dateBasis:dated?'chantier':'indicatif',tasks:lines.map((line,index)=>{
+  const first=Math.floor(index*days/lines.length),last=Math.max(first,Math.floor((index+1)*days/lines.length)-1);
+  return {...line,start:ganttIso(ganttAddDays(start,first)),end:ganttIso(ganttAddDays(start,last)),progress:0};
+ })};
+}
+function validForecastGantt(q,gantt){
+ const keys=new Set(ganttQuoteTasks(q).map(item=>item.key)),tasks=gantt?.tasks;
+ return Array.isArray(tasks)&&tasks.length===keys.size&&tasks.every(t=>keys.delete(t.key)&&String(t.name||'').trim()&&String(t.lot||'').trim()&&ganttDate(t.start)&&ganttDate(t.end)&&t.start<=t.end&&Number.isFinite(Number(t.progress))&&Number(t.progress)>=0&&Number(t.progress)<=100);
+}
+function ganttTickDates(min,max){
+ const span=max-min+1,step=span<=35?1:span<=140?7:span<=760?30:90,ticks=[];
+ for(let day=0;day<span;day+=step)ticks.push({offset:day,label:ganttIso(ganttAddDays(new Date(min*86400000),day)).slice(5)});
+ return ticks;
+}
+function renderForecastGantt(q,plan,canEdit){
+ const gantt=plan.gantt||generateForecastGantt(q),tasks=gantt.tasks||[];
+ if(!tasks.length)return '<p>Aucune désignation dans le devis : renseignez les travaux pour générer le planning.</p>';
+ const min=Math.min(...tasks.map(t=>ganttDayNumber(t.start))),max=Math.max(...tasks.map(t=>ganttDayNumber(t.end)));
+ if(!Number.isFinite(min)||!Number.isFinite(max)||max<min)return '<p class="material-warning">Dates du planning invalides : corrigez les tâches avant impression.</p>';
+ const days=max-min+1,ticks=ganttTickDates(min,max),markers=ticks.map(t=>`<span class="gantt-grid-line" style="left:${(t.offset/days)*100}%"></span>`).join('');
+ return `<p>Durées réparties provisoirement entre les dates du chantier${gantt.dateBasis==='indicatif'?' (dates du chantier absentes ou invalides : période indicative de 7 jours par tâche)':''}. Vérifier l’ordre, les dépendances, les équipes et les durées sur le terrain.</p>
+ <div class="gantt-overflow"><div class="gantt-board"><div class="gantt-label gantt-head">Travaux / dates</div><div class="gantt-track gantt-head">${ticks.map(t=>`<span class="gantt-tick" style="left:${(t.offset/days)*100}%">${esc(t.label)}</span>`).join('')}</div>
+ ${tasks.map((task,index)=>{
+  const left=((ganttDayNumber(task.start)-min)/days)*100,width=((ganttDayNumber(task.end)-ganttDayNumber(task.start)+1)/days)*100;
+  return `<div class="gantt-label"><b>${esc(task.name)}</b><small>${esc(task.lot)} · ${esc(task.start)} → ${esc(task.end)}</small>${canEdit?`<div class="gantt-edit no-print"><label>Travaux<input value="${esc(task.name)}" onchange="editForecastGantt(${index},'name',this.value)"></label><label>Lot<input value="${esc(task.lot)}" onchange="editForecastGantt(${index},'lot',this.value)"></label><label>Début<input type="date" value="${esc(task.start)}" onchange="editForecastGantt(${index},'start',this.value)"></label><label>Fin<input type="date" value="${esc(task.end)}" onchange="editForecastGantt(${index},'end',this.value)"></label><label>Réalisé %<input type="number" min="0" max="100" value="${esc(task.progress)}" onchange="editForecastGantt(${index},'progress',this.value)"></label></div>`:''}</div><div class="gantt-track">${markers}<div class="gantt-bar" style="left:${left}%;width:${width}%" title="${esc(task.name)} : ${esc(task.start)} → ${esc(task.end)}"><span style="width:${Number(task.progress)||0}%"></span></div><small class="gantt-progress">${Number(task.progress)||0}%</small></div>`;
+ }).join('')}</div></div>`;
+}
+function editForecastGantt(index,key,value){
+ if(user?.role!=='ADMIN'||!activeMaterialForecast?.gantt?.tasks?.[index])return;
+ const task=activeMaterialForecast.gantt.tasks[index];
+ if(key==='name'||key==='lot'){if(!String(value).trim())return alert('Le libellé ne peut pas être vide.');task[key]=String(value).trim();}
+ else if(key==='progress'){const n=Number(value);if(!Number.isFinite(n)||n<0||n>100)return alert('Avancement compris entre 0 et 100 %.');task.progress=n;}
+ else if(key==='start'||key==='end'){
+  if(!ganttDate(value)||key==='start'&&value>task.end||key==='end'&&value<task.start)return alert('Dates invalides : le début doit précéder la fin.');
+  task[key]=value;
+ }else return;
+ renderMaterialPlan();
+}
+function regenerateForecastGantt(){
+ if(user?.role!=='ADMIN'||!activeMaterialForecast)return;
+ const q=db.quotes.find(item=>item.id===selectedMaterialQuoteId&&!item.deleted);
+ if(!q||activeMaterialForecast.source!==forecastSource(q))return alert('Actualisez d’abord le plan depuis le devis modifié.');
+ if(activeMaterialForecast.gantt?.tasks?.length&&!confirm('Remplacer les dates et avancements modifiés par la répartition automatique ?'))return;
+ activeMaterialForecast.gantt=generateForecastGantt(q);renderMaterialPlan();
+}
+function generateMaterialForecast(q){
+ const materials=[],tools=[];
+ for(const line of forecastLines(q)){
+  const kind=forecastKind(line),preset=forecastPreset(kind),unit=line.unit.toLowerCase().replace(/²/g,'2'),area=/m2|metre carre/.test(unit);
+  if(kind==='carrelage'&&area){
+   // 60 × 60 cm = 0,36 m²/carrelage ; achat par lots de 10 pièces.
+   materials.push(forecastMaterial(`${line.key}:tiles`,line,'Carreaux 60 × 60 cm','pièces',1/0.36,10,1,10,'Format et découpes à confirmer sur plans.'));
+   // Dosage indicatif 5 kg/m² ; le fabricant donne une plage suivant support et pose.
+   materials.push(forecastMaterial(`${line.key}:glue`,line,'Ciment colle (sac 25 kg)','sacs',5,10,25,1,'Dosage de base 5 kg/m² à confirmer selon support, peigne et produit.'));
+  }else if(kind==='peinture'&&area){
+   materials.push(forecastMaterial(`${line.key}:paint`,line,'Peinture (2 couches)','pots de 10 L',0.2,10,10,1,'0,1 L/m²/couche × 2 ; rendement et préparation à confirmer.'));
+  }
+  const included=new Set(materials.filter(m=>m.lineKey===line.key).map(m=>m.name.toLowerCase()));
+  for(const [index,name] of (preset?.materials||['Matériaux et fournitures à préciser selon plans']).entries()){
+   if(included.has(name.toLowerCase())||kind==='carrelage'&&area&&index<2||kind==='peinture'&&area&&index===0)continue;
+   materials.push(forecastMaterial(`${line.key}:suggestion:${index}`,line,name,'à définir',0,0,1,1,'Poste indicatif : compléter unité, consommation et métré avant achat.'));
+  }
+  for(const name of preset?.tools||['Outillage selon nature des travaux','Équipements de protection individuelle'])tools.push({lineKey:line.key,name,qty:0,unit:'à dimensionner'});
+ }
+ return {source:forecastSource(q),schemaVersion:2,generatedAt:new Date().toISOString(),materials,tools,gantt:generateForecastGantt(q)};
+}
+function upgradeMaterialForecast(q,plan){
+ if((Number(plan.schemaVersion)||0)>=2||plan.source!==forecastSource(q))return plan;
+ const fresh=generateMaterialForecast(q),represented=new Set((plan.materials||[]).map(m=>m.lineKey));
+ plan.materials=Array.isArray(plan.materials)?plan.materials:[];
+ plan.tools=Array.isArray(plan.tools)?plan.tools:[];
+ const first=forecastLines(q)[0]?.key;
+ for(const tool of plan.tools)if(!tool.lineKey&&first)tool.lineKey=first;
+ const equipped=new Set(plan.tools.map(t=>t.lineKey));
+ plan.materials.push(...fresh.materials.filter(m=>!represented.has(m.lineKey)));
+ plan.tools.push(...fresh.tools.filter(t=>!equipped.has(t.lineKey)));
+ plan.schemaVersion=2;
+ return plan;
+}
+function forecastRequired(line,material){
+ const coeff=Number(material.coefficient),loss=Number(material.loss),pack=Number(material.packSize),step=Number(material.roundStep);
+ if(material.manualQuantity!==''&&material.manualQuantity!==null&&material.manualQuantity!==undefined){const manual=Number(material.manualQuantity);return Number.isFinite(manual)&&manual>=0?manual:null;}
+ if(!line||![line.qty,coeff,loss,pack,step].every(Number.isFinite)||line.qty<=0||coeff<=0||loss<0||pack<=0||step<=0)return null;
+ return Math.ceil((line.qty*coeff*(1+loss/100)/pack/step)-1e-10)*step;
+}
+function validForecastMaterial(line,m){
+ return !!line&&String(m.name||'').trim()&&String(m.unit||'').trim()&&['coefficient','loss','packSize','roundStep'].every(k=>Number.isFinite(Number(m[k]))&&Number(m[k])>=0)&&Number(m.packSize)>0&&Number.isInteger(Number(m.roundStep))&&Number(m.roundStep)>0&&(m.manualQuantity===''||m.manualQuantity===null||m.manualQuantity===undefined||Number.isFinite(Number(m.manualQuantity))&&Number(m.manualQuantity)>=0);
+}
+let selectedMaterialQuoteId='',activeMaterialForecast=null;
+function materialPlanPage(id=''){
+ if(!user)return;
+ const permitted=(db.quotes||[]).filter(q=>!q.deleted&&userCanAccessProject(q.project)&&(db.projects||[]).some(p=>!p.deleted&&String(p.id)===String(q.project)));
+ const chosen=permitted.find(q=>String(q.id)===String(id||selectedMaterialQuoteId))||permitted[0];
+ selectedMaterialQuoteId=chosen?.id||'';
+ activeMaterialForecast=chosen?(chosen.materialForecast?upgradeMaterialForecast(chosen,structuredClone(chosen.materialForecast)):generateMaterialForecast(chosen)):null;
+ if(activeMaterialForecast&&!activeMaterialForecast.gantt)activeMaterialForecast.gantt=generateForecastGantt(chosen);
+ renderMaterialPlan();
+}
+function chooseMaterialQuote(id){selectedMaterialQuoteId=id;materialPlanPage(id)}
+function forecastInput(type,index,key,value,canEdit,display=value,attrs=''){
+ return `${canEdit?`<input class="no-print" ${attrs} value="${esc(value??'')}" onchange="editForecast${type}(${index},'${key}',this.value)">`:''}<span class="material-print-value">${esc(display??'')}</span>`;
+}
+function forecastLineChoice(type,index,key,selected,lines,canEdit){
+ const label=lines.find(line=>line.key===selected)?.name||'Non affecté';
+ return `${canEdit?`<select class="no-print" onchange="editForecast${type}(${index},'${key}',this.value)"><option value="">Non affecté</option>${lines.map(line=>`<option value="${esc(line.key)}" ${line.key===selected?'selected':''}>${esc(line.name)}</option>`).join('')}</select>`:''}<span class="material-print-value">${esc(label)}</span>`;
+}
+function renderMaterialPlan(){
+ const canEdit=user?.role==='ADMIN',q=(db.quotes||[]).find(x=>x.id===selectedMaterialQuoteId&&!x.deleted),p=activeMaterialForecast;
+ const permitted=(db.quotes||[]).filter(x=>!x.deleted&&userCanAccessProject(x.project)&&(db.projects||[]).some(project=>!project.deleted&&String(project.id)===String(x.project)));
+ if(!q||!permitted.includes(q)){document.querySelector('#content').innerHTML='<div class="panel"><div class="panel-body">Aucun devis lié à un chantier accessible. Enregistrez d’abord un devis avec ses quantités.</div></div>';return;}
+ const lines=forecastLines(q),lineByKey=new Map(lines.map(x=>[x.key,x]));
+ const stale=p.source!==forecastSource(q);
+ const rows=(p.materials||[]).map((m,ix)=>{
+  const line=lineByKey.get(m.lineKey),required=forecastRequired(line,m);
+  return `<tr><td>${forecastLineChoice('Material',ix,'lineKey',m.lineKey,lines,canEdit)}<small>${line?`${line.qty} ${esc(line.unit)} dans le devis`:'Actualiser le plan'}</small></td><td>${forecastInput('Material',ix,'name',m.name,canEdit)}</td><td>${forecastInput('Material',ix,'unit',m.unit,canEdit)}</td><td>${forecastInput('Material',ix,'coefficient',m.coefficient,canEdit,`${m.coefficient} / ${line?.unit||'unité'}`,'type="number" min="0" step="any"')}</td><td>${forecastInput('Material',ix,'loss',m.loss,canEdit,`${m.loss} %`,'type="number" min="0" step="any"')}</td><td>${forecastInput('Material',ix,'packSize',m.packSize,canEdit,m.packSize,'type="number" min="0.001" step="any"')}</td><td>${forecastInput('Material',ix,'roundStep',m.roundStep,canEdit,m.roundStep,'type="number" min="1" step="1"')}</td><td>${forecastInput('Material',ix,'manualQuantity',m.manualQuantity??'',canEdit,m.manualQuantity===''?'—':m.manualQuantity,'type="number" min="0" step="any" placeholder="Automatique"')}</td><td><strong>${required===null?'À chiffrer':required.toLocaleString('fr-FR')} ${required===null?'':esc(m.unit)}</strong></td><td>${forecastInput('Material',ix,'notes',m.notes||'',canEdit)}</td><td class="no-print">${canEdit?`<button class="btn-xs btn-delete" onclick="removeForecastMaterial(${ix})">×</button>`:''}</td></tr>`;
+ }).join('');
+ const tools=(p.tools||[]).map((t,ix)=>`<tr><td>${forecastLineChoice('Tool',ix,'lineKey',t.lineKey,lines,canEdit)}</td><td>${forecastInput('Tool',ix,'name',t.name,canEdit)}</td><td>${forecastInput('Tool',ix,'qty',t.qty,canEdit,Number(t.qty)>0?t.qty:'À dimensionner','type="number" min="0" step="any"')}</td><td>${forecastInput('Tool',ix,'unit',t.unit,canEdit)}</td><td class="no-print">${canEdit?`<button class="btn-xs btn-delete" onclick="removeForecastTool(${ix})">×</button>`:''}</td></tr>`).join('');
+ document.querySelector('#content').innerHTML=`<div class="materials-sheet"><div class="material-actions no-print"><label>Devis source <select onchange="chooseMaterialQuote(this.value)">${permitted.map(item=>`<option value="${esc(item.id)}" ${item.id===q.id?'selected':''}>${esc(item.id)} — ${esc(projectLabel(item.project))} — ${esc(item.object||'')}</option>`).join('')}</select></label>${canEdit?`<button class="btn primary" onclick="saveMaterialForecast()">Enregistrer le plan</button><button class="btn secondary" onclick="refreshMaterialForecast()">Actualiser depuis devis</button>`:''}<button class="btn secondary" onclick="window.print()">Imprimer / PDF</button></div>
+ <h2>PRÉVISION DE MATÉRIAUX ET D’OUTILLAGE</h2><p><strong>Usage interne — équipe de suivi</strong> · Chantier : ${esc(projectLabel(q.project))} · Devis : ${esc(q.id)} · Objet : ${esc(q.object||'')}<br>Préparé le ${esc((p.generatedAt||'').slice(0,10))}. Quantités indicatives à vérifier sur site et sur plans avant commande.</p>
+ ${stale?'<p class="material-warning">Le devis a changé : actualisez cette prévision avant de commander.</p>':''}
+ <h3>DEVIS INTERNE — MATÉRIAUX PAR DÉSIGNATION</h3><p>Toutes les désignations du devis client sont reprises. « À chiffrer » signifie que les plans, le métré ou le dosage restent à préciser. La colonne « Quantité corrigée » remplace la formule lorsque l’Admin y inscrit une quantité.</p><div class="table-wrap"><table class="material-table"><thead><tr><th>Désignation du devis</th><th>Matériau / fourniture</th><th>Unité d’achat</th><th>Conso / unité de travaux</th><th>Perte %</th><th>Conditionnement</th><th>Lot d’achat</th><th>Quantité corrigée</th><th>Besoin prévisionnel</th><th>Hypothèse</th><th class="no-print"></th></tr></thead><tbody>${rows||'<tr><td colspan="11">Renseignez les désignations du devis client avant de générer le plan.</td></tr>'}</tbody></table></div>
+ ${canEdit?`<div class="material-actions no-print"><select id="forecastLine">${lines.map(line=>`<option value="${esc(line.key)}">${esc(line.name)} (${line.qty} ${esc(line.unit)})</option>`).join('')}</select><button class="btn secondary" onclick="addForecastMaterial()">+ Matériau manuel</button></div>`:''}
+ ${lines.filter(line=>forecastKind(line)==='autres').length?`<p class="material-warning">Désignations sans nomenclature standard : ${lines.filter(line=>forecastKind(line)==='autres').map(x=>esc(x.name)).join(', ')}. Complétez leurs matériaux et matériels selon les plans.</p>`:''}
+ <h3>DEVIS INTERNE — MATÉRIELS ET OUTILLAGE PAR DÉSIGNATION</h3><div class="table-wrap"><table class="material-table material-tools"><thead><tr><th>Désignation du devis</th><th>Matériel / outil</th><th>Quantité</th><th>Unité / observation</th><th class="no-print"></th></tr></thead><tbody>${tools||'<tr><td colspan="5">Aucun matériel saisi.</td></tr>'}</tbody></table></div>${canEdit?`<div class="material-actions no-print"><select id="forecastToolLine">${lines.map(line=>`<option value="${esc(line.key)}">${esc(line.name)}</option>`).join('')}</select><button class="btn secondary" onclick="addForecastTool()">+ Ajouter un matériel</button></div>`:''}
+ <h3>PLANNING GANTT — DÉSIGNATIONS DU DEVIS</h3>${canEdit?'<button class="btn secondary no-print" onclick="regenerateForecastGantt()">Générer / réinitialiser le Gantt</button>':''}${renderForecastGantt(q,p,canEdit)}
+ <p class="material-footnote">Besoin brut = quantité du devis × consommation × (1 + pertes / 100). Quantité à prévoir = besoin brut / conditionnement, arrondi au lot d’achat supérieur. Valider format, dosage, rendement, pertes, dates et accès au chantier avant achat ou exécution.</p></div>`;
+}
+function editForecastMaterial(ix,key,value){
+ if(user?.role!=='ADMIN'||!activeMaterialForecast?.materials?.[ix])return;
+ const m=activeMaterialForecast.materials[ix];
+ if(['coefficient','loss','packSize','roundStep'].includes(key)){const n=Number(value);if(!Number.isFinite(n)||n<0||(key==='packSize'&&n===0)||(key==='roundStep'&&(!Number.isInteger(n)||n<1)))return alert('Saisissez une valeur valide.');m[key]=n;}
+ else if(key==='manualQuantity'){if(value==='')m.manualQuantity='';else{const n=Number(value);if(!Number.isFinite(n)||n<0)return alert('Quantité corrigée invalide.');m.manualQuantity=n;}}
+ else if(['name','notes','unit'].includes(key))m[key]=value;
+ else if(key==='lineKey'){if(!forecastLines(db.quotes.find(q=>q.id===selectedMaterialQuoteId)||{}).some(line=>line.key===value))return alert('Choisissez une désignation du devis.');m.lineKey=value;}
+ else return;
+ renderMaterialPlan();
+}
+function editForecastTool(ix,key,value){if(user?.role!=='ADMIN'||!activeMaterialForecast?.tools?.[ix])return;if(key==='qty'){const n=Number(value);if(!Number.isFinite(n)||n<0)return alert('Quantité invalide.');activeMaterialForecast.tools[ix].qty=n;}else if(['name','unit'].includes(key))activeMaterialForecast.tools[ix][key]=value;else if(key==='lineKey'){if(!forecastLines(db.quotes.find(q=>q.id===selectedMaterialQuoteId)||{}).some(line=>line.key===value))return alert('Choisissez une désignation du devis.');activeMaterialForecast.tools[ix].lineKey=value;}else return;renderMaterialPlan()}
+function addForecastMaterial(){if(user?.role!=='ADMIN')return;const key=document.querySelector('#forecastLine')?.value,line=forecastLines((db.quotes||[]).find(q=>q.id===selectedMaterialQuoteId)||{}).find(x=>x.key===key);if(!line)return;activeMaterialForecast.materials.push(forecastMaterial('manual-'+Date.now()+'-'+Math.random().toString(36).slice(2),line,'Matériau à définir','unités',0,0,1,1,'À renseigner selon le métré.'));renderMaterialPlan()}
+function removeForecastMaterial(ix){if(user?.role!=='ADMIN')return;activeMaterialForecast.materials.splice(ix,1);renderMaterialPlan()}
+function addForecastTool(){if(user?.role!=='ADMIN')return;const lineKey=document.querySelector('#forecastToolLine')?.value;if(!lineKey)return;activeMaterialForecast.tools.push({lineKey,name:'Matériel à définir',qty:0,unit:'à dimensionner'});renderMaterialPlan()}
+function removeForecastTool(ix){if(user?.role!=='ADMIN')return;activeMaterialForecast.tools.splice(ix,1);renderMaterialPlan()}
+function refreshMaterialForecast(){if(user?.role!=='ADMIN')return;const q=db.quotes.find(x=>x.id===selectedMaterialQuoteId);if(!q)return;if(activeMaterialForecast?.materials?.length&&!confirm('Recalculer le plan ? Les ajustements enregistrés ou non seront remplacés.'))return;activeMaterialForecast=generateMaterialForecast(q);renderMaterialPlan()}
+function saveMaterialForecast(){
+ if(user?.role!=='ADMIN')return;
+ const q=db.quotes.find(x=>x.id===selectedMaterialQuoteId&&!x.deleted),p=activeMaterialForecast;if(!q||!p)return;
+ if(p.source!==forecastSource(q))return alert('Le devis a changé : actualisez le plan avant de l’enregistrer.');
+ if(!validForecastGantt(q,p.gantt))return alert('Le Gantt doit contenir chaque désignation du devis avec des dates et avancements valides.');
+ const lines=new Map(forecastLines(q).map(x=>[x.key,x]));
+ if([...lines.keys()].some(key=>!p.materials.some(m=>m.lineKey===key)||!p.tools.some(t=>t.lineKey===key)))return alert('Chaque désignation du devis doit avoir au moins un matériau et un matériel associé.');
+ if(p.materials.some(m=>!validForecastMaterial(lines.get(m.lineKey),m))||p.tools.some(t=>!lines.has(t.lineKey)||!String(t.name||'').trim()||!Number.isFinite(Number(t.qty))||Number(t.qty)<0))return alert('Corrigez les matériaux, coefficients, conditionnements et matériels avant enregistrement. Les quantités à chiffrer peuvent rester vides.');
+ q.materialForecast=structuredClone(p);q.updatedAt=new Date().toISOString();saveLocalOnly();cloudWriteGeneric('quotes',q,'Prévision matériaux enregistrée');alert('Prévision interne enregistrée.');renderMaterialPlan();
+}
 function quoteStatusClass(s){return s==="Accepté"?"qs-approved":s==="Refusé"?"qs-refused":s==="Envoyé"?"qs-sent":"qs-draft"}
 function quotes(){
  if(user.role!=="ADMIN"){document.querySelector("#content").innerHTML='<div class="panel"><div class="panel-body"><div class="admin-only-note">Le module Devis est réservé exclusivement à l’ADMIN.</div></div></div>';return}
- document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button></div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Chantier</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${db.quotes.map(q=>{let f=quoteFinancials(q);return `<tr data-search="${(q.id+' '+q.client+' '+q.object).toLowerCase()}"><td><b>${q.id}</b></td><td>${q.date}</td><td>${esc(projectLabel(q.project))}</td><td>${q.client}</td><td>${q.object}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${q.status}</span></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${q.id}')">Ouvrir</button><button class="btn-xs btn-save" onclick="duplicateQuote('${q.id}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${q.id}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
+ document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button></div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Chantier</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${db.quotes.filter(q=>!q.deleted).map(q=>{let f=quoteFinancials(q);return `<tr data-search="${(q.id+' '+q.client+' '+q.object).toLowerCase()}"><td><b>${q.id}</b></td><td>${q.date}</td><td>${esc(projectLabel(q.project))}</td><td>${q.client}</td><td>${q.object}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${q.status}</span></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${q.id}')">Ouvrir</button><button class="btn-xs btn-save" onclick="materialPlanPage('${q.id}')">Plan matériaux</button><button class="btn-xs btn-save" onclick="duplicateQuote('${q.id}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${q.id}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
 }
 function filterQuotes(){let v=(document.querySelector('#quoteSearch')?.value||'').toLowerCase();document.querySelectorAll('#quoteList tbody tr').forEach(r=>r.style.display=r.dataset.search.includes(v)?'':'none')}
 function newQuote(){return{id:"DEV-"+new Date().getFullYear()+"-"+String(db.quotes.length+1).padStart(3,"0"),date:new Date().toISOString().slice(0,10),validUntil:"",project:currentProjectContext()||"",client:"",clientAddress:"",clientPhone:"",object:"",status:"Brouillon",vatEnabled:false,vatRate:20,discount:0,sections:[{title:"NOUVEAU LOT",items:[{no:"1.1",designation:"",unit:"",qty:1,pu:0}]}],notes:"Arrêté le présent devis à la somme indiquée ci-dessous.",createdBy:"ADMIN"}}
-let activeQuote=null;
+let activeQuote=null,activeQuoteOriginalId="";
 function quoteEditor(id=""){
  if(user.role!=="ADMIN"){quotes();return}
- activeQuote=id?structuredClone(db.quotes.find(x=>x.id===id)):newQuote();renderQuoteEditor();
+ const existing=id?db.quotes.find(x=>x.id===id&&!x.deleted):null;if(id&&!existing)return alert("Devis introuvable.");activeQuote=existing?structuredClone(existing):newQuote();activeQuoteOriginalId=existing?.id||"";renderQuoteEditor();
 }
-function renderQuoteEditor(){let q=activeQuote,f=quoteFinancials(q);document.querySelector('#content').innerHTML=`<div class="quote-toolbar no-print"><div class="left"><button class="btn secondary" onclick="quotes()">← Liste des devis</button><button class="btn primary" onclick="saveQuote()">Enregistrer</button><button class="btn secondary" onclick="printA4AutoFit()">Imprimer / PDF</button></div><div class="right"><select onchange="activeQuote.status=this.value;renderQuoteEditor()" style="margin:0;width:150px"><option ${q.status==='Brouillon'?'selected':''}>Brouillon</option><option ${q.status==='Envoyé'?'selected':''}>Envoyé</option><option ${q.status==='Accepté'?'selected':''}>Accepté</option><option ${q.status==='Refusé'?'selected':''}>Refusé</option></select></div></div>
+function renderQuoteEditor(){let q=activeQuote,f=quoteFinancials(q);document.querySelector('#content').innerHTML=`<div class="quote-toolbar no-print"><div class="left"><button class="btn secondary" onclick="quotes()">← Liste des devis</button><button class="btn primary" onclick="saveQuote()">Enregistrer</button><button class="btn secondary" onclick="printA4AutoFit()">Imprimer / PDF</button>${activeQuoteOriginalId?`<button class="btn secondary" onclick="materialPlanPage('${q.id}')">Plan matériaux interne</button>`:""}</div><div class="right"><select onchange="activeQuote.status=this.value;renderQuoteEditor()" style="margin:0;width:150px"><option ${q.status==='Brouillon'?'selected':''}>Brouillon</option><option ${q.status==='Envoyé'?'selected':''}>Envoyé</option><option ${q.status==='Accepté'?'selected':''}>Accepté</option><option ${q.status==='Refusé'?'selected':''}>Refusé</option></select></div></div>
  <div class="quote-editor">
-  <div class="quote-head"><div class="quote-company"><img src="assets/logo_nysoa_construct.png"><div class="quote-company-info"><strong>ENTREPRISE NYSOA CONSTRUCT</strong><br>Construction - Bâtiment - Génie Civil - Travaux Publics<br>Lot 0708 K Ambohimena, Antsirabe<br>Téléphone / WhatsApp : +261 34 99 498 49<br>E-mail : hhajatiana15@gmail.com<br>Facebook : Entreprise NySoa Antsirabe</div></div><div class="quote-title-box"><h1>DEVIS</h1><div class="quote-no"><input value="${q.id}" onchange="activeQuote.id=this.value" style="text-align:right;font-weight:800"></div><div style="margin-top:8px">Date : <input type="date" value="${q.date}" onchange="activeQuote.date=this.value" style="width:150px;display:inline-block"></div></div></div>
+  <div class="quote-head"><div class="quote-company"><img src="assets/logo_nysoa_construct.png"><div class="quote-company-info"><strong>ENTREPRISE NYSOA CONSTRUCT</strong><br>Construction - Bâtiment - Génie Civil - Travaux Publics<br>Lot 0708 K Ambohimena, Antsirabe<br>Téléphone / WhatsApp : +261 34 99 498 49<br>E-mail : hhajatiana15@gmail.com<br>Facebook : Entreprise NySoa Antsirabe</div></div><div class="quote-title-box"><h1>DEVIS</h1><div class="quote-no"><input value="${q.id}" ${activeQuoteOriginalId?"readonly":"onchange=\"activeQuote.id=this.value\""} style="text-align:right;font-weight:800"></div><div style="margin-top:8px">Date : <input type="date" value="${q.date}" onchange="activeQuote.date=this.value" style="width:150px;display:inline-block"></div></div></div>
   <div class="quote-meta"><label>Client<input value="${esc(q.client)}" onchange="activeQuote.client=this.value"></label><label>Adresse<input value="${esc(q.clientAddress)}" onchange="activeQuote.clientAddress=this.value"></label><label>Téléphone<input value="${esc(q.clientPhone)}" onchange="activeQuote.clientPhone=this.value"></label><label>Validité<input type="date" value="${q.validUntil||''}" onchange="activeQuote.validUntil=this.value"></label></div>
   <div class="quote-object"><label>Chantier<select onchange="activeQuote.project=this.value"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(q.project||"")===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label></div>
   <div class="quote-object"><label>Objet du devis<input value="${esc(q.object)}" onchange="activeQuote.object=this.value"></label></div>
+  <p class="admin-only-note no-print">Saisissez toutes les désignations du chantier (installation, gros œuvre, électricité, finition, etc.). Après enregistrement, chacune sera reprise dans le devis interne matériaux/matériels et dans le planning Gantt. Les prix du devis client restent confidentiels.</p>
   <div class="table-wrap"><table class="quote-table"><thead><tr><th style="width:60px">N°</th><th>DÉSIGNATION</th><th style="width:90px">UNITÉ</th><th style="width:100px">QUANTITÉ</th><th style="width:145px">PU</th><th style="width:155px">PRIX TOTAL</th><th class="no-print" style="width:55px"></th></tr></thead><tbody>${q.sections.map((s,si)=>quoteSectionHtml(s,si)).join('')}</tbody></table></div>
   <div class="quote-add-row no-print"><button class="btn secondary" onclick="addQuoteSection()">+ Ajouter un lot</button><button class="btn secondary" onclick="addQuoteItem(${Math.max(0,q.sections.length-1)})">+ Ajouter une ligne</button></div>
-  <div class="quote-options no-print"><label><input type="checkbox" ${q.vatEnabled?'checked':''} onchange="activeQuote.vatEnabled=this.checked;renderQuoteEditor()"> Appliquer TVA</label><label>Taux TVA (%) <input type="number" value="${q.vatRate}" onchange="activeQuote.vatRate=+this.value;renderQuoteEditor()"></label><label>REMISE saisie manuellement (Ar) <input type="number" min="0" step="1" value="${q.discount}" onchange="activeQuote.discount=Math.max(0,+this.value||0);renderQuoteEditor()"></label></div>
-  <div class="quote-summary-block"><table class="quote-summary"><tr><td>REMISE</td><td>${f.discount?'- ':''}${money(f.discount)}</td></tr>${q.vatEnabled?`<tr><td>TVA (${q.vatRate}%)</td><td>${money(f.vat)}</td></tr>`:''}<tr class="grand"><td>TOTAL GÉNÉRAL</td><td>${money(f.ttc)}</td></tr></table><div class="quote-words">Arrêté le présent devis à la somme de : <strong>${money(f.ttc)}</strong> (<strong>${numberToFrenchWords(f.ttc)} ARIARY</strong>).</div></div>
+  <div class="quote-options no-print"><label><input type="checkbox" ${q.vatEnabled?'checked':''} onchange="activeQuote.vatEnabled=this.checked;renderQuoteEditor()"> Appliquer TVA</label><label>Taux TVA (%) <input type="number" value="${q.vatRate}" onchange="activeQuote.vatRate=+this.value;renderQuoteEditor()"></label><label>Réduction négociée avec le client (Ar) <input type="number" min="0" step="1" value="${q.discount}" onchange="activeQuote.discount=Math.max(0,+this.value||0);renderQuoteEditor()"></label></div>
+  <div class="quote-summary-block"><table class="quote-summary"><tr><td>DEVIS INITIAL (HT)</td><td>${money(f.ht)}</td></tr><tr><td>RÉDUCTION NÉGOCIÉE</td><td>${f.discount?'- ':''}${money(f.discount)}</td></tr>${q.vatEnabled?`<tr><td>TVA (${q.vatRate}%)</td><td>${money(f.vat)}</td></tr>`:''}<tr class="grand"><td>DEVIS FINAL ACCEPTÉ (TTC)</td><td>${money(f.ttc)}</td></tr></table><div class="quote-words">Arrêté le présent devis à la somme de : <strong>${money(f.ttc)}</strong> (<strong>${numberToFrenchWords(f.ttc)} ARIARY</strong>).</div></div>
   <div class="quote-signatures"><div>Le client<div class="signature-line">Nom, signature et mention « Bon pour accord »</div></div><div>Le gérant<div class="signature-line">HAJATIANA Hasiniaina Rivoherilaza</div></div></div>
  </div>`}
 function quoteSectionHtml(s,si){let st=s.items.reduce((a,i)=>a+(+i.qty||0)*(+i.pu||0),0);return `<tr class="quote-section-row"><td>${roman(si+1)}</td><td colspan="5"><input value="${esc(s.title)}" onchange="activeQuote.sections[${si}].title=this.value" style="font-weight:900"></td><td class="no-print"><button class="quote-remove" onclick="removeQuoteSection(${si})">×</button></td></tr>${s.items.map((i,ii)=>`<tr><td><input class="center" value="${esc(i.no)}" onchange="activeQuote.sections[${si}].items[${ii}].no=this.value"></td><td><textarea onchange="activeQuote.sections[${si}].items[${ii}].designation=this.value">${esc(i.designation)}</textarea></td><td><input class="center" value="${esc(i.unit)}" onchange="activeQuote.sections[${si}].items[${ii}].unit=this.value"></td><td><input class="num" type="number" step="0.01" value="${i.qty}" onchange="activeQuote.sections[${si}].items[${ii}].qty=+this.value;renderQuoteEditor()"></td><td><input class="num" type="number" step="1" value="${i.pu}" onchange="activeQuote.sections[${si}].items[${ii}].pu=+this.value;renderQuoteEditor()"></td><td class="num"><b>${money((+i.qty||0)*(+i.pu||0))}</b></td><td class="no-print"><button class="quote-remove" onclick="removeQuoteItem(${si},${ii})">×</button></td></tr>`).join('')}<tr class="quote-subtotal-row"><td colspan="5" style="text-align:right">Sous-total ${esc(s.title)}</td><td class="num">${money(st)}</td><td class="no-print"><button class="btn-xs btn-edit" onclick="addQuoteItem(${si})">+</button></td></tr>`}
@@ -2819,9 +3376,37 @@ function addQuoteSection(){activeQuote.sections.push({title:"NOUVEAU LOT",items:
 function removeQuoteSection(si){if(activeQuote.sections.length===1)return alert('Le devis doit contenir au moins un lot.');activeQuote.sections.splice(si,1);renderQuoteEditor()}
 function addQuoteItem(si){let s=activeQuote.sections[si];s.items.push({no:(si+1)+"."+(s.items.length+1),designation:"",unit:"",qty:1,pu:0});renderQuoteEditor()}
 function removeQuoteItem(si,ii){let s=activeQuote.sections[si];if(s.items.length===1)return alert('Le lot doit contenir au moins une ligne.');s.items.splice(ii,1);renderQuoteEditor()}
-function saveQuote(){if(!activeQuote.project)return alert('Veuillez choisir le chantier.');if(!activeQuote.client.trim()||!activeQuote.object.trim())return alert('Veuillez renseigner le client et l’objet du devis.');let idx=db.quotes.findIndex(x=>x.id===activeQuote.id);if(idx>=0)db.quotes[idx]=structuredClone(activeQuote);else db.quotes.push(structuredClone(activeQuote));save();alert('Devis enregistré.');quotes()}
-function duplicateQuote(id){let q=structuredClone(db.quotes.find(x=>x.id===id));q.id='DEV-'+new Date().getFullYear()+'-'+String(db.quotes.length+1).padStart(3,'0');q.status='Brouillon';q.date=new Date().toISOString().slice(0,10);db.quotes.push(q);save();quotes()}
-function deleteQuote(id){if(confirm('Supprimer définitivement ce devis ?')){db.quotes=db.quotes.filter(x=>x.id!==id);save();quotes()}}
+function saveQuote(){
+ if(user?.role!=="ADMIN")return;
+ const q=activeQuote,project=(db.projects||[]).find(p=>!p.deleted&&String(p.id)===String(q?.project));
+ if(!project)return alert('Veuillez choisir un chantier actif.');
+ if(!String(q.client||'').trim()||!String(q.object||'').trim())return alert('Veuillez renseigner le client et l’objet du devis.');
+ const f=quoteFinancials(q);
+ if(!Number.isFinite(+q.discount)||+q.discount<0||+q.discount>=f.ht)return alert('La réduction doit être positive ou nulle et inférieure au montant initial.');
+ if(f.ttc<=0)return alert('Le montant final du devis doit être positif.');
+ const now=new Date().toISOString(),idx=db.quotes.findIndex(x=>x.id===q.id&&!x.deleted);
+ if(idx<0&&db.quotes.some(x=>x.id===q.id))return alert('Ce numéro de devis existe déjà.');
+ const old=idx>=0?db.quotes[idx]:null;
+ if(activeQuoteOriginalId&&q.id!==activeQuoteOriginalId)return alert('Le numéro d’un devis déjà enregistré ne peut pas être modifié.');
+ const oldClientReceipts=old&&receiptRows().filter(r=>r.status==='Validé'&&String(r.project)===String(old.project)&&clientPaymentKey(receiptClientName(r))===clientPaymentKey(old.client));
+ const oldIdentityChanged=old&&(String(old.project)!==String(q.project)||clientPaymentKey(old.client)!==clientPaymentKey(q.client));
+ if(oldIdentityChanged&&(oldClientReceipts?.length||invoiceRows().some(i=>String(i.quoteId)===String(q.id))))return alert('Chantier et client non modifiables après encaissement ou facturation.');
+ if(invoiceRows().some(i=>String(i.quoteId)===String(q.id))&&(old?.status!==q.status||Math.abs(quoteFinancials(old).ttc-f.ttc)>0.01||JSON.stringify(invoiceQuoteLines(old))!==JSON.stringify(invoiceQuoteLines(q))||(+old.discount||0)!==(+q.discount||0)||!!old.vatEnabled!==!!q.vatEnabled||(+old.vatRate||0)!==(+q.vatRate||0)))return alert('Une facture est déjà liée à ce devis. Ses montants, désignations, quantités et PU doivent rester identiques ; corrigez la facturation avant de modifier le devis.');
+ if(oldClientReceipts?.length&&old?.status==='Accepté'&&q.status!=='Accepté')return alert('Ce devis accepté a des paiements validés : son statut doit rester Accepté.');
+ if(q.status==='Accepté'){
+  const other=sum(acceptedQuotesForProject(q.project).filter(x=>x.id!==q.id&&clientPaymentKey(x.client)===clientPaymentKey(q.client)).map(x=>quoteFinancials(x).ttc));
+  const paid=sum(receiptRows().filter(r=>r.status==='Validé'&&String(r.project)===String(q.project)&&clientPaymentKey(receiptClientName(r))===clientPaymentKey(q.client)).map(r=>r.amount||r.receivedAmount));
+  if(other+f.ttc+0.01<paid)return alert('Le devis final ne peut pas être inférieur aux encaissements déjà validés pour ce client et ce chantier.');
+ }
+ const saved={...structuredClone(q),createdAt:old?.createdAt||now,updatedAt:now};
+ if(idx>=0)db.quotes[idx]=saved;else db.quotes.push(saved);
+ saveLocalOnly();cloudWriteGeneric('quotes',saved,'Devis enregistré');
+ if(old?.project&&old.project!==saved.project)syncProjectQuoteBudget(old.project);
+ syncProjectQuoteBudget(saved.project);
+ alert('Devis enregistré. '+(saved.status==='Accepté'?`Budget chantier actualisé : ${money(projectBudgetAmount(project))}.`:''));quotes();
+}
+function duplicateQuote(id){if(user?.role!=="ADMIN")return;const source=db.quotes.find(x=>x.id===id&&!x.deleted);if(!source)return;let q=structuredClone(source),now=new Date().toISOString();q.id='DEV-'+new Date().getFullYear()+'-'+String(db.quotes.length+1).padStart(3,'0');while(db.quotes.some(x=>x.id===q.id))q.id='DEV-'+new Date().getFullYear()+'-'+Math.random().toString(36).slice(2,8).toUpperCase();q.status='Brouillon';q.date=erpToday();q.createdAt=now;q.updatedAt=now;delete q.deleted;delete q.materialForecast;db.quotes.push(q);saveLocalOnly();cloudWriteGeneric('quotes',q,'Copie de devis');quotes()}
+function deleteQuote(id){if(user?.role!=="ADMIN")return;const q=db.quotes.find(x=>x.id===id&&!x.deleted);if(!q)return;if(invoiceRows().some(i=>String(i.quoteId)===String(id)))return alert('Ce devis est lié à une facture. Conservez-le pour préserver le contrat client.');if(q.status==='Accepté'&&receiptRows().some(r=>r.status==='Validé'&&String(r.project)===String(q.project)&&clientPaymentKey(receiptClientName(r))===clientPaymentKey(q.client)))return alert('Ce devis accepté correspond à des encaissements validés ; conservez-le pour préserver le solde client.');if(!confirm('Déplacer ce devis dans la corbeille ?'))return;q.deleted=true;q.deletedAt=new Date().toISOString();q.updatedAt=q.deletedAt;saveLocalOnly();cloudWriteGeneric('quotes',q,'Devis supprimé');syncProjectQuoteBudget(q.project);quotes()}
 function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function roman(n){return ['','I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII','XIII','XIV','XV'][n]||n}
 function numberToFrenchWords(value){
@@ -3236,7 +3821,7 @@ function dailyReportsPage(){
  </div>
  <div class="table-wrap"><table><thead><tr><th>Date</th><th>Utilisateur</th><th>Rôle</th><th>Chantier</th><th>Résumé</th><th>Statut</th><th>Créé / modifié</th><th>Actions</th></tr></thead><tbody>
  ${rows.length?rows.map(r=>`<tr><td><b>${new Date(r.reportDate+"T12:00:00").toLocaleDateString("fr-FR")}</b></td>
- <td>${esc(r.ownerLabel||r.owner)}</td><td>${esc(r.role)}</td><td>${esc(r.project||"Non précisé")}</td>
+ <td>${esc(r.ownerLabel||r.owner)}</td><td>${esc(r.role)}</td><td>${esc(r.project?projectLabel(r.project):"Non précisé")}</td>
  <td>${esc((r.workDone||r.controlledWork||"").slice(0,90))}</td><td>${reportStatusBadge(r)}</td>
  <td>${new Date(r.updatedAt||r.createdAt).toLocaleString("fr-FR")}</td>
  <td><div class="edit-actions">
@@ -3252,7 +3837,7 @@ function dailyReportForm(id=""){
  if(existing&&((existing.ownerUid&&existing.ownerUid!==user.uid)||(!existing.ownerUid&&existing.owner!==user.username)))return alert("Accès refusé.");
  const roleTech=user.role==="CONTROLE";
  const r=existing||{};
- const projectOptions=db.projects.filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${r.project===p.id?"selected":""}>${esc(p.id)} - ${esc(p.name||"")}</option>`).join("");
+ const projectOptions=db.projects.filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${r.project===p.id?"selected":""}>${esc(projectChantierName(p))} — ${esc(projectWorkName(p))}</option>`).join("");
  $("#content").innerHTML=`<div class="panel"><h3>RAPPORT JOURNALIER — ${roleTech?"TECHNICIEN":"GESTIONNAIRE"}</h3>
  <form id="dailyReportForm" class="form-grid">
  <label>Date du rapport<input name="reportDate" type="date" value="${esc(r.reportDate||localDateKey())}" required></label>
