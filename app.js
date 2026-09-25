@@ -609,6 +609,11 @@ async function firebaseEmailLogin(email,password){
   if(!fbAuth)throw new Error("Firebase Authentication n’est pas disponible.");
   await fbAuth.signInWithEmailAndPassword(email,password);
 }
+function showLoginMessage(message){
+  const el=document.getElementById("loginMsg");
+  if(el)el.textContent=String(message||"");
+  else console.warn("Login message element missing; check index.html/app.js deployment versions.");
+}
 async function firebaseLogout(){
   stopPresence();
   clearInterval(cloudAutoSyncTimer);
@@ -648,7 +653,7 @@ function initFirebaseCloud(){
         await cloudSyncPendingPhase1();
       }catch(err){
         console.error(err);
-        document.getElementById("loginMsg").textContent=err.message;
+        showLoginMessage(err?.message||"Ouverture de session impossible.");
         await fbAuth.signOut();
       }
     });
@@ -1017,14 +1022,14 @@ function projectMetrics(id){
 }
 async function login(u,p){
   try{
-    $("#loginMsg").textContent="Connexion à Firebase…";
+    showLoginMessage("Connexion à Firebase…");
     await firebaseEmailLogin(u,p);
     return true;
   }catch(err){
     console.error(err);
-    $("#loginMsg").textContent=err?.code==="auth/invalid-credential"||err?.code==="auth/wrong-password"||err?.code==="auth/user-not-found"
+    showLoginMessage(err?.code==="auth/invalid-credential"||err?.code==="auth/wrong-password"||err?.code==="auth/user-not-found"
       ?"Adresse e-mail ou mot de passe incorrect."
-      :(err?.message||"Connexion impossible.");
+      :(err?.message||"Connexion impossible."));
     return false;
   }
 }
@@ -1057,7 +1062,7 @@ async function exportQuotePdf(){
 
 function boot(){
  try{migrateProjectChantierFields();}catch(e){console.warn('migration chantier',e);}
-ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();if(user.role!=="ADMIN"&&(user.role!=="TECHNICIEN"||technicianSessionProfile()))startUsageSession();$("#login").classList.add("hidden");$("#app").classList.remove("hidden");const actor=effectiveUserIdentity();$("#currentUserLabel").textContent=actor.label||user.label;$("#today").textContent=new Date().toLocaleDateString("fr-FR");$("#exerciseYear").textContent=String(new Date().getFullYear());$("#resetTestDataBtn").classList.toggle("hidden",user.role!=="ADMIN");renderMenu();
+ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();if(user.role!=="ADMIN"&&(user.role!=="TECHNICIEN"||technicianSessionProfile()))startUsageSession();$("#login")?.classList.add("hidden");$("#app")?.classList.remove("hidden");const actor=effectiveUserIdentity();const label=$("#currentUserLabel"),today=$("#today"),year=$("#exerciseYear"),reset=$("#resetTestDataBtn");if(label)label.textContent=actor.label||user.label;if(today)today.textContent=new Date().toLocaleDateString("fr-FR");if(year)year.textContent=String(new Date().getFullYear());if(reset)reset.classList.toggle("hidden",user.role!=="ADMIN");renderMenu();
 const obsoleteManualButtons=["sendUpdatesBtn","refreshAdminBtn","publishValidationBtn","importValidationBtn","exportUsageBtn","importUsageBtn","exportDailyReportsBtn","importDailyReportsBtn","cloudMigrateBtn"];
 obsoleteManualButtons.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display="none";});
 const cloudSyncBtn=document.getElementById("cloudSyncBtn");
