@@ -3163,6 +3163,31 @@ function normalizeClientName(v){return String(v||"").trim().replace(/\s+/g," ").
 function clientNameFromRecord(r){return String(r?.values?.[0]||r?.name||r?.client||"").trim();}
 function clientPhoneFromRecord(r){return String(r?.values?.[1]||r?.phone||r?.telephone||"").trim();}
 function clientAddressFromRecord(r){return String(r?.values?.[2]||r?.address||r?.adresse||"").trim();}
+function quoteClientCatalog(quote){
+ db.modules.clients=Array.isArray(db.modules.clients)?db.modules.clients:[];
+ const project=(db.projects||[]).find(p=>String(p.id)===String(quote?.project));
+ for(const name of [quote?.client,project?.client]){
+  if(!String(name||"").trim())continue;
+  const existed=db.modules.clients.some(c=>!c.deleted&&clientPaymentKey(clientNameFromRecord(c))===clientPaymentKey(name));
+  if(!existed){const c=ensureClientFromName(name,quote?.client===name?quote.clientPhone:"",quote?.client===name?quote.clientAddress:"","Client existant du chantier/devis");saveLocalOnly();cloudWriteGeneric("clients",c,"Client du devis récupéré");}
+ }
+ return db.modules.clients.filter(c=>!c.deleted&&String(clientNameFromRecord(c)).trim()).sort((a,b)=>clientNameFromRecord(a).localeCompare(clientNameFromRecord(b),"fr"));
+}
+function quoteChooseClient(id){
+ const c=quoteClientCatalog(activeQuote).find(x=>String(x.id)===String(id));
+ activeQuote.clientId=c?.id||"";activeQuote.client=c?clientNameFromRecord(c):"";
+ activeQuote.clientAddress=c?clientAddressFromRecord(c):"";activeQuote.clientPhone=c?clientPhoneFromRecord(c):"";
+ renderQuoteEditor();
+}
+function quoteChooseProject(id){
+ activeQuote.project=id;
+ const p=(db.projects||[]).find(x=>String(x.id)===String(id));
+ if(p?.client){
+  const c=quoteClientCatalog(activeQuote).find(x=>clientPaymentKey(clientNameFromRecord(x))===clientPaymentKey(p.client));
+  if(c){activeQuote.clientId=c.id;activeQuote.client=clientNameFromRecord(c);activeQuote.clientAddress=clientAddressFromRecord(c);activeQuote.clientPhone=clientPhoneFromRecord(c);}
+ }else{activeQuote.clientId="";activeQuote.client="";activeQuote.clientAddress="";activeQuote.clientPhone="";}
+ renderQuoteEditor();
+}
 function ensureClientFromName(name,phone="",address="",source="Récupération"){
  name=String(name||"").trim();if(!name)return null;
  db.modules.clients=Array.isArray(db.modules.clients)?db.modules.clients:[];
@@ -3512,18 +3537,24 @@ function quotes(){
  document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button></div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Chantier</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${db.quotes.filter(q=>!q.deleted).map(q=>{let f=quoteFinancials(q);return `<tr data-search="${(q.id+' '+q.client+' '+q.object).toLowerCase()}"><td><b>${q.id}</b></td><td>${q.date}</td><td>${esc(projectLabel(q.project))}</td><td>${q.client}</td><td>${q.object}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${q.status}</span></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${q.id}')">Ouvrir</button><button class="btn-xs btn-save" onclick="materialPlanPage('${q.id}')">Plan matériaux</button><button class="btn-xs btn-save" onclick="duplicateQuote('${q.id}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${q.id}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
 }
 function filterQuotes(){let v=(document.querySelector('#quoteSearch')?.value||'').toLowerCase();document.querySelectorAll('#quoteList tbody tr').forEach(r=>r.style.display=r.dataset.search.includes(v)?'':'none')}
-function newQuote(){return{id:"DEV-"+new Date().getFullYear()+"-"+String(db.quotes.length+1).padStart(3,"0"),date:new Date().toISOString().slice(0,10),validUntil:"",project:currentProjectContext()||"",client:"",clientAddress:"",clientPhone:"",object:"",status:"Brouillon",vatEnabled:false,vatRate:20,discount:0,sections:[{title:"NOUVEAU LOT",items:[{no:"1.1",designation:"",unit:"",qty:1,pu:0}]}],notes:"Arrêté le présent devis à la somme indiquée ci-dessous.",createdBy:"ADMIN"}}
+function newQuote(){return{id:"DEV-"+new Date().getFullYear()+"-"+String(db.quotes.length+1).padStart(3,"0"),date:new Date().toISOString().slice(0,10),validUntil:"",project:currentProjectContext()||"",clientId:"",client:"",clientAddress:"",clientPhone:"",object:"",status:"Brouillon",vatEnabled:false,vatRate:20,discount:0,sections:[{title:"NOUVEAU LOT",items:[{no:"1.1",designation:"",unit:"",qty:1,pu:0}]}],notes:"Arrêté le présent devis à la somme indiquée ci-dessous.",createdBy:"ADMIN"}}
 let activeQuote=null,activeQuoteOriginalId="";
 function quoteEditor(id=""){
  if(user.role!=="ADMIN"){quotes();return}
  const existing=id?db.quotes.find(x=>x.id===id&&!x.deleted):null;if(id&&!existing)return alert("Devis introuvable.");activeQuote=existing?structuredClone(existing):newQuote();activeQuoteOriginalId=existing?.id||"";renderQuoteEditor();
 }
-function renderQuoteEditor(){let q=activeQuote,f=quoteFinancials(q);document.querySelector('#content').innerHTML=`<div class="quote-toolbar no-print"><div class="left"><button class="btn secondary" onclick="quotes()">← Liste des devis</button><button class="btn primary" onclick="saveQuote()">Enregistrer</button><button class="btn secondary" onclick="printA4AutoFit()">Imprimer / PDF</button>${activeQuoteOriginalId?`<button class="btn secondary" onclick="materialPlanPage('${q.id}')">Plan matériaux interne</button>`:""}</div><div class="right"><select onchange="activeQuote.status=this.value;renderQuoteEditor()" style="margin:0;width:150px"><option ${q.status==='Brouillon'?'selected':''}>Brouillon</option><option ${q.status==='Envoyé'?'selected':''}>Envoyé</option><option ${q.status==='Accepté'?'selected':''}>Accepté</option><option ${q.status==='Refusé'?'selected':''}>Refusé</option></select></div></div>
+function renderQuoteEditor(){
+ let q=activeQuote;
+ const clients=quoteClientCatalog(q),site=(db.projects||[]).find(p=>String(p.id)===String(q.project));
+ if(!q.client&&site?.client){const c=clients.find(x=>clientPaymentKey(clientNameFromRecord(x))===clientPaymentKey(site.client));if(c){q.clientId=c.id;q.client=clientNameFromRecord(c);q.clientAddress=clientAddressFromRecord(c);q.clientPhone=clientPhoneFromRecord(c);}}
+ const f=quoteFinancials(q);
+ document.querySelector('#content').innerHTML=`<div class="quote-toolbar no-print"><div class="left"><button class="btn secondary" onclick="quotes()">← Liste des devis</button><button class="btn primary" onclick="saveQuote()">Enregistrer</button><button class="btn secondary" onclick="printA4AutoFit()">Imprimer / PDF</button>${activeQuoteOriginalId?`<button class="btn secondary" onclick="materialPlanPage('${q.id}')">Plan matériaux interne</button>`:""}</div><div class="right"><select onchange="activeQuote.status=this.value;renderQuoteEditor()" style="margin:0;width:150px"><option ${q.status==='Brouillon'?'selected':''}>Brouillon</option><option ${q.status==='Envoyé'?'selected':''}>Envoyé</option><option ${q.status==='Accepté'?'selected':''}>Accepté</option><option ${q.status==='Refusé'?'selected':''}>Refusé</option></select></div></div>
  <div class="quote-editor">
   <div class="quote-head"><div class="quote-company"><img src="assets/logo_nysoa_construct.png"><div class="quote-company-info"><strong>ENTREPRISE NYSOA CONSTRUCT</strong><br>Construction - Bâtiment - Génie Civil - Travaux Publics<br>Lot 0708 K Ambohimena, Antsirabe<br>Téléphone / WhatsApp : +261 34 99 498 49<br>E-mail : hhajatiana15@gmail.com<br>Facebook : Entreprise NySoa Antsirabe</div></div><div class="quote-title-box"><h1>DEVIS</h1><div class="quote-no"><input value="${q.id}" ${activeQuoteOriginalId?"readonly":"onchange=\"activeQuote.id=this.value\""} style="text-align:right;font-weight:800"></div><div style="margin-top:8px">Date : <input type="date" value="${q.date}" onchange="activeQuote.date=this.value" style="width:150px;display:inline-block"></div></div></div>
-  <div class="quote-meta"><label>Client<input value="${esc(q.client)}" onchange="activeQuote.client=this.value"></label><label>Adresse<input value="${esc(q.clientAddress)}" onchange="activeQuote.clientAddress=this.value"></label><label>Téléphone<input value="${esc(q.clientPhone)}" onchange="activeQuote.clientPhone=this.value"></label><label>Validité<input type="date" value="${q.validUntil||''}" onchange="activeQuote.validUntil=this.value"></label></div>
-  <div class="quote-object"><label>Chantier<select onchange="activeQuote.project=this.value"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(q.project||"")===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label></div>
+  <div class="quote-meta"><label>Client<select id="quoteClientSelect" onchange="quoteChooseClient(this.value)" required><option value="">Choisir un client enregistré</option>${clients.map(c=>`<option value="${esc(c.id)}" ${String(q.clientId||"")===String(c.id)||(!q.clientId&&clientPaymentKey(q.client)===clientPaymentKey(clientNameFromRecord(c)))?"selected":""}>${esc(clientNameFromRecord(c))}${clientPhoneFromRecord(c)?` — ${esc(clientPhoneFromRecord(c))}`:""}</option>`).join("")}</select></label><label>Adresse<input value="${esc(q.clientAddress)}" readonly></label><label>Téléphone<input value="${esc(q.clientPhone)}" readonly></label><label>Validité<input type="date" value="${q.validUntil||''}" onchange="activeQuote.validUntil=this.value"></label></div>
+  <div class="quote-object"><label>Chantier<select onchange="quoteChooseProject(this.value)"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(q.project||"")===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label></div>
   <div class="quote-object"><label>Objet du devis<input value="${esc(q.object)}" onchange="activeQuote.object=this.value"></label></div>
+  <p class="admin-only-note no-print">Sélectionnez d’abord le chantier et son client dans la liste CLIENTS. Pour ajouter ou corriger un client, utilisez le module CLIENTS avant de revenir au devis.</p>
   <p class="admin-only-note no-print">Saisissez toutes les désignations du chantier (installation, gros œuvre, électricité, finition, etc.). Après enregistrement, chacune sera reprise dans le devis interne matériaux/matériels et dans le planning Gantt. Les prix du devis client restent confidentiels.</p>
   <div class="table-wrap"><table class="quote-table"><thead><tr><th style="width:60px">N°</th><th>DÉSIGNATION</th><th style="width:90px">UNITÉ</th><th style="width:100px">QUANTITÉ</th><th style="width:145px">PU</th><th style="width:155px">PRIX TOTAL</th><th class="no-print" style="width:55px"></th></tr></thead><tbody>${q.sections.map((s,si)=>quoteSectionHtml(s,si)).join('')}</tbody></table></div>
   <div class="quote-add-row no-print"><button class="btn secondary" onclick="addQuoteSection()">+ Ajouter un lot</button><button class="btn secondary" onclick="addQuoteItem(${Math.max(0,q.sections.length-1)})">+ Ajouter une ligne</button></div>
@@ -3540,6 +3571,13 @@ function saveQuote(){
  if(user?.role!=="ADMIN")return;
  const q=activeQuote,project=(db.projects||[]).find(p=>!p.deleted&&String(p.id)===String(q?.project));
  if(!project)return alert('Veuillez choisir un chantier actif.');
+ const clients=quoteClientCatalog(q);
+ const match=q.clientId?clients.find(c=>String(c.id)===String(q.clientId)):clients.find(c=>clientPaymentKey(clientNameFromRecord(c))===clientPaymentKey(q.client));
+ if(!match)return alert('Choisissez un client dans le volet CLIENTS avant d’enregistrer le devis.');
+ const sameName=clients.filter(c=>clientPaymentKey(clientNameFromRecord(c))===clientPaymentKey(clientNameFromRecord(match)));
+ if(sameName.length>1)return alert('Plusieurs fiches CLIENTS portent ce même nom. Corrigez les doublons avant de créer ce devis.');
+ if(project.client&&clientPaymentKey(project.client)!==clientPaymentKey(clientNameFromRecord(match)))return alert('Le client choisi ne correspond pas au client de ce chantier. Corrigez la fiche chantier ou sélectionnez son client.');
+ q.clientId=match.id;q.client=clientNameFromRecord(match);q.clientAddress=clientAddressFromRecord(match);q.clientPhone=clientPhoneFromRecord(match);
  if(!String(q.client||'').trim()||!String(q.object||'').trim())return alert('Veuillez renseigner le client et l’objet du devis.');
  const f=quoteFinancials(q);
  if(!Number.isFinite(+q.discount)||+q.discount<0||+q.discount>=f.ht)return alert('La réduction doit être positive ou nulle et inférieure au montant initial.');

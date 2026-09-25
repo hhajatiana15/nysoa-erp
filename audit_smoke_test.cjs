@@ -251,6 +251,23 @@ assert.equal(run(`db.projects.find(p=>p.chantier==='New Manual Site').budgetSour
 run(`db.projects.find(p=>p.id==='P-MAN').budgetSource='devis';syncProjectQuoteBudget('P-MAN')`);
 assert.equal(run(`projectBudgetAmount(db.projects.find(p=>p.id==='P-MAN'))`),110000000);
 console.log('PASS: budget manuel et devis au choix, client/contrat et facture manuelle, conversion explicite.');
+// A devis selects the registered client and cannot quietly attach a different chantier's client.
+run(`user={role:'ADMIN',username:'admin',uid:'U1'};cloudReady=false;
+db.modules.clients.push({id:'CLI-Z',values:['Mr Zahim','034 12 345 67','Antsirabe']},{id:'CLI-H',values:['Mme Hery','032 98 765 43','Tana']});
+db.projects.push({id:'P-Z',chantier:'HOMEOPHARMA',name:'Finition',client:'Mr Zahim',budgetSource:'devis'},{id:'P-H',chantier:'AUTRE',name:'Travaux',client:'Mme Hery',budgetSource:'devis'});
+activeQuote=newQuote();activeQuote.id='DEV-SELECT-CLIENT';activeQuote.project='P-Z';activeQuote.object='Finition bâtiment';activeQuote.sections[0].items[0].pu=1000;activeQuoteOriginalId='';renderQuoteEditor();`);
+assert.match(element('#content').innerHTML,/id="quoteClientSelect"/);
+assert.match(element('#content').innerHTML,/value="CLI-Z" selected/);
+assert.equal(run(`activeQuote.clientId`),'CLI-Z');
+assert.equal(run(`activeQuote.clientPhone`),'034 12 345 67');
+run(`quoteChooseClient('CLI-H');saveQuote()`);
+assert.match(messages.at(-1),/ne correspond pas au client de ce chantier/);
+assert.equal(run(`db.quotes.some(q=>q.id==='DEV-SELECT-CLIENT')`),false);
+run(`quoteChooseProject('P-H');saveQuote()`);
+assert.equal(run(`db.quotes.find(q=>q.id==='DEV-SELECT-CLIENT').clientId`),'CLI-H');
+assert.equal(run(`db.quotes.find(q=>q.id==='DEV-SELECT-CLIENT').client`),'Mme Hery');
+assert.equal(run(`db.quotes.find(q=>q.id==='DEV-SELECT-CLIENT').clientAddress`),'Tana');
+console.log('PASS: client du devis choisi dans CLIENTS, prérempli depuis le chantier, cohérence et identité enregistrée.');
 // 24-hour corrections must preserve the posted ledger until the Admin decides.
 run(`cloudReady=false;user={role:'GESTIONNAIRE',username:'manager',uid:'M1'};
 db.editRequests=[];

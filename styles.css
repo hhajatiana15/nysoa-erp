@@ -104,6 +104,7 @@ textarea{min-height:90px}.btn{border:0;border-radius:8px;padding:10px 14px;font-
  #content,#content *{visibility:visible!important}#content{position:absolute;left:0;top:0;width:100%;padding:0;margin:0}
  .main{padding:0}.layout{display:block}.quote-editor{box-shadow:none;border:0;border-radius:0}.quote-add-row,.quote-options,.quote-remove,.no-print{display:none!important}
  .quote-table th{position:static;background:#fff!important;color:#000!important;border:1px solid #000}.quote-table td{border-color:#000}.quote-section-row td{background:#eaf49d!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}.quote-summary .grand td{background:#eee!important;color:#000!important;border:1px solid #000}.quote-head{border-bottom:2px solid #000}
+ .quote-meta select,.quote-object select{appearance:none!important;-webkit-appearance:none!important;background:#fff!important;color:#000!important}
  @page{size:A4 landscape;margin:10mm}
 }
 
