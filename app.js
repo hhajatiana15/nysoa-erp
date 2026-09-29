@@ -113,7 +113,7 @@ const FIREBASE_CONFIG = {
   appId: "1:273810293592:web:15895e9279f2f331ce9b2d"
 };
 
-let fbApp=null, fbAuth=null, fbStore=null;
+let fbApp=null, fbAuth=null, fbStore=null, fbStorage=null;
 let cloudReady=false;
 let cloudListeners=[];
 let cloudCurrentPage="dashboard";
@@ -616,6 +616,7 @@ function showLoginMessage(message){
 }
 async function firebaseLogout(){
   stopPresence();
+  if(typeof unsavedModuleViews!=="undefined")unsavedModuleViews.clear();
   clearInterval(cloudAutoSyncTimer);
   cloudStopListeners();
   try{if(fbAuth)await fbAuth.signOut();}catch(e){}
@@ -626,6 +627,7 @@ function initFirebaseCloud(){
     fbApp=firebase.apps.length?firebase.app():firebase.initializeApp(FIREBASE_CONFIG);
     fbAuth=firebase.auth();
     fbStore=firebase.firestore();
+    fbStorage=firebase.storage();
     cloudReady=true;
     fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
     cloudStatusText(navigator.onLine?"Connexion…":"Hors ligne",navigator.onLine?"busy":"error");
@@ -978,6 +980,9 @@ const menus={
  CONTROLE:[["dashboard","◉","TABLEAU DE BORD"],["projects","🏗","GESTION DES CHANTIERS"],["qrAttendance","▣","SCAN BADGE QR"],["siteControls","📷","CONTRÔLE CHANTIER"],["attendance","◷","PRÉSENCE CHANTIER"],["situations","📊","SITUATION DE TRAVAUX"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]],
  TECHNICIEN:[["dashboard","◉","TABLEAU DE BORD"],["technicianMyIdentity","👤","MON IDENTITÉ"],["projects","🏗","CHANTIERS"],["qrAttendance","▣","SCAN BADGE QR"],["attendance","◷","POINTAGE"],["siteControls","📷","SUIVI CHANTIER"],["dailyReports","📝","RAPPORT JOURNALIER"],["reports","◔","RAPPORTS TECHNIQUES"]]
 };
+menus.ADMIN=menus.ADMIN.filter(item=>item[0]!=="clientReceipts");
+menus.ADMIN.find(item=>item[0]==="invoices")[2]="FACTURES & ENCAISSEMENTS";
+menus.GESTIONNAIRE.find(item=>item[0]==="clientReceipts")[2]="FACTURES & ENCAISSEMENTS";
 
 // Plan interne en lecture seule pour l'équipe terrain, avec édition réservée à l'Admin.
 for(const role of ["ADMIN","GESTIONNAIRE","CONTROLE","TECHNICIEN"]){
@@ -1581,7 +1586,33 @@ function clientProjects(client){const name=typeof client==="string"?client:clien
 function projectClientDetail(id){
  const p=accessibleProjects().find(x=>String(x.id)===String(id));if(!p)return alert("Chantier introuvable.");
  const client=projectClientRecord(p);
- $("#content").innerHTML=`<div class="panel"><h3>CHANTIER : ${esc(projectChantierName(p))}</h3><div class="panel-body"><button type="button" class="btn secondary" onclick="go('projects')">← Liste des chantiers</button><p><b>Client :</b> ${p.client?`<button type="button" class="entity-link" data-id="${esc(encodeURIComponent(client?.id||""))}" data-name="${esc(encodeURIComponent(p.client))}" onclick="clientProjectsPage(decodeURIComponent(this.dataset.id),decodeURIComponent(this.dataset.name))">${esc(client?clientNameFromRecord(client):p.client)}</button>`:"Non renseigné"}</p><p><b>Projet / travaux :</b> ${esc(projectWorkName(p))}</p><p><b>Début :</b> ${esc(p.start||"—")} · <b>Fin prévue :</b> ${esc(p.end||"—")}</p></div></div>`;
+ const contracts=Array.isArray(p.contractFiles)?p.contractFiles:[];
+ $("#content").innerHTML=`<div class="panel"><h3>CHANTIER : ${esc(projectChantierName(p))}</h3><div class="panel-body"><button type="button" class="btn secondary" onclick="go('projects')">← Liste des chantiers</button><p><b>Client :</b> ${p.client?`<button type="button" class="entity-link" data-id="${esc(encodeURIComponent(client?.id||""))}" data-name="${esc(encodeURIComponent(p.client))}" onclick="clientProjectsPage(decodeURIComponent(this.dataset.id),decodeURIComponent(this.dataset.name))">${esc(client?clientNameFromRecord(client):p.client)}</button>`:"Non renseigné"}</p><p><b>Projet / travaux :</b> ${esc(projectWorkName(p))}</p><p><b>Début :</b> ${esc(p.start||"—")} · <b>Fin prévue :</b> ${esc(p.end||"—")}</p></div></div><div class="panel"><h3>CONTRAT — PIÈCES JOINTES</h3><div class="panel-body"><p>Documents consultables sur ce chantier.</p>${contracts.length?contracts.map((c,i)=>`<p><button type="button" class="btn secondary" onclick="openProjectContract('${esc(encodeURIComponent(p.id))}',${i})">Voir ${esc(c.name||"Contrat")}</button> <small>${esc(c.uploadedAt||"")}</small></p>`).join(""):"<p>Aucun contrat joint.</p>"}${user.role==="ADMIN"?`<label>Ajouter un contrat PDF ou image (10 Mo maximum)<input type="file" accept=".pdf,image/png,image/jpeg,application/pdf" onchange="uploadProjectContract('${esc(encodeURIComponent(p.id))}',this)"></label><p id="contractUploadStatus" role="status"></p>`:""}</div></div>`;
+}
+async function uploadProjectContract(encodedId,input){
+ if(user?.role!=="ADMIN")return alert("Réservé à l’Admin.");
+ const p=accessibleProjects().find(x=>String(x.id)===decodeURIComponent(encodedId)),file=input?.files?.[0],status=document.getElementById("contractUploadStatus");
+ if(!p||!file)return;
+ if(!["application/pdf","image/png","image/jpeg"].includes(file.type)||file.size>10*1024*1024||!file.size)return alert("Choisissez un PDF ou une image PNG/JPEG de 10 Mo maximum.");
+ if(!cloudReady||!fbStorage)return alert("Connexion Cloud nécessaire pour joindre un contrat.");
+ input.disabled=true;if(status)status.textContent="Envoi du contrat…";
+ const path="contrats/"+encodeURIComponent(p.id)+"/"+Date.now()+"-"+Math.random().toString(36).slice(2)+"-"+file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+ try{
+  await fbStorage.ref(path).put(file,{contentType:file.type});
+  const before=cloneRecord(p),now=new Date().toISOString();
+  p.contractFiles=Array.isArray(p.contractFiles)?p.contractFiles:[];
+  p.contractFiles.push({name:file.name,path,contentType:file.type,size:file.size,uploadedAt:now,uploadedBy:user.username});
+  p.updatedAt=now;p.updatedBy=user.username;
+  audit("Ajout contrat","projects",p.id,file.name,before,cloneRecord(p));
+  save();const synced=await cloudUpsert("projects",p);projectClientDetail(p.id);
+  if(!synced)document.getElementById("contractUploadStatus").textContent="Fichier envoyé, mais synchronisation de la fiche chantier à relancer avant consultation sur un autre appareil.";
+ }catch(err){if(status)status.textContent="Échec de l’envoi : "+String(err?.message||err);input.disabled=false;}
+}
+async function openProjectContract(encodedId,index){
+ const p=accessibleProjects().find(x=>String(x.id)===decodeURIComponent(encodedId)),doc=p?.contractFiles?.[index];
+ if(!doc?.path||!fbStorage)return alert("Contrat indisponible.");
+ try{const url=await fbStorage.ref(doc.path).getDownloadURL();window.open(url,"_blank","noopener,noreferrer");}
+ catch(err){alert("Lecture du contrat impossible : "+String(err?.message||err));}
 }
 function clientProjectsPage(id="",name=""){
  const client=(db.modules?.clients||[]).find(c=>!c.deleted&&String(c.id)===String(id));
@@ -2645,72 +2676,105 @@ function clientReceiptsPage(){
  <div class="panel"><h3>SUIVI DES PAIEMENTS PAR CLIENT ET CHANTIER</h3><div class="table-wrap"><table><thead><tr><th>Chantier</th><th>Client</th><th>Montant du contrat</th><th>Encaissé validé</th><th>Pourcentage payé</th><th>Reste à payer</th></tr></thead><tbody>
  ${clientBalances.length?clientBalances.map(r=>`<tr><td>${esc(projectLabel(r.project))}</td><td>${esc(r.client)}</td><td>${r.contract?money(r.contract):"Contrat à renseigner"}</td><td>${money(r.received)}</td><td>${r.percent===null?"—":r.percent.toFixed(2)+" %"}</td><td><b>${r.contract?money(r.remaining):"—"}</b></td></tr>`).join(""):'<tr><td colspan="6">Aucun contrat ni encaissement enregistré.</td></tr>'}
  </tbody></table></div></div>
- <div class="panel"><h3>ENCAISSEMENTS CLIENTS</h3>
+ <div class="panel"><h3>FACTURES ET ENCAISSEMENTS CLIENTS</h3>
  <div class="panel-body">
-  <button class="btn primary" onclick="clientReceiptForm()">+ Nouvel encaissement</button>
+  <button class="btn primary" onclick="clientReceiptForm()">+ Nouvel encaissement</button> ${user.role==="ADMIN"?'<button class="btn secondary" onclick="invoicesPage()">Voir les factures</button>':""}
   <div class="notice">Pourcentage payé = somme des encaissements validés / montant du contrat client. Le reste à payer contrat est distinct de la créance déjà facturée.</div>
  </div>
  <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Client</th><th>Facture</th><th>Montant reçu</th><th>% du contrat</th><th>Mode</th><th>Référence</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
- ${rows.length?rows.map(r=>{const base=clientContractAmount(r.project,receiptClientName(r));return `<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(receiptClientName(r))}</td><td>${esc(r.invoiceId||"")}</td><td><b>${money(r.amount||0)}</b></td><td>${base?((+r.amount||0)/base*100).toFixed(2)+" %":"—"}</td><td>${esc(r.paymentMode||"")}</td><td>${esc(r.reference||"")}</td><td>${workflowBadge(r.status||"En attente")}</td><td><div class="edit-actions">
+ ${rows.length?rows.map(r=>{const base=clientContractAmount(r.project,receiptClientName(r));return `<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(receiptClientName(r))}</td><td>${esc(invoiceRows().find(i=>String(i.id)===String(r.invoiceId))?.invoiceNo||r.invoiceId||"En attente")}</td><td><b>${money(r.amount||0)}</b></td><td>${base?((+r.amount||0)/base*100).toFixed(2)+" %":"—"}</td><td>${esc(r.paymentMode||"")}</td><td>${esc(r.reference||"")}</td><td>${workflowBadge(r.status||"En attente")}</td><td><div class="edit-actions">
+ ${r.invoiceId&&invoiceRows().some(i=>String(i.id)===String(r.invoiceId))&&user.role==="ADMIN"?`<button class="btn-xs" onclick="invoiceDetail('${esc(r.invoiceId)}')">Voir / imprimer facture</button>`:""}
  ${user.role==="ADMIN"&&r.status==="En attente"?`<button class="btn-xs btn-edit" onclick="validateClientReceipt('${r.id}',true)">Valider</button><button class="btn-xs btn-delete" onclick="validateClientReceipt('${r.id}',false)">Rejeter</button>`:""}
- ${canOpenOwnEdit(r)?`<button class="btn-xs" onclick="clientReceiptForm('${r.id}')">${canUserChange(r)?"Modifier":"Demander correction"}</button>`:""}
+ ${canOpenOwnEdit(r)&&!r.generatedFromInvoice?`<button class="btn-xs" onclick="clientReceiptForm('${r.id}')">${canUserChange(r)?"Modifier":"Demander correction"}</button>`:""}
  </div></td></tr>`;}).join(""):`<tr><td colspan="10">Aucun encaissement.</td></tr>`}
  </tbody></table></div></div>`;
 }
 function clientReceiptForm(id="",projectOverride=""){
  const r=id?receiptRows().find(x=>String(x.id)===String(id)):null;
  if(id&&!r)return alert("Encaissement introuvable.");
+ if(r?.generatedFromInvoice)return alert("Cet encaissement est lié à une facture. Consultez la facture correspondante pour toute correction.");
  if(r&&!canOpenOwnEdit(r))return alert("Cet encaissement ne vous appartient pas.");
  const project=r?.project||projectOverride||sessionStorage.getItem("nysoa_receipt_form_project")||currentProjectContext()||"";
  const inv=invoiceRows().filter(x=>!project||String(x.project)===String(project));
+ const budgetProject=(db.projects||[]).find(p=>!p.deleted&&String(p.id)===String(project));
+ const canEnterDirectBudget=user.role==="ADMIN"&&budgetProject&&projectBudgetAmount(budgetProject)<=0&&acceptedQuotesForProject(project).length===0;
+ const draftId=r?.id||"ENC-"+Date.now()+"-"+Math.random().toString(36).slice(2,8);
+ const automaticReference=r?.reference||"REC-"+new Date().toISOString().slice(0,10).replace(/-/g,"")+"-"+draftId.slice(4).toUpperCase();
  const suggestedClient=r?.client||inv.find(i=>i.id===r?.invoiceId)?.client||(db.projects||[]).find(p=>String(p.id)===String(project))?.client||"";
  const clientSuggestions=[...new Set([...(db.modules?.clients||[]).filter(c=>!c.deleted).map(clientNameFromRecord),(db.projects||[]).find(p=>String(p.id)===String(project))?.client,...acceptedQuotesForProject(project).filter(q=>!q.deleted).map(q=>q.client),...inv.map(i=>i.client)].filter(Boolean))];
- $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEL"} ENCAISSEMENT CLIENT</h3><form id="fReceipt" data-receipt-id="${esc(r?.id||"")}" class="form-grid">
+ $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEL"} ENCAISSEMENT CLIENT</h3><form id="fReceipt" data-receipt-id="${esc(r?.id||"")}" data-draft-id="${esc(draftId)}" class="form-grid">
  <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
  <label>Chantier<select name="project" required onchange="receiptProjectChanged(this.value)"><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label>
- <label>Facture / tranche<select name="invoiceId" onchange="receiptInvoiceChanged(this.value)"><option value="">Paiement global chantier</option>${inv.map(i=>`<option value="${esc(i.id)}" ${i.id===r?.invoiceId?"selected":""}>${esc(i.id)} — ${money(i.trancheAmount||0)}</option>`).join("")}</select></label>
+ <label>Facture / tranche<select name="invoiceId" onchange="receiptInvoiceChanged(this.value)"><option value="">Créer une facture pour cette avance</option>${inv.map(i=>`<option value="${esc(i.id)}" ${i.id===r?.invoiceId?"selected":""}>${esc(invoiceDisplayNo(i))} — ${money(i.trancheAmount||0)}</option>`).join("")}</select></label>
  <label>Client<input name="client" id="receiptClient" list="receiptClientList" value="${esc(suggestedClient)}" oninput="recalcReceiptPayment()" required><datalist id="receiptClientList">${clientSuggestions.map(name=>`<option value="${esc(name)}"></option>`).join("")}</datalist></label>
- <label>Montant reçu (Ar)<input name="amount" id="receiptAmount" type="number" min="1" step="0.01" value="${+r?.amount||""}" oninput="recalcReceiptPayment()" required></label>
+ ${canEnterDirectBudget?`<label>Budget direct du chantier / contrat client (Ar)<input name="directBudget" id="receiptDirectBudget" type="number" min="1" step="0.01" oninput="recalcReceiptPayment()" required><small>Admin : montant contractuel sans devis validé. Il sera enregistré sur ce chantier et ce client.</small></label>`:""}
+ <label>Avance / montant reçu (Ar)<input name="amount" id="receiptAmount" type="number" min="1" step="0.01" value="${+r?.amount||""}" oninput="recalcReceiptPayment()" required></label>
  <label>Pourcentage de ce versement sur le contrat (%)<input name="paymentPercent" id="receiptPercent" type="number" min="0.01" max="100" step="0.01" oninput="receiptPercentChanged()"><small>Vous pouvez saisir le montant ou le pourcentage.</small></label>
  <label>Montant du contrat client<input id="receiptContract" readonly></label>
  <label>Déjà encaissé validé<input id="receiptPreviouslyPaid" readonly></label>
  <label>Reste à payer après ce versement<input id="receiptRemaining" readonly></label>
  <label>Mode<select name="paymentMode">${["Espèces","Virement","Mobile Money","Chèque","Autre"].map(x=>`<option ${r?.paymentMode===x?"selected":""}>${x}</option>`).join("")}</select></label>
- <label>Référence / reçu<input name="reference" value="${esc(r?.reference||"")}" required></label>
+ <label>Référence du reçu<input name="reference" value="${esc(automaticReference)}" readonly><small>Numéro généré automatiquement lors de la saisie.</small></label>
  <label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label>
  <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="sessionStorage.removeItem('nysoa_receipt_form_project');clientReceiptsPage()">Annuler</button></div></form></div>`;
  recalcReceiptPayment();
  $("#fReceipt").onsubmit=e=>{
   e.preventDefault();const f=new FormData(e.target),now=new Date().toISOString();
   const project=f.get("project"),client=String(f.get("client")||"").trim(),amount=+f.get("amount")||0,invoiceId=f.get("invoiceId")||"";
+  const directBudget=+(f.get("directBudget")||0),projectRecord=(db.projects||[]).find(p=>!p.deleted&&String(p.id)===String(project));
+  if(!projectRecord)return alert("Choisissez un chantier actif.");
+  if(directBudget){
+   if(user.role!=="ADMIN"||projectBudgetAmount(projectRecord)>0||acceptedQuotesForProject(project).length)return alert("Ce budget direct ne peut pas remplacer un contrat ou un devis existant.");
+   if(clientPaymentKey(projectRecord.client)!==clientPaymentKey(client))return alert("Le client doit correspondre au client du chantier pour saisir son budget direct.");
+   if(directBudget<totalInvoiced(project)-0.01)return alert("Le budget direct est inférieur aux factures déjà émises pour ce chantier.");
+  }
   const invoice=invoiceId?invoiceRows().find(i=>String(i.id)===String(invoiceId)):null;
   if(invoiceId&&!invoice)return alert("Facture introuvable ou supprimée.");
   if(invoice&&(!String(invoice.project||"")||String(invoice.project)!==String(project)||clientPaymentKey(invoice.client)!==clientPaymentKey(client)))return alert("La facture choisie doit appartenir à ce chantier et à ce client.");
-  const base=clientContractAmount(project,client);
+  const base=directBudget||clientContractAmount(project,client);
   const already=sum(receiptRows().filter(x=>x.id!==r?.id&&x.status==="Validé"&&String(x.project)===String(project)&&clientPaymentKey(receiptClientName(x))===clientPaymentKey(client)).map(x=>x.amount));
   if(amount<=0)return alert("Montant invalide.");
-  if(!base)return alert("Ajoutez un devis accepté ou une facture avec montant du contrat pour ce client et ce chantier.");
+  if(!base)return alert("Renseignez le budget direct du chantier (Admin) ou validez un devis avant d’enregistrer cette avance.");
   if(already+amount>base+0.01)return alert("L’encaissement de ce client dépasse le montant du contrat sur ce chantier.");
   if(invoice&&invoiceReceiptPaid(invoice.id,r?.id)+amount>invoiceLegacyAmount(invoice)+0.01)return alert("Le total des paiements attribués à cette facture dépasse son montant. Choisissez « Paiement global chantier » pour une avance non attribuée.");
-  const obj={id:r?.id||"ENC-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),date:f.get("date"),project,invoiceId,client,amount,paymentPercent:+(amount/base*100).toFixed(4),paymentMode:f.get("paymentMode"),reference:f.get("reference"),note:f.get("note")||"",status:r?.status|| (user.role==="ADMIN"?"Validé":"En attente"),owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};
+  const linkedOldInvoice=r?.invoiceId?invoiceRows().find(i=>String(i.id)===String(r.invoiceId)&&i.generatedFromReceipt===r.id):null;
+  if(linkedOldInvoice&&invoiceId&&invoiceId!==linkedOldInvoice.id)return alert("Cette facture est liée à l’encaissement. Modifiez-la depuis la facturation.");
+  if(!invoiceId&&user.role==="ADMIN"&&invoicePaidForProject(project,linkedOldInvoice?.id||"",client)+amount>base+0.01)return alert("Le contrat est déjà facturé. Sélectionnez la facture existante pour enregistrer son règlement.");
+  const receiptId=e.target.dataset.draftId;
+  const obj={id:receiptId,date:f.get("date"),project,invoiceId:invoiceId||linkedOldInvoice?.id||"",client,amount,paymentPercent:+(amount/base*100).toFixed(4),paymentMode:f.get("paymentMode"),reference:String(f.get("reference")||automaticReference).trim(),note:f.get("note")||"",status:r?.status|| (user.role==="ADMIN"?"Validé":"En attente"),owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};
+  const receiptBefore=r?cloneRecord(r):null;
   if(r&&requestEditIfRequired("clientReceipts",r,obj,clientReceiptsPage))return;
+  if(directBudget){
+   const before=cloneRecord(projectRecord);
+   projectRecord.budget=directBudget;projectRecord.manualBudget=directBudget;projectRecord.budgetSource="manuel";
+   projectRecord.updatedAt=now;projectRecord.updatedBy=user.username;
+   audit("Saisie budget direct depuis encaissement","projects",projectRecord.id,`${client} — ${money(directBudget)}`,before,cloneRecord(projectRecord));
+  }
   if(r)Object.assign(r,obj);else{obj.createdAt=now;db.clientReceipts.push(obj);}
-  save();clientReceiptsPage();
+  if(obj.status==="Validé"&&(!invoiceId||linkedOldInvoice)){
+   if(linkedOldInvoice){
+    const old=cloneRecord(linkedOldInvoice);
+    linkedOldInvoice.trancheAmount=amount;linkedOldInvoice.tranchePercent=amount/base*100;linkedOldInvoice.date=obj.date;linkedOldInvoice.quoteAmount=base;linkedOldInvoice.updatedAt=now;
+    audit("Actualisation facture liée","invoices",linkedOldInvoice.id,linkedOldInvoice.invoiceNo,old,cloneRecord(linkedOldInvoice));
+   }else obj.invoiceId=createInvoiceForReceipt(obj,base).id;
+  }
+  audit(r?"Modification encaissement":"Nouvel encaissement","clientReceipts",obj.id,`${client} — ${money(amount)} — ${obj.reference}`,receiptBefore,cloneRecord(obj));
+  save();if(directBudget)cloudSyncRecord("projects",projectRecord);if(obj.invoiceId&&(!invoiceId||linkedOldInvoice))cloudWriteGeneric("invoices",invoiceRows().find(i=>i.id===obj.invoiceId),"Facture liée à un paiement");clientReceiptsPage();
  };
 }
 function recalcReceiptPayment(){
  const f=document.getElementById("fReceipt");if(!f)return;
- const project=f.elements.project.value,client=f.elements.client.value,base=clientContractAmount(project,client);
+ const project=f.elements.project.value,client=f.elements.client.value,base=+(f.elements.directBudget?.value||0)||clientContractAmount(project,client);
  const currentId=f.dataset.receiptId||"";
  const already=sum(receiptRows().filter(r=>r.status==="Validé"&&String(r.id)!==currentId&&String(r.project)===String(project)&&clientPaymentKey(receiptClientName(r))===clientPaymentKey(client)).map(r=>r.amount));
- document.getElementById("receiptContract").value=base?money(base):"Contrat à renseigner";
+ document.getElementById("receiptContract").value=base?money(base):"Budget / contrat à renseigner";
  document.getElementById("receiptPreviouslyPaid").value=money(already);
  document.getElementById("receiptPercent").value=base&&+f.elements.amount.value?((+f.elements.amount.value)/base*100).toFixed(2):"";
  document.getElementById("receiptRemaining").value=base?money(Math.max(0,base-already-(+f.elements.amount.value||0))):"—";
 }
 function receiptPercentChanged(){
  const f=document.getElementById("fReceipt");if(!f)return;
- const base=clientContractAmount(f.elements.project.value,f.elements.client.value),percent=+document.getElementById("receiptPercent").value||0;
+ const base=+(f.elements.directBudget?.value||0)||clientContractAmount(f.elements.project.value,f.elements.client.value),percent=+document.getElementById("receiptPercent").value||0;
  if(!base){document.getElementById("receiptPercent").value="";return alert("Choisissez d’abord un client avec un devis accepté ou une facture avec montant du contrat.");}
  f.elements.amount.value=percent?+(base*percent/100).toFixed(2):"";
  recalcReceiptPayment();
@@ -2732,11 +2796,32 @@ function validateClientReceipt(id,accept){
   const other=sum(receiptRows().filter(x=>x.id!==r.id&&x.status==="Validé"&&String(x.project)===String(r.project)&&clientPaymentKey(receiptClientName(x))===clientPaymentKey(receiptClientName(r))).map(x=>x.amount));
   if(!base||other+(+r.amount||0)>base+0.01)return alert("Validation impossible : montant du contrat introuvable ou total encaissé supérieur au contrat de ce client.");
   if(r.invoiceId){const inv=invoiceRows().find(i=>String(i.id)===String(r.invoiceId));if(!inv||invoiceReceiptPaid(r.invoiceId,r.id)+(+r.amount||0)>invoiceLegacyAmount(inv)+0.01)return alert("Validation impossible : les paiements attribués dépassent le montant de cette facture.");}
+  if(!r.invoiceId){
+   if(invoicePaidForProject(r.project,"",receiptClientName(r))+(+r.amount||0)>base+0.01)return alert("Contrat déjà facturé : rattachez cet encaissement à une facture existante.");
+   r.invoiceId=createInvoiceForReceipt(r,base).id;
+  }
   r.status="Validé";r.validatedAt=new Date().toISOString();r.validatedBy=user.username;
  }else{
   r.status="Rejeté";r.rejectedAt=new Date().toISOString();r.rejectedBy=user.username;
  }
- r.updatedAt=new Date().toISOString();save();clientReceiptsPage();
+ r.updatedAt=new Date().toISOString();save();if(r.invoiceId&&accept)cloudWriteGeneric("invoices",invoiceRows().find(i=>i.id===r.invoiceId),"Facture liée à un paiement");clientReceiptsPage();
+}
+
+function createInvoiceForReceipt(receipt,contract){
+ const existing=invoiceRows().find(i=>i.generatedFromReceipt===receipt.id);
+ if(existing)return existing;
+ const project=(db.projects||[]).find(p=>String(p.id)===String(receipt.project));
+ const matchingQuotes=acceptedQuotesForProject(receipt.project).filter(q=>clientPaymentKey(q.client)===clientPaymentKey(receipt.client));
+ const quote=matchingQuotes.length===1?matchingQuotes[0]:null;
+ const invoice={id:generateInvoiceInternalId(),invoiceNo:generateInvoiceNumber(),date:receipt.date,project:receipt.project,
+  quoteId:quote?.id||"",client:receipt.client,billingClientName:receipt.client,
+  invoiceDesignation:"Acompte sur "+(quote?.object||projectWorkName(project)||projectChantierName(project)||"travaux"),
+  quoteAmount:contract,trancheAmount:+receipt.amount,tranchePercent:contract?(+receipt.amount)/contract*100:0,
+  invoiceType:"Tranche",generatedFromReceipt:receipt.id,workflow:"Validé",owner:user.username,
+  createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+ db.modules.invoices.push(invoice);
+ audit("Facture générée depuis encaissement","invoices",invoice.id,invoice.invoiceNo,null,cloneRecord(invoice));
+ return invoice;
 }
 
 
@@ -3029,7 +3114,7 @@ async function invoicesPage(){
  const recoverable=cloudStateInvoices.recoverable||0;
 
  $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>FACTURATION PAR CHANTIER</h3>
- <div class="panel-body"><button class="btn primary" onclick="invoiceForm()">+ Nouvelle tranche / facture</button>
+ <div class="panel-body"><button class="btn primary" onclick="invoiceForm()">+ Nouvelle facture avec paiement</button> <button class="btn secondary" onclick="clientReceiptsPage()">Encaissements / paiements</button>
  <button class="btn secondary" onclick="invoiceRecoveryPage()">🛟 Historique / récupération${recoverable?` (${recoverable})`:""}</button>
  ${legacyInvoiceRows().length?`<button class="btn secondary" onclick="legacyInvoiceReviewPage()">⚠ ${legacyInvoiceRows().length} ancienne(s) donnée(s) isolée(s)</button>`:""}
  ${restoredInvoices?`<div class="notice"><b>${restoredInvoices} facture(s) historique(s) récupérée(s) automatiquement.</b></div>`:""}
@@ -3080,8 +3165,9 @@ function invoiceForm(id="",projectOverride=""){
  <label>Total déjà facturé avant cette facture<input id="invoiceAlreadyPaid" value="${invoicePaidForProject(projectId,r?.id||"",r?.client||selectedQuote?.client||"",selectedQuoteId)}" readonly></label>
  <label>Reste à facturer après cette facture<input id="invoiceRemaining" value="0" readonly></label>
  <label>Déjà encaissé du client (validé)<input id="invoiceClientReceived" value="0" readonly></label>
- <label>Reste à payer du client sur son contrat<input id="invoiceClientDue" value="0" readonly></label>
- <div class="notice full">« Reste à facturer » = contrat − factures. « Reste à payer du client » = contrat − encaissements validés. Émettre une facture ne signifie pas que le client a payé.</div>
+ <label>Reste à payer après ce versement<input id="invoiceClientDue" value="0" readonly></label>
+ ${!r?'<label>Mode de paiement reçu<select name="paymentMode"><option>Espèces</option><option>Virement</option><option>Mobile Money</option><option>Chèque</option><option>Autre</option></select></label>':""}
+ <div class="notice full">Toute nouvelle facture créée ici enregistre également un encaissement validé du même montant. Les anciennes factures conservent leur historique de paiement.</div>
  <label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label>
  <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="sessionStorage.removeItem('nysoa_invoice_form_project');invoicesPage()">Annuler</button></div></form></div>`;
  recalcInvoiceForm();
@@ -3097,6 +3183,8 @@ function invoiceForm(id="",projectOverride=""){
   if(q&&Math.abs(amount-quoteFinancials(q).ttc)>0.01)return alert("Le montant du contrat doit correspondre au devis accepté sélectionné.");
   const activeProject=(db.projects||[]).find(p=>String(p.id)===String(project));
   const manualBudget=activeProject?.budgetSource==="manuel";
+  if(!activeProject||activeProject.deleted)return alert("Choisissez un chantier actif.");
+  if(!q&&!manualBudget&&!acceptedQuotesForProject(project).length)return alert("Saisissez d’abord le budget direct du chantier ou validez un devis.");
   if(manualBudget&&(clientPaymentKey(client)!==clientPaymentKey(activeProject.client)||Math.abs(amount-projectBudgetAmount(activeProject))>0.01))return alert("Le client et le montant du contrat doivent correspondre au budget saisi directement pour ce chantier.");
   if(!q&&!manualBudget&&acceptedQuotesForProject(project).length)return alert("Choisissez le devis accepté correspondant à ce client pour lier correctement la facture au budget du chantier.");
   if(!client)return alert("Veuillez renseigner le client.");
@@ -3106,8 +3194,13 @@ function invoiceForm(id="",projectOverride=""){
   const alreadyReceivedForInvoice=receiptRows().filter(rec=>rec.status==="Validé"&&String(rec.invoiceId)===String(r?.id||"")&&r?.id).reduce((n,rec)=>n+(+rec.amount||0),0);
   if(r&&alreadyReceivedForInvoice>0&&(String(r.project)!==String(project)||clientPaymentKey(r.client)!==clientPaymentKey(client)||String(r.quoteId||"")!==String(quoteId||"")))return alert("Facture liée à des paiements : chantier, client et devis ne peuvent plus être modifiés.");
   if(r&&alreadyReceivedForInvoice>tranche+0.01)return alert("Des encaissements validés sont déjà liés à cette facture et dépassent son nouveau montant.");
+  if(r&&alreadyReceivedForInvoice>0&&Math.abs(invoiceLegacyAmount(r)-tranche)>0.01)return alert("Cette facture a déjà un encaissement lié. Son montant ne peut plus être modifié sans corriger le paiement.");
   if(q&&!manualBudget&&Math.abs(projectBudgetAmount(activeProject)-sum(acceptedQuotesForProject(project).map(x=>quoteFinancials(x).ttc)))>0.01)return alert("Budget chantier et devis acceptés ne correspondent pas.");
   if(already+tranche>amount+0.01)return alert("Cette tranche dépasse le reste à facturer pour ce client et ce devis.");
+  if(!r){
+   const paid=sum(receiptRows().filter(rec=>rec.status==="Validé"&&String(rec.project)===String(project)&&clientPaymentKey(receiptClientName(rec))===clientPaymentKey(client)).map(rec=>rec.amount));
+   if(paid+tranche>amount+0.01)return alert("Ce paiement dépasserait le solde du contrat. Rattachez plutôt le règlement à une facture existante.");
+  }
   const before=r?cloneRecord(r):null,actor=effectiveUserIdentity();
   const obj={
    id:r?.id||f.get("recordId")||generateInvoiceInternalId(),
@@ -3118,6 +3211,14 @@ function invoiceForm(id="",projectOverride=""){
    updatedBy:actor.label||actor.username||user.username,updatedAt:new Date().toISOString()
   };
   if(r)Object.assign(r,obj);else{obj.createdAt=new Date().toISOString();db.modules.invoices.push(obj);}
+  if(!r){
+   const receiptId="ENC-FAC-"+obj.id,receipt={id:receiptId,date:obj.date,project,invoiceId:obj.id,client,amount:tranche,
+    paymentPercent:+(tranche/amount*100).toFixed(4),paymentMode:String(f.get("paymentMode")||"Espèces"),
+    reference:"REC-"+String(obj.date||"").replace(/-/g,"")+"-"+obj.id.slice(-8).toUpperCase(),
+    status:"Validé",owner:user.username,generatedFromInvoice:obj.id,createdAt:obj.createdAt,updatedAt:obj.updatedAt};
+   db.clientReceipts.push(receipt);obj.linkedReceiptId=receipt.id;
+   audit("Encaissement lié à facture","clientReceipts",receipt.id,`${client} — ${money(tranche)}`,null,cloneRecord(receipt));
+  }
   audit(r?"Modification facture":"Création facture","invoices",obj.id,`${obj.invoiceNo} — ${client} — ${money(tranche)}`,before,cloneRecord(obj));
   sessionStorage.removeItem("nysoa_invoice_form_project");
   saveLocalOnly();
@@ -3183,11 +3284,12 @@ function recalcInvoiceForm(changed=""){
  const rem=document.getElementById("invoiceRemaining");if(rem)rem.value=Math.max(0,amount-already-tranche).toFixed(2);
  const position=clientPaymentRows(project).find(x=>clientPaymentKey(x.client)===clientPaymentKey(client));
  const received=document.getElementById("invoiceClientReceived");if(received)received.value=(position?.received||0).toFixed(2);
- const due=document.getElementById("invoiceClientDue");if(due)due.value=position?.contract?position.remaining.toFixed(2):"Contrat à renseigner";
+ const due=document.getElementById("invoiceClientDue");if(due)due.value=position?.contract?Math.max(0,position.remaining-(existing?0:tranche)).toFixed(2):"Contrat à renseigner";
 }
 function deleteInvoice(id){
  if(user.role!=="ADMIN")return;
  const r=(db.modules.invoices||[]).find(x=>String(x.id)===String(id));if(!r)return;
+ if(receiptRows().some(x=>String(x.invoiceId)===String(id)&&x.status==="Validé"))return alert("Facture liée à un encaissement validé : corrigez d’abord les paiements auprès de l’Admin.");
  if(!confirm("Supprimer cette facture / tranche ?"))return;
  const before=cloneRecord(r),actor=effectiveUserIdentity();r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=actor.label||actor.username||user.username;r.updatedAt=r.deletedAt;
  audit("Suppression facture","invoices",r.id,"Facture/tranche supprimée",before,cloneRecord(r));saveLocalOnly();cloudWriteGeneric("invoices",r,"Facture supprimée");invoicesPage();
@@ -3285,7 +3387,7 @@ async function clientsRecoveredPage(){
  }
 }
 
-const GENERIC_FIELDS={clients:["Nom / raison sociale","Téléphone","Adresse"],suppliers:["Fournisseur","Téléphone","Spécialité"],stock:["Article","Quantité","Unité"],employees:["Matricule","Nom complet","Fonction"],payroll:["Employé","Mois","Net à payer"],bank:["Référence","Libellé","Montant"],accounting:["Journal","Libellé","Montant"],treasury:["Libellé","Échéance","Montant"],planning:["Activité","Début","Fin"],situations:["Situation","Période","Avancement"],technicalFollowup:["Chantier","Travaux du jour","Observation"],quality:["Contrôle","Résultat","Observation"],nonConformities:["Référence","Description","Action corrective"],equipment:["Matériel / engin","État","Affectation"],vehicles:["Véhicule","Immatriculation","État"],fuel:["Véhicule / engin","Quantité (L)","Montant"],invoices:["N° facture","Client","Montant"]};
+const GENERIC_FIELDS={clients:["Nom / raison sociale","Téléphone","Adresse","Personne de contact","E-mail","Chantier indicatif (modifiable)"],suppliers:["Fournisseur","Téléphone","Spécialité"],stock:["Article","Quantité","Unité"],employees:["Matricule","Nom complet","Fonction"],payroll:["Employé","Mois","Net à payer"],bank:["Référence","Libellé","Montant"],accounting:["Journal","Libellé","Montant"],treasury:["Libellé","Échéance","Montant"],planning:["Activité","Début","Fin"],situations:["Situation","Période","Avancement"],technicalFollowup:["Chantier","Travaux du jour","Observation"],quality:["Contrôle","Résultat","Observation"],nonConformities:["Référence","Description","Action corrective"],equipment:["Matériel / engin","État","Affectation"],vehicles:["Véhicule","Immatriculation","État"],fuel:["Véhicule / engin","Quantité (L)","Montant"],invoices:["N° facture","Client","Montant"]};
 function generic(page){
  if(page==="clients"&&!sessionStorage.getItem("nysoa_clients_recovery_done")){
   sessionStorage.setItem("nysoa_clients_recovery_done","1");
@@ -3297,8 +3399,8 @@ function generic(page){
  rows=(db.modules[page]||[]).filter(r=>!r.deleted&&(page==="clients"||matchesProjectContext(r)));
  $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>${label}</h3><div class="panel-body">
  <button class="btn primary" onclick="genericForm('${page}')">+ Nouvelle entrée</button><button class="btn secondary" onclick="exportBackup()">Sauvegarder les données</button></div>
- <div class="table-wrap"><table><thead><tr>${page==="clients"?"":`<th>Chantier</th>`}${fields.map(x=>`<th>${x}</th>`).join("")}<th>Statut</th><th>Actions</th></tr></thead><tbody>
- ${rows.length?rows.map(r=>`<tr>${page==="clients"?"":`<td>${esc(projectLabel(r.project))}</td>`}${fields.map((_,j)=>`<td>${page==="clients"&&j===0?`<button type="button" class="entity-link" data-id="${esc(encodeURIComponent(r.id))}" onclick="clientProjectsPage(decodeURIComponent(this.dataset.id))">${esc(clientNameFromRecord(r))}</button>`:esc(r.values?.[j]||"")}</td>`).join("")}<td>${workflowBadge(r.workflow)}</td><td><div class="edit-actions">${canOpenOwnEdit(r)?`<button class="btn-xs btn-edit" onclick="genericFormById('${page}','${r.id}')">${canUserChange(r)?"Modifier":"Demander correction"}</button>${canUserChange(r)?`<button class="btn-xs btn-delete" onclick="softDeleteGeneric('${page}','${r.id}')">Supprimer</button>`:""}`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showGenericHistory('${page}','${r.id}')">Historique</button></div></td></tr>`).join(""):`<tr><td colspan="${fields.length+3}">Aucune donnée pour ce chantier.</td></tr>`}
+ <div class="table-wrap"><table><thead><tr>${page==="clients"?"":`<th>Chantier</th>`}${fields.map(x=>`<th>${x}</th>`).join("")}${page==="clients"?"":"<th>Statut</th>"}<th>Actions</th></tr></thead><tbody>
+ ${rows.length?rows.map(r=>`<tr>${page==="clients"?"":`<td>${esc(projectLabel(r.project))}</td>`}${fields.map((_,j)=>`<td>${page==="clients"&&j===0?`<button type="button" class="entity-link" data-id="${esc(encodeURIComponent(r.id))}" onclick="clientProjectsPage(decodeURIComponent(this.dataset.id))">${esc(clientNameFromRecord(r))}</button>`:esc(r.values?.[j]||"")}</td>`).join("")}${page==="clients"?"":`<td>${workflowBadge(r.workflow)}</td>`}<td><div class="edit-actions">${canOpenOwnEdit(r)?`<button class="btn-xs btn-edit" onclick="genericFormById('${page}','${r.id}')">${canUserChange(r)?"Modifier":"Demander correction"}</button>${canUserChange(r)?`<button class="btn-xs btn-delete" onclick="softDeleteGeneric('${page}','${r.id}')">Supprimer</button>`:""}`:"<span>Verrouillé</span>"}<button class="btn-xs" onclick="showGenericHistory('${page}','${r.id}')">Historique</button></div></td></tr>`).join(""):`<tr><td colspan="${fields.length+2}">Aucune donnée.</td></tr>`}
  </tbody></table></div></div>`;
 }
 function genericForm(page,index=-1){
@@ -3307,11 +3409,12 @@ function genericForm(page,index=-1){
  const selectedProject=r?.project||currentProjectContext()||"";
  $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVELLE"} ENTRÉE</h3><form id="fGeneric" class="form-grid">
  ${page==="clients"?"":`<label>Chantier<select name="project" required><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(selectedProject)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label>`}
- ${fields.map((f,i)=>`<label>${f}<input name="v${i}" value="${esc(r?.values?.[i]||"")}" required></label>`).join("")}
- <label>Statut<select name="workflow">${["Brouillon","Soumis","À corriger","Validé"].filter(x=>user.role==="ADMIN"||x!=="Validé").map(x=>`<option ${r?.workflow===x?"selected":""}>${x}</option>`).join("")}</select></label>
+ ${fields.map((f,i)=>`<label>${f}<input name="v${i}" ${page==="clients"&&i===4?'type="email"':''} value="${esc(r?.values?.[i]||(page==="clients"&&i===5&&!r?"CHANTIER À DÉFINIR":""))}" ${page!=="clients"||i===0?"required":""}></label>`).join("")}
+ ${page==="clients"?"":`<label>Statut<select name="workflow">${["Brouillon","Soumis","À corriger","Validé"].filter(x=>user.role==="ADMIN"||x!=="Validé").map(x=>`<option ${r?.workflow===x?"selected":""}>${x}</option>`).join("")}</select></label>`}
  <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="generic('${page}')">Annuler</button></div></form></div>`;
  $("#fGeneric").onsubmit=e=>{
-  e.preventDefault();let f=new FormData(e.target),obj={id:r?.id||"GEN-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),project:page==="clients"?"":f.get("project"),values:fields.map((_,i)=>f.get("v"+i)),workflow:f.get("workflow"),owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
+  e.preventDefault();let f=new FormData(e.target),obj={id:r?.id||"GEN-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),project:page==="clients"?"":f.get("project"),values:fields.map((_,i)=>f.get("v"+i)||""),workflow:page==="clients"?"Validé":f.get("workflow"),owner:r?.owner||user.username,updatedBy:user.username,updatedAt:new Date().toISOString()};
+  if(page==="clients"&&(db.modules.clients||[]).some(c=>c!==r&&!c.deleted&&clientPaymentKey(clientNameFromRecord(c))===clientPaymentKey(obj.values[0])))return alert("Ce client existe déjà. Ouvrez sa fiche pour modifier ses coordonnées.");
   db.modules[page]=db.modules[page]||[];const before=r?cloneRecord(r):null;
   if(r&&requestEditIfRequired(page,r,obj,()=>generic(page)))return;
   if(r){pushHistory(r,"Modification",before);Object.assign(r,obj);audit("Modification","modules."+page,r.id,"Entrée modifiée",before,r)}
@@ -3682,7 +3785,33 @@ function numberToFrenchWords(value){
 // ===== IMPORT / EXPORT / IMPRESSION DIRECTE =====
 let currentPageForData = "dashboard";
 const originalGo = go;
-go = function(page){ currentPageForData = page; return originalGo(page); };
+// Keep the live editor nodes and their event handlers when the user visits another module.
+// A cached editor is scoped to the signed-in user and stays private on this device.
+const unsavedModuleViews=new Map();
+function editableModuleView(content){
+ return !!content?.querySelector('form, .quote-editor, .material-table');
+}
+function moduleDraftKey(page){return String(user?.uid||user?.username||'anonymous')+'::'+page;}
+go = function(page){
+ const content=document.getElementById('content'),previous=cloudCurrentPage;
+ if(content&&previous&&editableModuleView(content)){
+  if(document.activeElement?.closest?.('#content'))document.activeElement.blur();
+  const fragment=document.createDocumentFragment();
+  while(content.firstChild)fragment.appendChild(content.firstChild);
+  unsavedModuleViews.set(moduleDraftKey(previous),fragment);
+ }
+ currentPageForData=page;
+ const key=moduleDraftKey(page),draft=unsavedModuleViews.get(key);
+ if(draft&&content){
+  unsavedModuleViews.delete(key);
+  content.replaceChildren(draft);
+  cloudCurrentPage=page;
+  document.querySelectorAll('.menu-btn').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
+  renderGlobalProjectSelector();
+  return;
+ }
+ return originalGo(page);
+};
 
 function printCurrentView(){
   window.print();
