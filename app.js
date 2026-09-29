@@ -1287,6 +1287,26 @@ function clientPaymentRows(projectId="",asOf=erpToday()){
   return {...row,contract,received,remaining:Math.max(0,contract-received),percent:contract?received/contract*100:null};
  }).filter(row=>row.contract||row.received);
 }
+function quotePaymentPosition(q){
+ if(!q?.project||!q.client)return null;
+ const key=clientPaymentKey(q.client);
+ const validated=receiptRows().filter(r=>String(r.project)===String(q.project)&&clientPaymentKey(receiptClientName(r))===key&&r.status==="Validé");
+ const pending=receiptRows().filter(r=>String(r.project)===String(q.project)&&clientPaymentKey(receiptClientName(r))===key&&r.status==="En attente");
+ const contract=clientContractAmount(q.project,q.client);
+ return {contract,received:sum(validated.map(r=>+r.amount||+r.receivedAmount||0)),pending:sum(pending.map(r=>+r.amount||+r.receivedAmount||0)),count:validated.length};
+}
+function quotePaymentNotice(q){
+ if(q?.status!=="Accepté")return '<div class="notice no-print">Le devis ne constitue pas encore un budget accepté. Aucun encaissement n’est créé par son acceptation.</div>';
+ const p=quotePaymentPosition(q);
+ if(!p)return '';
+ const remaining=Math.max(0,p.contract-p.received);
+ const budget=projectBudgetAmount((db.projects||[]).find(x=>String(x.id)===String(q.project)));
+ return `<div class="notice no-print"><b>Budget issu du devis accepté : ${money(budget)}</b><br><b>Suivi du client ${esc(q.client)} sur ce chantier :</b> contrat ${money(p.contract)} · encaissé validé ${money(p.received)} · reste à payer ${money(remaining)}${p.pending?` · en attente de validation ${money(p.pending)}`:''}. <b>${p.count?'Paiement enregistré':'Aucun paiement validé'}</b>. L’acceptation du devis ne vaut pas paiement.${acceptedQuotesForProject(q.project).filter(x=>clientPaymentKey(x.client)===clientPaymentKey(q.client)).length>1?' Ces montants regroupent tous les devis acceptés de ce client sur ce chantier.':''} <button class="btn-xs" type="button" onclick="openQuoteClientPayments('${esc(encodeURIComponent(q.project))}')">Voir les encaissements</button></div>`;
+}
+function openQuoteClientPayments(encodedProject){
+ sessionStorage.setItem("nysoa_project_context",decodeURIComponent(encodedProject));
+ go("clientReceipts");
+}
 function totalValidatedQuotes(projectId=""){
  return acceptedQuotesForProject(projectId).filter(q=>!q.deleted)
   .reduce((n,q)=>n+quoteFinancials(q).ttc,0);
@@ -2840,15 +2860,15 @@ function projectBudgetAmount(project){
 function syncProjectQuoteBudget(projectId){
  const p=(db.projects||[]).find(row=>!row.deleted&&String(row.id)===String(projectId));
  if(!p)return;
- if(p.budgetSource==="manuel")return;
- const accepted=acceptedQuotesForProject(projectId),previous=+p.budget||0;
+ const accepted=acceptedQuotesForProject(projectId),previous=+p.budget||0,previousSource=p.budgetSource;
  if(accepted.length){
   if(p.budgetSource!=="devis")p.budgetBeforeQuote=previous;
   p.budget=sum(accepted.map(q=>quoteFinancials(q).ttc));p.budgetSource="devis";
  }else if(p.budgetSource==="devis"){
-  p.budget=0;
+  if(p.budgetBeforeQuote!=null){p.budget=+p.budgetBeforeQuote||0;p.budgetSource="manuel";delete p.budgetBeforeQuote;}
+  else p.budget=0;
  }else return;
- if(p.budget!==previous||p.budgetSource!=="devis"||!p.budgetQuoteSyncedAt){
+ if(p.budget!==previous||p.budgetSource!==previousSource||!p.budgetQuoteSyncedAt){
   p.budgetQuoteSyncedAt=new Date().toISOString();p.updatedAt=p.budgetQuoteSyncedAt;
   saveLocalOnly();cloudSyncRecord("projects",p);
  }
@@ -3686,7 +3706,7 @@ function saveMaterialForecast(){
 function quoteStatusClass(s){return s==="Accepté"?"qs-approved":s==="Refusé"?"qs-refused":s==="Envoyé"?"qs-sent":"qs-draft"}
 function quotes(){
  if(user.role!=="ADMIN"){document.querySelector("#content").innerHTML='<div class="panel"><div class="panel-body"><div class="admin-only-note">Le module Devis est réservé exclusivement à l’ADMIN.</div></div></div>';return}
- document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button>${readQuoteDraft()?'<button class="btn secondary" onclick="quoteEditor()">Reprendre le brouillon non enregistré</button>':''}</div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Chantier</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${db.quotes.filter(q=>!q.deleted).map(q=>{let f=quoteFinancials(q);return `<tr data-search="${(q.id+' '+q.client+' '+q.object).toLowerCase()}"><td><b>${q.id}</b></td><td>${q.date}</td><td>${esc(projectLabel(q.project))}</td><td>${q.client}</td><td>${q.object}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${q.status}</span></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${q.id}')">Ouvrir</button><button class="btn-xs btn-save" onclick="materialPlanPage('${q.id}')">Plan matériaux</button><button class="btn-xs btn-save" onclick="duplicateQuote('${q.id}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${q.id}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
+ document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button>${readQuoteDraft()?'<button class="btn secondary" onclick="quoteEditor()">Reprendre le brouillon non enregistré</button>':''}</div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle. Un devis accepté forme le budget ; seuls les encaissements validés comptent comme paiement.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Chantier</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Paiement client / chantier</th><th>Actions</th></tr></thead><tbody>${db.quotes.filter(q=>!q.deleted).map(q=>{let f=quoteFinancials(q),payment=q.status==="Accepté"?quotePaymentPosition(q):null;return `<tr data-search="${esc((q.id+' '+q.client+' '+q.object).toLowerCase())}"><td><b>${esc(q.id)}</b></td><td>${esc(q.date)}</td><td>${esc(projectLabel(q.project))}</td><td>${esc(q.client)}</td><td>${esc(q.object)}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${esc(q.status)}</span></td><td>${payment?`${payment.count?`Encaissé ${money(payment.received)}`:'Aucun paiement validé'}<br>Reste ${money(Math.max(0,payment.contract-payment.received))}${payment.pending?`<br>En attente ${money(payment.pending)}`:''}`:'—'}</td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${esc(q.id)}')">Ouvrir</button><button class="btn-xs btn-save" onclick="materialPlanPage('${esc(q.id)}')">Plan matériaux</button><button class="btn-xs btn-save" onclick="duplicateQuote('${esc(q.id)}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${esc(q.id)}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
 }
 function filterQuotes(){let v=(document.querySelector('#quoteSearch')?.value||'').toLowerCase();document.querySelectorAll('#quoteList tbody tr').forEach(r=>r.style.display=r.dataset.search.includes(v)?'':'none')}
 function newQuote(){return{id:"DEV-"+new Date().getFullYear()+"-"+String(db.quotes.length+1).padStart(3,"0"),date:new Date().toISOString().slice(0,10),project:currentProjectContext()||"",clientId:"",client:"",clientAddress:"",clientPhone:"",object:"",status:"Brouillon",vatEnabled:false,vatRate:20,discount:0,sections:[{title:"NOUVEAU LOT",items:[{no:"1.1",designation:"",unit:"",qty:1,pu:0}]}],notes:"Arrêté le présent devis à la somme indiquée ci-dessous.",createdBy:"ADMIN"}}
@@ -3738,6 +3758,7 @@ function renderQuoteEditor(){
   <div class="quote-object"><label>Chantier<select onchange="quoteChooseProject(this.value)"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(q.project||"")===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}<option value="__new__">+ Saisir un nouveau chantier…</option></select></label><div id="quoteNewProject" class="no-print" hidden><label>Nouveau chantier / lieu<input id="quoteNewProjectName" placeholder="Saisir le nom du chantier" maxlength="120" onkeydown="if(event.key==='Enter'){event.preventDefault();quoteCreateProject()}"></label><button type="button" class="btn secondary" onclick="quoteCreateProject()">Ajouter ce chantier</button></div></div>
   <div class="quote-object"><label>Objet du devis<input value="${esc(q.object)}" onchange="activeQuote.object=this.value"></label></div>
   <p class="admin-only-note no-print">Sélectionnez d’abord le client dans CLIENTS. Si le chantier n’existe pas, saisissez-le dans le choix « Chantier » ; il sera ajouté à la liste avec un budget issu du devis accepté.</p>
+  ${q.status==="Accepté"&&activeQuoteOriginalId&&db.quotes.some(saved=>!saved.deleted&&saved.id===q.id&&saved.status==="Accepté")?quotePaymentNotice(db.quotes.find(saved=>!saved.deleted&&saved.id===q.id)):q.status==="Accepté"?'<div class="notice no-print">Enregistrez le devis accepté pour actualiser le budget et afficher les paiements du client. Aucun encaissement n’est créé automatiquement.</div>':''}
   <p class="admin-only-note no-print">Saisissez toutes les désignations du chantier (installation, gros œuvre, électricité, finition, etc.). Après enregistrement, chacune sera reprise dans le devis interne matériaux/matériels et dans le planning Gantt. Les prix du devis client restent confidentiels.</p>
   <div class="table-wrap"><table class="quote-table"><thead><tr><th style="width:60px">N°</th><th>DÉSIGNATION</th><th style="width:90px">UNITÉ</th><th style="width:100px">QUANTITÉ</th><th style="width:145px">PU</th><th style="width:155px">PRIX TOTAL</th><th class="no-print" style="width:55px"></th></tr></thead><tbody>${q.sections.map((s,si)=>quoteSectionHtml(s,si)).join('')}</tbody></table></div>
   <div class="quote-add-row no-print"><button class="btn secondary" onclick="addQuoteSection()">+ Ajouter un lot</button><button class="btn secondary" onclick="addQuoteItem(${Math.max(0,q.sections.length-1)})">+ Ajouter une ligne</button></div>
@@ -3779,6 +3800,10 @@ function saveQuote(){
   const other=sum(acceptedQuotesForProject(q.project).filter(x=>x.id!==q.id&&clientPaymentKey(x.client)===clientPaymentKey(q.client)).map(x=>quoteFinancials(x).ttc));
   const paid=sum(receiptRows().filter(r=>r.status==='Validé'&&String(r.project)===String(q.project)&&clientPaymentKey(receiptClientName(r))===clientPaymentKey(q.client)).map(r=>r.amount||r.receivedAmount));
   if(other+f.ttc+0.01<paid)return alert('Le devis final ne peut pas être inférieur aux encaissements déjà validés pour ce client et ce chantier.');
+  const newBudget=sum(acceptedQuotesForProject(q.project).filter(x=>x.id!==q.id).map(x=>quoteFinancials(x).ttc))+f.ttc;
+  const billed=sum(invoiceRows().filter(i=>String(i.project)===String(q.project)).map(invoiceLegacyAmount));
+  const allPaid=sum(receiptRows().filter(r=>r.status==='Validé'&&String(r.project)===String(q.project)).map(r=>+r.amount||+r.receivedAmount||0));
+  if(newBudget+0.01<Math.max(billed,allPaid))return alert('Le budget des devis acceptés serait inférieur aux factures émises ou aux encaissements validés sur ce chantier. Corrigez les montants avant de remplacer le budget direct.');
  }
  const saved={...structuredClone(q),createdAt:old?.createdAt||now,updatedAt:now};
  if(idx>=0)db.quotes[idx]=saved;else db.quotes.push(saved);
@@ -3786,7 +3811,8 @@ function saveQuote(){
  if(old?.project&&old.project!==saved.project)syncProjectQuoteBudget(old.project);
  syncProjectQuoteBudget(saved.project);
  clearQuoteDraft();unsavedModuleViews.delete(moduleDraftKey('quotes'));
- alert('Devis enregistré. '+(saved.status==='Accepté'?(project.budgetSource==='manuel'?`Budget direct conservé : ${money(projectBudgetAmount(project))}.`:`Budget chantier actualisé : ${money(projectBudgetAmount(project))}.`):''));quotes();
+ const position=saved.status==='Accepté'?quotePaymentPosition(saved):null;
+ alert('Devis enregistré. '+(position?`Budget chantier actualisé : ${money(projectBudgetAmount(project))}. Encaissement validé du client : ${money(position.received)}. Reste à payer : ${money(Math.max(0,position.contract-position.received))}.` : 'Aucun paiement créé automatiquement.'));quotes();
 }
 function duplicateQuote(id){if(user?.role!=="ADMIN")return;const source=db.quotes.find(x=>x.id===id&&!x.deleted);if(!source)return;let q=structuredClone(source),now=new Date().toISOString();q.id='DEV-'+new Date().getFullYear()+'-'+String(db.quotes.length+1).padStart(3,'0');while(db.quotes.some(x=>x.id===q.id))q.id='DEV-'+new Date().getFullYear()+'-'+Math.random().toString(36).slice(2,8).toUpperCase();q.status='Brouillon';q.date=erpToday();q.createdAt=now;q.updatedAt=now;delete q.deleted;delete q.materialForecast;db.quotes.push(q);saveLocalOnly();cloudWriteGeneric('quotes',q,'Copie de devis');quotes()}
 function deleteQuote(id){if(user?.role!=="ADMIN")return;const q=db.quotes.find(x=>x.id===id&&!x.deleted);if(!q)return;if(invoiceRows().some(i=>String(i.quoteId)===String(id)))return alert('Ce devis est lié à une facture. Conservez-le pour préserver le contrat client.');if(q.status==='Accepté'&&receiptRows().some(r=>r.status==='Validé'&&String(r.project)===String(q.project)&&clientPaymentKey(receiptClientName(r))===clientPaymentKey(q.client)))return alert('Ce devis accepté correspond à des encaissements validés ; conservez-le pour préserver le solde client.');if(!confirm('Déplacer ce devis dans la corbeille ?'))return;q.deleted=true;q.deletedAt=new Date().toISOString();q.deletedBy=user.username;q.updatedAt=q.deletedAt;saveLocalOnly();cloudWriteGeneric('quotes',q,'Devis supprimé');syncProjectQuoteBudget(q.project);quotes()}

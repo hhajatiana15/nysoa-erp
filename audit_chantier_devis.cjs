@@ -25,6 +25,6 @@ vm.runInContext(app.slice(start,end),ctx);
  await vm.runInContext('quoteCreateProject()',ctx);
  assert.equal(projects.length,1);assert.match(notice,/existe déjà/);
  assert(!/<label>Validité/.test(app));assert(!pdf.includes("['VALIDITÉ'"));
- assert(html.includes('app.js?v=4.9.9-finance-navigation')&&html.includes('quote-pdf.js?v=4.9.8-sans-validite'));
+ assert(html.includes('app.js?v=4.9.10-devis-paiements')&&html.includes('quote-pdf.js?v=4.9.8-sans-validite'));
  console.log('PASS: nouveau chantier lié au client et au devis, liste mise à jour, doublon refusé, validité absente du devis et PDF.');
 })().catch(e=>{console.error(e);process.exit(1)});

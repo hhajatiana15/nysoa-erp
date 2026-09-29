@@ -1,4 +1,10 @@
-# NYSOA — patch cumulatif 4.9.9 (29/09/2026)
+# NYSOA — patch cumulatif 4.9.10 (29/09/2026)
+
+## Devis accepté et encaissement
+
+- À l'enregistrement d'un devis **Accepté**, son montant final après remise et TVA alimente immédiatement le budget du chantier, y compris si ce chantier avait auparavant un budget saisi directement. L'ancien montant direct est conservé pour un éventuel retour au mode direct si tous les devis acceptés sont retirés sans facture ni encaissement associé.
+- La liste des devis et la fiche d'un devis accepté montrent les **paiements validés** du client sur ce chantier, le montant en attente de validation et le reste à payer. Le bouton « Voir les encaissements » ouvre le module sur ce chantier.
+- L'acceptation ne crée ni encaissement ni facture. Une facture émise ne prouve pas un paiement. Les montants affichés regroupent le client et le chantier ; plusieurs devis acceptés pour le même client y sont additionnés. Une conversion du budget est bloquée si son nouveau montant serait inférieur aux factures ou aux encaissements déjà enregistrés.
 
 ## Finances
 
@@ -22,9 +28,9 @@ Les boutons **← Précédent** et **Suivant →** se trouvent avant le choix du
 
 1. Faire une **Sauvegarde complète Admin** et conserver une copie des fichiers actuels du dépôt GitHub. Ne pas effacer de données Firebase.
 2. Déposer **ensemble** `app.js`, `index.html` et `quote-pdf.js` à la racine du dépôt `nysoa-erp`. Conserver tous les autres fichiers existants (`styles.css`, bibliothèques, images, etc.). Si ces trois fichiers ont été modifiés indépendamment depuis le dernier patch, fusionner ces changements plutôt que les écraser.
-3. Publier GitHub Pages puis recharger la page sur Mac et téléphone. Le paramètre `app.js?v=4.9.9-finance-navigation` force le renouvellement du cache du script.
-4. Tester avec un chantier d'essai dans une session Admin : facture seule, encaissement seul, paiement affecté à une facture, impression du reçu ; visiter DEVIS → Facturation → Précédent → Suivant en saisissant un brouillon DEVIS. Vérifier les soldes sur les deux appareils. L'accès Firebase authentifié, la synchronisation Cloud et l'impression physique n'ont pas été vérifiés depuis cet environnement.
+3. Publier GitHub Pages puis recharger la page sur Mac et téléphone. Le paramètre `app.js?v=4.9.10-devis-paiements` force le renouvellement du cache du script.
+4. Tester avec un chantier d'essai dans une session Admin : accepter un devis et vérifier le budget ; ouvrir les encaissements avant puis après validation d'une avance ; facture seule, encaissement seul, paiement affecté à une facture, impression du reçu ; visiter DEVIS → Facturation → Précédent → Suivant en saisissant un brouillon DEVIS. Vérifier les soldes sur les deux appareils. L'accès Firebase authentifié, la synchronisation Cloud et l'impression physique n'ont pas été vérifiés depuis cet environnement.
 
 ## Contrôles locaux réalisés
 
-`node --check app.js`, `node --check quote-pdf.js`, `node audit_encaissement_direct.cjs`, `node audit_navigation_erp.cjs`, `node audit_devis_navigation.cjs`, `node audit_chantier_devis.cjs`, `node audit_brouillons_clients.cjs` : réussite. Les tests emploient un DOM simulé et les fonctions financières du projet ; ils ne remplacent pas un essai complet dans le site authentifié.
+`node --check app.js`, `node --check quote-pdf.js`, `node audit_devis_paiement.cjs`, `node audit_encaissement_direct.cjs`, `node audit_navigation_erp.cjs`, `node audit_devis_navigation.cjs`, `node audit_chantier_devis.cjs`, `node audit_brouillons_clients.cjs` : réussite. Les tests emploient un DOM simulé et les fonctions financières du projet ; ils ne remplacent pas un essai complet dans le site authentifié.
