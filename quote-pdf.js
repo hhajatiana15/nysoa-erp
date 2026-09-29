@@ -71,11 +71,11 @@ async function buildQuotePdf(quote,logoBytes){
  };
  const tableHeading=()=>{row(['N°','DÉSIGNATION','UNITÉ','QTÉ','PU (Ar)','TOTAL (Ar)'],24,true);};
  head();
- const meta=[['CLIENT',quote.client],['ADRESSE',quote.clientAddress],['TÉLÉPHONE',quote.clientPhone],['VALIDITÉ',quote.validUntil||'-']];
+ const meta=[['CLIENT',quote.client],['ADRESSE',quote.clientAddress],['TÉLÉPHONE',quote.clientPhone]];
  meta.forEach(([label,value],i)=>{
-  const x=L+i*190;
+  const x=L+i*250;
   txt(label,x,y,8,bold,gray);
-  para(value||'-',x,y-15,181,10,bold,13);
+  para(value||'-',x,y-15,235,10,bold,13);
  });
  y-=55;
  txt('CHANTIER',L,y,8,bold,gray);txt(projectLabel(quote.project),L+67,y,10,bold);
