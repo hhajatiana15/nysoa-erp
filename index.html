@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="nysoa-sync-version" content="4.9.2-login-fix">
+  <meta name="nysoa-sync-version" content="4.9.11-cloud-reconciliation">
 <title>ERP NYSOA CONSTRUCT</title>
   <link rel="stylesheet" href="styles.css" />
   <style>
@@ -88,7 +88,7 @@
           <button class="btn secondary" onclick="printCurrentView()">🖨 Impression directe</button>
           <button class="btn secondary" onclick="exportCurrentModuleCSV()">⬇ Exporter CSV</button>
           <button class="btn primary" onclick="openImportDialog()">⬆ Importer Excel / CSV</button>
-          <button id="cloudSyncBtn" class="btn cloud-sync-btn" onclick="cloudSyncNow()" title="Secours uniquement — la synchronisation normale est automatique">☁ Synchronisation de secours</button>
+          <button id="cloudSyncBtn" class="btn cloud-sync-btn" onclick="cloudSyncNow()" title="Vérifier les données locales non envoyées et relancer les envois Cloud">☁ Vérifier / synchroniser</button>
           <button class="btn secondary" onclick="exportBackup()">💾 Sauvegarde complète Admin</button>
           <button id="resetTestDataBtn" class="btn secondary hidden" onclick="resetTestTransactions()">🧹 Effacer les données d’essai</button>
           <input id="externalImportFile" type="file" accept=".xlsx,.xls,.csv,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/json" class="hidden" onchange="handleExternalImport(event)">
@@ -100,7 +100,7 @@
 
     <footer class="footer">
       <span>© 2026 ENTREPRISE NYSOA CONSTRUCT - Tous droits réservés</span>
-      <span>Logiciel de Gestion BTP - Version 4.9.1 CHANTIER / PROJET SÉPARÉS</span>
+      <span>Logiciel de Gestion BTP - Version 4.9.11</span>
       <span>Téléphone / WhatsApp : +261 34 99 498 49</span>
     </footer>
   </div>
@@ -113,7 +113,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
   <script src="qrcode.min.js"></script>
   <script src="pdf-lib.min.js"></script>
-  <script src="app.js?v=4.9.10-devis-paiements"></script>
+  <script src="app.js?v=4.9.11-cloud-reconciliation"></script>
   <script src="quote-pdf.js?v=4.9.8-sans-validite"></script>
 </body>
 </html>

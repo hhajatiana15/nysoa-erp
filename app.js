@@ -123,6 +123,48 @@ let cloudState={status:"Initialisation…",lastSync:null,error:null};
 let presenceTimer=null;
 let adminNotifUnsub=null;
 let cloudAutoSyncTimer=null;
+const cloudSnapshotReady=new Set();
+const cloudListenerErrors=new Map();
+const cloudWriteErrors=new Map();
+const cloudMissingLocal=new Map();
+let cloudPendingWrites={};
+let cloudPendingOwner="";
+let cloudAutoSyncRunning=false;
+
+function cloudPendingStorageKey(){return "nysoa_pending_cloud_writes_"+String(user?.uid||"");}
+function loadCloudPendingWrites(){
+ const owner=String(user?.uid||"");
+ if(!owner||owner===cloudPendingOwner)return;
+ cloudPendingOwner=owner;
+ try{cloudPendingWrites=JSON.parse(localStorage.getItem(cloudPendingStorageKey())||"{}");}
+ catch(_){cloudPendingWrites={};}
+ if(!cloudPendingWrites||typeof cloudPendingWrites!=="object"||Array.isArray(cloudPendingWrites))cloudPendingWrites={};
+}
+function persistCloudPendingWrites(){if(user?.uid)localStorage.setItem(cloudPendingStorageKey(),JSON.stringify(cloudPendingWrites));cloudRefreshStatus();}
+function cloudPendingKey(collection,id){return collection+"::"+String(id);}
+function queueCloudWrite(collection,record){
+ if(!user?.uid||!record?.id)return;
+ loadCloudPendingWrites();
+ cloudPendingWrites[cloudPendingKey(collection,record.id)]={collection,id:String(record.id)};
+ persistCloudPendingWrites();
+}
+function clearCloudWrite(collection,record,writtenFingerprint){
+ if(!user?.uid||!record?.id)return;
+ const key=cloudPendingKey(collection,record.id);
+ if(recordFingerprint(record)!==writtenFingerprint)return;
+ if(cloudPendingWrites[key]){delete cloudPendingWrites[key];persistCloudPendingWrites();}
+}
+function cloudRefreshStatus(){
+ if(!navigator.onLine){cloudStatusText("Hors ligne","error");return;}
+ if(!user){cloudStatusText("Connexion…","busy");return;}
+ const pending=Object.keys(cloudPendingWrites).length;
+ if(cloudListenerErrors.size){cloudStatusText("Erreur Cloud — "+[...cloudListenerErrors.keys()].join(", "),"error");return;}
+ if(cloudWriteErrors.size){cloudStatusText("Erreur envoi — "+[...cloudWriteErrors.keys()].join(", "),"error");return;}
+ if(pending){cloudStatusText(pending+" donnée(s) en attente de sync","busy");return;}
+ if(cloudMissingLocal.size){cloudStatusText(cloudMissingLocal.size+" donnée(s) locales à vérifier","busy");return;}
+ if(cloudSnapshotReady.size<CLOUD_BUSINESS_COLLECTIONS.length){cloudStatusText("Chargement Cloud…","busy");return;}
+ cloudStatusText("Synchronisé","ok");
+}
 
 const CLOUD_MODULE_COLLECTIONS=new Set(["attendanceWeekly","attendanceQR","employees","payroll","purchases","stock","stockMovements","invoices","clients","suppliers","bank","accounting","treasury","planning","situations","technicalFollowup","quality","nonConformities","equipment","vehicles","fuel","cashEntries","employeeAdvances"]);
 const CLOUD_BUSINESS_COLLECTIONS=["projects","quotes","invoices","clientReceipts","requests","editRequests","appro","expenses","purchases","stock","stockMovements","employees","payroll","siteControls","reports","dailyReports","attendanceWeekly","attendanceQR","usageSessions","clients","suppliers","bank","accounting","treasury","planning","situations","technicalFollowup","quality","nonConformities","equipment","vehicles","fuel","cashEntries","employeeAdvances"];
@@ -203,20 +245,24 @@ async function createAdminNotification(module,title,detail,entityId){
 }
 async function cloudWriteGeneric(collection,record,notifyTitle=""){
  if(!user||!record?.id)return;
+ queueCloudWrite(collection,record);
  logUserActivity(notifyTitle||"Enregistrement / modification",collection,record.id,record.project||record.employeeName||"");
- if(!cloudReady)return;
+ if(!cloudReady||!navigator.onLine||!cloudSnapshotReady.has(collection))return false;
  try{
+ const key=cloudPendingKey(collection,record.id),remoteTs=cloudRemoteVersions.get(key),localTs=businessTimestamp(record);
+ if(remoteTs!==undefined&&cloudFingerprints.get(key)!==recordFingerprint(record)&&remoteTs>=localTs){record.__syncConflict=true;saveLocalOnly();cloudRefreshStatus();return false;}
  const payload=cloudSanitize({...record,cloudSyncedAt:new Date().toISOString()});delete payload.__syncConflict;
+ const writtenFingerprint=recordFingerprint(record);
  await fbStore.collection(collection).doc(String(record.id)).set(payload,{merge:true});
+ cloudWriteErrors.delete(collection);cloudMissingLocal.delete(key);
  record.cloudSyncedAt=payload.cloudSyncedAt;
- const key=collection+"::"+String(record.id);
  cloudFingerprints.set(key,recordFingerprint(record));cloudRemoteVersions.set(key,businessTimestamp(record));
  if(notifyTitle&&!record.cloudNotifiedAt&&user.role!=="ADMIN"){
   await createAdminNotification(collection,notifyTitle,`${user.label||user.username} — ${record.project||record.id}`,record.id);
   record.cloudNotifiedAt=new Date().toISOString();
  }
- saveLocalOnly();cloudMarkSynced();
-}catch(e){console.warn("cloud generic",collection,e);}
+ saveLocalOnly();clearCloudWrite(collection,record,writtenFingerprint);cloudMarkSynced();return true;
+}catch(e){console.warn("cloud generic",collection,e);cloudState.error=e.message||String(e);cloudWriteErrors.set(collection,cloudState.error);cloudRefreshStatus();return false;}
 }
 let cloudRealtimeRenderTimer=null;
 const cloudFingerprints=new Map();
@@ -304,6 +350,7 @@ function startExtendedRealtimeListeners(){
  CLOUD_BUSINESS_COLLECTIONS.forEach(collection=>{
   try{
    cloudListeners.push(fbStore.collection(collection).onSnapshot(s=>{
+    if(!s.metadata?.fromCache){cloudSnapshotReady.add(collection);cloudListenerErrors.delete(collection);}
     let local=cloudCollectionLocalRows(collection);
     const remote=s.docs.map(d=>({id:d.id,...d.data()}));
     const map=new Map(local.map(r=>[String(r.id),r]));
@@ -329,7 +376,15 @@ function startExtendedRealtimeListeners(){
      if(!l){
       local.push(r);changed=true;return;
      }
-     if(recordFingerprint(l)===recordFingerprint(r))return;
+     if(recordFingerprint(l)===recordFingerprint(r)){
+      clearCloudWrite(collection,l,recordFingerprint(l));return;
+     }
+
+     // Keep an unsent local edit visible until a person resolves a true conflict.
+     if(cloudPendingWrites[key]){
+      if(rt>lt){backupBeforeRemoteOverwrite(collection,l,r,"pending_local_conflict");l.__syncConflict=true;changed=true;}
+      return;
+     }
 
      // Remote wins only when its BUSINESS update time is truly newer.
      // Equal/ambiguous versions never overwrite silently.
@@ -343,20 +398,47 @@ function startExtendedRealtimeListeners(){
      // If local is newer, keep it. Safe auto-sync will push it later.
     });
 
+    if(cloudSnapshotReady.has(collection)){
+     const remoteIds=new Set(remote.map(r=>String(r.id)));
+     for(const [key] of cloudMissingLocal)if(key.startsWith(collection+"::"))cloudMissingLocal.delete(key);
+     local.filter(r=>r?.id&&!r.deleted&&!r.cloudSyncedAt&&!remoteIds.has(String(r.id))&&!cloudPendingWrites[cloudPendingKey(collection,r.id)])
+      .forEach(r=>cloudMissingLocal.set(cloudPendingKey(collection,r.id),{collection,id:String(r.id)}));
+    }
+
     rememberCollectionFingerprints(collection,remote);
     if(changed)replaceCloudCollectionLocalRows(collection,local);
     if(changed)scheduleRealtimeRender(collection);
     cloudMarkSynced();
-   },e=>console.warn("listener",collection,e)));
-  }catch(e){console.warn("listener setup",collection,e);}
+   },e=>{console.warn("listener",collection,e);cloudListenerErrors.set(collection,e?.message||String(e));cloudRefreshStatus();}));
+  }catch(e){console.warn("listener setup",collection,e);cloudListenerErrors.set(collection,e?.message||String(e));cloudRefreshStatus();}
  });
 }
 async function cloudAutoSyncAll(reason="auto"){
- if(!cloudReady||!user||!navigator.onLine||cloudApplyingSnapshot)return;
+ if(!cloudReady||!user||!navigator.onLine||cloudApplyingSnapshot||cloudAutoSyncRunning)return;
+ cloudAutoSyncRunning=true;
+ try{
+ // Retry edits explicitly recorded by this browser, including edits made offline.
+ for(const entry of Object.values(cloudPendingWrites)){
+  if(!cloudSnapshotReady.has(entry.collection))continue;
+  const row=cloudCollectionLocalRows(entry.collection).find(r=>String(r.id)===String(entry.id));
+  if(!row||row.__syncConflict)continue;
+  const key=cloudPendingKey(entry.collection,entry.id),remoteTs=cloudRemoteVersions.get(key),localTs=businessTimestamp(row);
+  if(remoteTs!==undefined&&cloudFingerprints.get(key)!==recordFingerprint(row)&&remoteTs>=localTs){row.__syncConflict=true;saveLocalOnly();continue;}
+  const writtenFingerprint=recordFingerprint(row);
+  try{
+   const payload=cloudSanitize({...row,cloudSyncedAt:new Date().toISOString()});delete payload.__syncConflict;
+   await fbStore.collection(entry.collection).doc(entry.id).set(payload,{merge:true});
+   cloudWriteErrors.delete(entry.collection);cloudMissingLocal.delete(key);
+   row.cloudSyncedAt=payload.cloudSyncedAt;
+   cloudFingerprints.set(key,writtenFingerprint);cloudRemoteVersions.set(key,localTs);
+   clearCloudWrite(entry.collection,row,writtenFingerprint);saveLocalOnly();
+  }catch(e){cloudState.error=e?.message||String(e);cloudWriteErrors.set(entry.collection,cloudState.error);cloudRefreshStatus();}
+ }
  for(const collection of CLOUD_BUSINESS_COLLECTIONS){
+  if(!cloudSnapshotReady.has(collection))continue;
   const rows=cloudCollectionLocalRows(collection);
   for(const r of rows){
-   if(!r?.id||r.__syncConflict)continue;
+   if(!r?.id||r.__syncConflict||cloudPendingWrites[cloudPendingKey(collection,r.id)])continue;
    const key=collection+"::"+String(r.id);
    const fp=recordFingerprint(r),remoteFp=cloudFingerprints.get(key);
    if(remoteFp===fp)continue;
@@ -375,13 +457,15 @@ async function cloudAutoSyncAll(reason="auto"){
     const payload=cloudSanitize({...r,cloudSyncedAt:new Date().toISOString()});
     delete payload.__syncConflict;
     await fbStore.collection(collection).doc(String(r.id)).set(payload,{merge:true});
+    cloudWriteErrors.delete(collection);cloudMissingLocal.delete(key);
     r.cloudSyncedAt=payload.cloudSyncedAt;
     cloudFingerprints.set(key,recordFingerprint(r));
     cloudRemoteVersions.set(key,localTs);
-   }catch(e){console.warn("safe auto sync",collection,r.id,e);}
+   }catch(e){console.warn("safe auto sync",collection,r.id,e);cloudState.error=e?.message||String(e);cloudWriteErrors.set(collection,cloudState.error);cloudRefreshStatus();}
   }
  }
  saveLocalOnly();cloudMarkSynced();
+ }finally{cloudAutoSyncRunning=false;}
 }
 function startCloudAutoSync(){
  clearInterval(cloudAutoSyncTimer);
@@ -415,13 +499,16 @@ function cloudStatusText(text,kind="normal"){
   if(el){
     el.textContent=text;
     el.className=kind==="ok"?"cloud-ok":kind==="error"?"cloud-error":kind==="busy"?"cloud-busy":"";
+    el.title=[...cloudListenerErrors.values(),...cloudWriteErrors.values()].join("\n")||"";
   }
   const ls=document.getElementById("cloudLastSync");
   if(ls)ls.textContent=cloudState.lastSync?`Dernière sync : ${new Date(cloudState.lastSync).toLocaleTimeString("fr-FR")}`:"";
 }
 function cloudMarkSynced(){
-  cloudState.lastSync=new Date().toISOString();
-  cloudStatusText(navigator.onLine?"Connecté":"Hors ligne",navigator.onLine?"ok":"error");
+  if(navigator.onLine&&!cloudListenerErrors.size&&!cloudWriteErrors.size&&!cloudMissingLocal.size&&!Object.keys(cloudPendingWrites).length&&cloudSnapshotReady.size===CLOUD_BUSINESS_COLLECTIONS.length){
+   cloudState.lastSync=new Date().toISOString();
+  }
+  cloudRefreshStatus();
 renderGlobalProjectSelector();
 }
 function cloudSanitize(value){
@@ -457,6 +544,7 @@ async function cloudLoadProfile(fbUser){
 function cloudStopListeners(){
   cloudListeners.forEach(unsub=>{try{unsub();}catch(e){}});
   cloudListeners=[];
+  cloudSnapshotReady.clear();cloudListenerErrors.clear();cloudMissingLocal.clear();
 }
 function cloudMergeRemoteCollection(collection,remoteRows){
   cloudApplyingSnapshot=true;
@@ -510,28 +598,35 @@ function cloudAttachPhase1Listeners(){
   );
 }
 async function cloudUpsert(collection,record){
-  if(!cloudReady||!user||cloudApplyingSnapshot||!record?.id)return false;
+  if(!user||!record?.id)return false;
+  queueCloudWrite(collection,record);
+  if(!cloudReady||!navigator.onLine||cloudApplyingSnapshot||!cloudSnapshotReady.has(collection))return false;
   try{
+    const key=cloudPendingKey(collection,record.id),remoteTs=cloudRemoteVersions.get(key),localTs=businessTimestamp(record);
+    if(remoteTs!==undefined&&cloudFingerprints.get(key)!==recordFingerprint(record)&&remoteTs>=localTs){record.__syncConflict=true;saveLocalOnly();cloudRefreshStatus();return false;}
     cloudStatusText("Synchronisation…","busy");
     const payload=cloudSanitize(record);
+    const writtenFingerprint=recordFingerprint(record);
     if(collection==="dailyReports"){
       payload.ownerUid=payload.ownerUid||user.uid;
       payload.ownerEmail=payload.ownerEmail||user.email;
     }
     payload.cloudSyncedAt=new Date().toISOString();
     await fbStore.collection(collection).doc(String(record.id)).set(payload,{merge:true});
+    cloudWriteErrors.delete(collection);cloudMissingLocal.delete(key);
     record.cloudSyncedAt=payload.cloudSyncedAt;
     if(collection==="dailyReports"){
       record.ownerUid=payload.ownerUid;
       record.ownerEmail=payload.ownerEmail;
     }
     save();
+    clearCloudWrite(collection,record,writtenFingerprint);
     cloudMarkSynced();
     return true;
   }catch(err){
     console.error("Cloud upsert",collection,err);
     cloudState.error=err.message;
-    cloudStatusText(navigator.onLine?"Erreur cloud":"Hors ligne","error");
+    cloudWriteErrors.set(collection,cloudState.error);cloudRefreshStatus();
     return false;
   }
 }
@@ -573,12 +668,24 @@ async function cloudSyncPendingPhase1(){
 }
 async function cloudSyncNow(){
   if(!cloudReady)return alert("Firebase n’est pas encore connecté.");
+  if(cloudMissingLocal.size&&user?.role==="ADMIN"){
+   const counts={};for(const {collection} of cloudMissingLocal.values())counts[collection]=(counts[collection]||0)+1;
+   const detail=Object.entries(counts).map(([name,count])=>`${name}: ${count}`).join("\n");
+   if(confirm(`${cloudMissingLocal.size} donnée(s) de cet appareil ne figurent pas dans le Cloud :\n${detail}\n\nAprès avoir sauvegardé l’ERP, voulez-vous les envoyer ? Vérifiez qu’il ne s’agit pas d’anciennes données supprimées volontairement.`)){
+    for(const entry of cloudMissingLocal.values()){
+     const row=cloudCollectionLocalRows(entry.collection).find(r=>String(r.id)===entry.id);
+     if(row&&!row.deleted)queueCloudWrite(entry.collection,row);
+    }
+    cloudMissingLocal.clear();
+   }
+  }
   cloudStatusText("Synchronisation de secours…","busy");
   await cloudSyncPendingPhase1();
   await cloudAutoSyncAll("manuel-secours");
   cloudStopListeners();startExtendedRealtimeListeners();
   cloudMarkSynced();
-  alert("Synchronisation terminée. Le mode normal reste automatique.");
+  const remaining=Object.keys(cloudPendingWrites).length;
+  alert(remaining?`${remaining} donnée(s) restent en attente. Vérifiez la connexion et les droits Firebase avant de changer d’appareil. Aucune donnée locale n’a été effacée.`:cloudWriteErrors.size?"Un envoi a échoué. Consultez l’état Cloud avant de changer de navigateur.":"Envois terminés. Attendez l’état « Synchronisé » avant de changer de navigateur.");
 }
 async function cloudMigrationPhase1(){
   if(!cloudReady||user?.role!=="ADMIN")return alert("Migration réservée à l’Admin.");
@@ -599,7 +706,7 @@ async function cloudMigrationPhase1(){
       await fbStore.collection("dailyReports").doc(String(r.id)).set(cloudSanitize(payload),{merge:true});
       Object.assign(r,{ownerUid,cloudSyncedAt:payload.cloudSyncedAt});count++;
     }
-    save();cloudMarkSynced();cloudAttachPhase1Listeners();
+    save();cloudMarkSynced();cloudStopListeners();startExtendedRealtimeListeners();
     alert(`Migration terminée : ${count} enregistrement(s) traités.`);
   }catch(err){
     console.error(err);cloudStatusText("Erreur migration","error");alert("Migration impossible : "+err.message);
@@ -620,6 +727,7 @@ async function firebaseLogout(){
  if(typeof erpNavigationHistory!=="undefined"){erpNavigationHistory.length=0;erpNavigationIndex=-1;updateErpHistoryButtons();}
   clearInterval(cloudAutoSyncTimer);
   cloudStopListeners();
+  cloudSnapshotReady.clear();cloudListenerErrors.clear();cloudWriteErrors.clear();cloudMissingLocal.clear();cloudPendingOwner="";cloudPendingWrites={};
   try{if(fbAuth)await fbAuth.signOut();}catch(e){}
 }
 function initFirebaseCloud(){
@@ -646,6 +754,7 @@ function initFirebaseCloud(){
       try{
         const profile=await cloudLoadProfile(fbUser);
         user=profile;
+        cloudSnapshotReady.clear();cloudListenerErrors.clear();cloudWriteErrors.clear();cloudMissingLocal.clear();cloudPendingOwner="";loadCloudPendingWrites();
         sessionStorage.setItem("nysoa_v2_user",JSON.stringify(user));
         cloudLocalUserUpsert();
         boot();
@@ -668,7 +777,7 @@ function initFirebaseCloud(){
     if(msg)msg.textContent="Connexion Firebase indisponible. Vérifiez Internet puis actualisez la page.";
   }
 }
-window.addEventListener("online",()=>{cloudStatusText("Reconnexion…","busy");if(user&&cloudReady){cloudSyncPendingPhase1();cloudAutoSyncAll("reconnexion");cloudStopListeners();startExtendedRealtimeListeners();}});
+window.addEventListener("online",()=>{cloudStatusText("Reconnexion…","busy");if(user&&cloudReady){cloudStopListeners();startExtendedRealtimeListeners();cloudSyncPendingPhase1();}});
 window.addEventListener("offline",()=>cloudStatusText("Hors ligne","error"));
 
 const INIT={
@@ -1074,7 +1183,7 @@ const obsoleteManualButtons=["sendUpdatesBtn","refreshAdminBtn","publishValidati
 obsoleteManualButtons.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display="none";});
 const cloudSyncBtn=document.getElementById("cloudSyncBtn");
 if(cloudSyncBtn){cloudSyncBtn.style.display="inline-flex";cloudSyncBtn.title="Synchronisation de secours — le fonctionnement normal est automatique";}
-cloudStatusText(navigator.onLine?"Connecté":"Hors ligne",navigator.onLine?"ok":"error");
+cloudRefreshStatus();
 if(user.role==="TECHNICIEN"&&!technicianSessionProfile())technicianIdentityGate();else if(user.role==="ADMIN"&&adminWorkspace==="FINANCE")go("dashboardFinance");else if(user.role==="ADMIN"&&adminWorkspace==="TECHNIQUE")go("dashboardTechnique");else go("dashboard")}
 function renderMenu(){
  let list=menus[user.role];

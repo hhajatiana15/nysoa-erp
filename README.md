@@ -1,4 +1,13 @@
-# NYSOA — patch cumulatif 4.9.10 (29/09/2026)
+# NYSOA — patch cumulatif 4.9.11 (29/09/2026)
+
+## Synchronisation Opera ↔ Chrome ↔ téléphone
+
+- Une saisie nouvellement enregistrée est marquée comme **en attente** sur cet appareil jusqu'à son envoi au Cloud. La liste des envois en attente est conservée dans le navigateur après rechargement ou coupure Internet, puis réessayée lorsque Firebase répond. Les données locales ne sont pas effacées après un échec.
+- L'indicateur Cloud ne dit **« Synchronisé »** qu'après chargement des collections Firebase et résolution des envois en attente. Il distingue « Hors ligne », « Chargement Cloud… », « donnée(s) en attente de sync », « donnée(s) locales à vérifier » et les erreurs de lecture ou d'envoi. Survoler l'état Cloud sur ordinateur pour voir le détail technique des erreurs.
+- Des enregistrements anciens présents seulement dans Opera et jamais envoyés au Cloud sont détectés. L'Admin peut cliquer **« Vérifier / synchroniser »** : l'écran donne les quantités par module et demande confirmation avant l'import, pour éviter de recréer automatiquement des données supprimées auparavant. Faire d'abord une **Sauvegarde complète Admin**.
+- Si une même fiche a été modifiée différemment dans deux navigateurs, la version locale en attente est préservée et le conflit est signalé. Aucun écrasement automatique de ce conflit n'est garanti. Les règles d'accès Firebase doivent autoriser lecture et écriture sur les collections métiers pour que tous les appareils aient les mêmes données.
+
+Pour récupérer les données déjà saisies dans Opera : ouvrir l'ERP dans Opera avec le même compte ERP, attendre le chargement, faire une sauvegarde, cliquer « Vérifier / synchroniser », examiner les données locales proposées et confirmer celles à envoyer. Attendre **« Synchronisé »**. Dans Chrome, ouvrir l'ERP avec le même compte ERP et recharger la page. Un brouillon de formulaire non enregistré reste local au navigateur et n'est pas encore une donnée Cloud.
 
 ## Devis accepté et encaissement
 
@@ -28,9 +37,9 @@ Les boutons **← Précédent** et **Suivant →** se trouvent avant le choix du
 
 1. Faire une **Sauvegarde complète Admin** et conserver une copie des fichiers actuels du dépôt GitHub. Ne pas effacer de données Firebase.
 2. Déposer **ensemble** `app.js`, `index.html` et `quote-pdf.js` à la racine du dépôt `nysoa-erp`. Conserver tous les autres fichiers existants (`styles.css`, bibliothèques, images, etc.). Si ces trois fichiers ont été modifiés indépendamment depuis le dernier patch, fusionner ces changements plutôt que les écraser.
-3. Publier GitHub Pages puis recharger la page sur Mac et téléphone. Le paramètre `app.js?v=4.9.10-devis-paiements` force le renouvellement du cache du script.
+3. Publier GitHub Pages puis recharger la page sur Mac et téléphone. Le paramètre `app.js?v=4.9.11-cloud-reconciliation` force le renouvellement du cache du script.
 4. Tester avec un chantier d'essai dans une session Admin : accepter un devis et vérifier le budget ; ouvrir les encaissements avant puis après validation d'une avance ; facture seule, encaissement seul, paiement affecté à une facture, impression du reçu ; visiter DEVIS → Facturation → Précédent → Suivant en saisissant un brouillon DEVIS. Vérifier les soldes sur les deux appareils. L'accès Firebase authentifié, la synchronisation Cloud et l'impression physique n'ont pas été vérifiés depuis cet environnement.
 
 ## Contrôles locaux réalisés
 
-`node --check app.js`, `node --check quote-pdf.js`, `node audit_devis_paiement.cjs`, `node audit_encaissement_direct.cjs`, `node audit_navigation_erp.cjs`, `node audit_devis_navigation.cjs`, `node audit_chantier_devis.cjs`, `node audit_brouillons_clients.cjs` : réussite. Les tests emploient un DOM simulé et les fonctions financières du projet ; ils ne remplacent pas un essai complet dans le site authentifié.
+`node --check app.js`, `node --check quote-pdf.js`, `node audit_sync_navigateurs.cjs`, `node audit_devis_paiement.cjs`, `node audit_encaissement_direct.cjs`, `node audit_navigation_erp.cjs`, `node audit_devis_navigation.cjs`, `node audit_chantier_devis.cjs`, `node audit_brouillons_clients.cjs` : réussite. Les tests emploient un faux Cloud et un DOM simulé ; ils ne remplacent pas un essai complet dans le site authentifié avec les règles Firebase réelles.
