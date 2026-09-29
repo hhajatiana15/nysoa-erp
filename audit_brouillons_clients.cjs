@@ -10,7 +10,7 @@ const content={nodes:[],querySelector(selector){return this.nodes.some(n=>n.edit
 const menu=[{dataset:{page:'quotes'},classList:{toggle(){}}},{dataset:{page:'clients'},classList:{toggle(){}}}];
 const document={activeElement:{closest(){return null}},getElementById(id){return id==='content'?content:null},querySelectorAll(){return menu},createDocumentFragment(){return {nodes:[],appendChild(node){content.nodes.shift();this.nodes.push(node)}}}};
 let cloudCurrentPage='quotes',currentPageForData='quotes';
-const ctx=vm.createContext({document,user:{uid:'admin-1'},cloudCurrentPage,currentPageForData,renderGlobalProjectSelector(){},originalGo(page){ctx.cloudCurrentPage=page;content.nodes=[{editing:false,page}]},go:null});
+const ctx=vm.createContext({document,user:{uid:'admin-1'},cloudCurrentPage,currentPageForData,renderGlobalProjectSelector(){},syncQuoteEditorFields(){},originalGo(page){ctx.cloudCurrentPage=page;content.nodes=[{editing:false,page}]},go:null});
 vm.runInContext(code.slice(start,end),ctx);
 const quoteNode={editing:true,amount:{value:'95000000'},onSave(){return 'saved'}};
 content.nodes=[quoteNode];

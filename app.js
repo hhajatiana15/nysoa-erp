@@ -1040,6 +1040,7 @@ async function login(u,p){
 }
 
 async function quotePdfUrl(){
+ syncQuoteEditorFields();
  if(user?.role!=="ADMIN"||!activeQuote)throw Error('Ouvrez un devis en tant qu’Admin.');
  const data=await buildQuotePdf(activeQuote);
  return URL.createObjectURL(new Blob([data],{type:'application/pdf'}));
@@ -3673,14 +3674,46 @@ function saveMaterialForecast(){
 function quoteStatusClass(s){return s==="Accepté"?"qs-approved":s==="Refusé"?"qs-refused":s==="Envoyé"?"qs-sent":"qs-draft"}
 function quotes(){
  if(user.role!=="ADMIN"){document.querySelector("#content").innerHTML='<div class="panel"><div class="panel-body"><div class="admin-only-note">Le module Devis est réservé exclusivement à l’ADMIN.</div></div></div>';return}
- document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button></div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Chantier</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${db.quotes.filter(q=>!q.deleted).map(q=>{let f=quoteFinancials(q);return `<tr data-search="${(q.id+' '+q.client+' '+q.object).toLowerCase()}"><td><b>${q.id}</b></td><td>${q.date}</td><td>${esc(projectLabel(q.project))}</td><td>${q.client}</td><td>${q.object}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${q.status}</span></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${q.id}')">Ouvrir</button><button class="btn-xs btn-save" onclick="materialPlanPage('${q.id}')">Plan matériaux</button><button class="btn-xs btn-save" onclick="duplicateQuote('${q.id}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${q.id}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
+ document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button>${readQuoteDraft()?'<button class="btn secondary" onclick="quoteEditor()">Reprendre le brouillon non enregistré</button>':''}</div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Chantier</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${db.quotes.filter(q=>!q.deleted).map(q=>{let f=quoteFinancials(q);return `<tr data-search="${(q.id+' '+q.client+' '+q.object).toLowerCase()}"><td><b>${q.id}</b></td><td>${q.date}</td><td>${esc(projectLabel(q.project))}</td><td>${q.client}</td><td>${q.object}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${q.status}</span></td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${q.id}')">Ouvrir</button><button class="btn-xs btn-save" onclick="materialPlanPage('${q.id}')">Plan matériaux</button><button class="btn-xs btn-save" onclick="duplicateQuote('${q.id}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${q.id}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
 }
 function filterQuotes(){let v=(document.querySelector('#quoteSearch')?.value||'').toLowerCase();document.querySelectorAll('#quoteList tbody tr').forEach(r=>r.style.display=r.dataset.search.includes(v)?'':'none')}
 function newQuote(){return{id:"DEV-"+new Date().getFullYear()+"-"+String(db.quotes.length+1).padStart(3,"0"),date:new Date().toISOString().slice(0,10),validUntil:"",project:currentProjectContext()||"",clientId:"",client:"",clientAddress:"",clientPhone:"",object:"",status:"Brouillon",vatEnabled:false,vatRate:20,discount:0,sections:[{title:"NOUVEAU LOT",items:[{no:"1.1",designation:"",unit:"",qty:1,pu:0}]}],notes:"Arrêté le présent devis à la somme indiquée ci-dessous.",createdBy:"ADMIN"}}
 let activeQuote=null,activeQuoteOriginalId="";
+// A quote remains a local draft until Enregistrer is pressed. Keep it per Firebase user.
+function quoteDraftStorageKey(){return "nysoa_quote_draft_v2_"+String(user?.uid||user?.username||"anonymous");}
+function readQuoteDraft(){
+ try{const d=JSON.parse(localStorage.getItem(quoteDraftStorageKey())||"null");return d?.quote?.sections?.length?d:null;}catch(_){return null;}
+}
+function persistQuoteDraft(){
+ if(user?.role!=="ADMIN"||!activeQuote)return;
+ try{localStorage.setItem(quoteDraftStorageKey(),JSON.stringify({quote:activeQuote,originalId:activeQuoteOriginalId,savedAt:new Date().toISOString()}));}
+ catch(e){console.warn("Brouillon local indisponible",e);}
+}
+function clearQuoteDraft(){try{localStorage.removeItem(quoteDraftStorageKey());}catch(_){}}
+function syncQuoteEditorFields(){
+ const editor=document.querySelector("#content .quote-editor");
+ if(!editor||!activeQuote)return;
+ const head=editor.querySelector(".quote-head"),meta=editor.querySelector(".quote-meta");
+ if(!activeQuoteOriginalId)activeQuote.id=head?.querySelector(".quote-no input")?.value??activeQuote.id;
+ activeQuote.date=head?.querySelector('input[type="date"]')?.value??activeQuote.date;
+ activeQuote.validUntil=meta?.querySelector('input[type="date"]')?.value??activeQuote.validUntil;
+ activeQuote.object=editor.querySelector(".quote-object input")?.value??activeQuote.object;
+ let section=-1,item=0;
+ editor.querySelectorAll(".quote-table tbody tr").forEach(row=>{
+  if(row.classList.contains("quote-section-row")){
+   section++;item=0;
+   if(activeQuote.sections[section])activeQuote.sections[section].title=row.querySelector("input")?.value??activeQuote.sections[section].title;
+  }else if(!row.classList.contains("quote-subtotal-row")&&section>=0){
+   const target=activeQuote.sections[section]?.items[item++],fields=row.querySelectorAll("input,textarea");
+   if(target&&fields.length>=5){target.no=fields[0].value;target.designation=fields[1].value;target.unit=fields[2].value;target.qty=+fields[3].value||0;target.pu=+fields[4].value||0;}
+  }
+ });
+ persistQuoteDraft();
+}
+document.addEventListener("input",ev=>{if(ev.target.closest?.("#content .quote-editor"))syncQuoteEditorFields();});
 function quoteEditor(id=""){
  if(user.role!=="ADMIN"){quotes();return}
- const existing=id?db.quotes.find(x=>x.id===id&&!x.deleted):null;if(id&&!existing)return alert("Devis introuvable.");activeQuote=existing?structuredClone(existing):newQuote();activeQuoteOriginalId=existing?.id||"";renderQuoteEditor();
+ const existing=id?db.quotes.find(x=>x.id===id&&!x.deleted):null;if(id&&!existing)return alert("Devis introuvable.");const draft=!id?readQuoteDraft():null;activeQuote=draft?draft.quote:existing?structuredClone(existing):newQuote();activeQuoteOriginalId=draft?draft.originalId||"":existing?.id||"";renderQuoteEditor();
 }
 function renderQuoteEditor(){
  let q=activeQuote;
@@ -3700,13 +3733,14 @@ function renderQuoteEditor(){
   <div class="quote-options no-print"><label><input type="checkbox" ${q.vatEnabled?'checked':''} onchange="activeQuote.vatEnabled=this.checked;renderQuoteEditor()"> Appliquer TVA</label><label>Taux TVA (%) <input type="number" value="${q.vatRate}" onchange="activeQuote.vatRate=+this.value;renderQuoteEditor()"></label><label>Réduction négociée avec le client (Ar) <input type="number" min="0" step="1" value="${q.discount}" onchange="activeQuote.discount=Math.max(0,+this.value||0);renderQuoteEditor()"></label></div>
   <div class="quote-summary-block"><table class="quote-summary"><tr><td>DEVIS INITIAL (HT)</td><td>${money(f.ht)}</td></tr><tr><td>RÉDUCTION NÉGOCIÉE</td><td>${f.discount?'- ':''}${money(f.discount)}</td></tr>${q.vatEnabled?`<tr><td>TVA (${q.vatRate}%)</td><td>${money(f.vat)}</td></tr>`:''}<tr class="grand"><td>DEVIS FINAL ACCEPTÉ (TTC)</td><td>${money(f.ttc)}</td></tr></table><div class="quote-words">Arrêté le présent devis à la somme de : <strong>${money(f.ttc)}</strong> (<strong>${numberToFrenchWords(f.ttc)} ARIARY</strong>).</div></div>
   <div class="quote-signatures"><div>Le client<div class="signature-line">Nom, signature et mention « Bon pour accord »</div></div><div>Le gérant<div class="signature-line">HAJATIANA Hasiniaina Rivoherilaza</div></div></div>
- </div>`}
+ </div>`;persistQuoteDraft();}
 function quoteSectionHtml(s,si){let st=s.items.reduce((a,i)=>a+(+i.qty||0)*(+i.pu||0),0);return `<tr class="quote-section-row"><td>${roman(si+1)}</td><td colspan="5"><input value="${esc(s.title)}" onchange="activeQuote.sections[${si}].title=this.value" style="font-weight:900"></td><td class="no-print"><button class="quote-remove" onclick="removeQuoteSection(${si})">×</button></td></tr>${s.items.map((i,ii)=>`<tr><td><input class="center" value="${esc(i.no)}" onchange="activeQuote.sections[${si}].items[${ii}].no=this.value"></td><td><textarea onchange="activeQuote.sections[${si}].items[${ii}].designation=this.value">${esc(i.designation)}</textarea></td><td><input class="center" value="${esc(i.unit)}" onchange="activeQuote.sections[${si}].items[${ii}].unit=this.value"></td><td><input class="num" type="number" step="0.01" value="${i.qty}" onchange="activeQuote.sections[${si}].items[${ii}].qty=+this.value;renderQuoteEditor()"></td><td><input class="num" type="number" step="1" value="${i.pu}" onchange="activeQuote.sections[${si}].items[${ii}].pu=+this.value;renderQuoteEditor()"></td><td class="num"><b>${money((+i.qty||0)*(+i.pu||0))}</b></td><td class="no-print"><button class="quote-remove" onclick="removeQuoteItem(${si},${ii})">×</button></td></tr>`).join('')}<tr class="quote-subtotal-row"><td colspan="5" style="text-align:right">Sous-total ${esc(s.title)}</td><td class="num">${money(st)}</td><td class="no-print"><button class="btn-xs btn-edit" onclick="addQuoteItem(${si})">+</button></td></tr>`}
 function addQuoteSection(){activeQuote.sections.push({title:"NOUVEAU LOT",items:[{no:(activeQuote.sections.length+1)+".1",designation:"",unit:"",qty:1,pu:0}]});renderQuoteEditor()}
 function removeQuoteSection(si){if(activeQuote.sections.length===1)return alert('Le devis doit contenir au moins un lot.');activeQuote.sections.splice(si,1);renderQuoteEditor()}
 function addQuoteItem(si){let s=activeQuote.sections[si];s.items.push({no:(si+1)+"."+(s.items.length+1),designation:"",unit:"",qty:1,pu:0});renderQuoteEditor()}
 function removeQuoteItem(si,ii){let s=activeQuote.sections[si];if(s.items.length===1)return alert('Le lot doit contenir au moins une ligne.');s.items.splice(ii,1);renderQuoteEditor()}
 function saveQuote(){
+ syncQuoteEditorFields();
  if(user?.role!=="ADMIN")return;
  const q=activeQuote,project=(db.projects||[]).find(p=>!p.deleted&&String(p.id)===String(q?.project));
  if(!project)return alert('Veuillez choisir un chantier actif.');
@@ -3740,6 +3774,7 @@ function saveQuote(){
  saveLocalOnly();cloudWriteGeneric('quotes',saved,'Devis enregistré');
  if(old?.project&&old.project!==saved.project)syncProjectQuoteBudget(old.project);
  syncProjectQuoteBudget(saved.project);
+ clearQuoteDraft();unsavedModuleViews.delete(moduleDraftKey('quotes'));
  alert('Devis enregistré. '+(saved.status==='Accepté'?(project.budgetSource==='manuel'?`Budget direct conservé : ${money(projectBudgetAmount(project))}.`:`Budget chantier actualisé : ${money(projectBudgetAmount(project))}.`):''));quotes();
 }
 function duplicateQuote(id){if(user?.role!=="ADMIN")return;const source=db.quotes.find(x=>x.id===id&&!x.deleted);if(!source)return;let q=structuredClone(source),now=new Date().toISOString();q.id='DEV-'+new Date().getFullYear()+'-'+String(db.quotes.length+1).padStart(3,'0');while(db.quotes.some(x=>x.id===q.id))q.id='DEV-'+new Date().getFullYear()+'-'+Math.random().toString(36).slice(2,8).toUpperCase();q.status='Brouillon';q.date=erpToday();q.createdAt=now;q.updatedAt=now;delete q.deleted;delete q.materialForecast;db.quotes.push(q);saveLocalOnly();cloudWriteGeneric('quotes',q,'Copie de devis');quotes()}
@@ -3795,6 +3830,7 @@ function moduleDraftKey(page){return String(user?.uid||user?.username||'anonymou
 go = function(page){
  const content=document.getElementById('content'),previous=cloudCurrentPage;
  if(content&&previous&&editableModuleView(content)){
+  if(previous==="quotes")syncQuoteEditorFields();
   if(document.activeElement?.closest?.('#content'))document.activeElement.blur();
   const fragment=document.createDocumentFragment();
   while(content.firstChild)fragment.appendChild(content.firstChild);
