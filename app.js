@@ -160,14 +160,50 @@ function cloudRefreshStatus(){
  const pending=Object.keys(cloudPendingWrites).length;
  if(cloudListenerErrors.size){cloudStatusText("Erreur Cloud — "+[...cloudListenerErrors.keys()].join(", "),"error");return;}
  if(cloudWriteErrors.size){cloudStatusText("Erreur envoi — "+[...cloudWriteErrors.keys()].join(", "),"error");return;}
+ const blocked=Object.values(cloudPendingWrites).filter(x=>!cloudCanWrite(x.collection));
+ if(blocked.length){cloudStatusText(blocked.length+" envoi(s) en attente d'un rôle autorisé","error");return;}
  if(pending){cloudStatusText(pending+" donnée(s) en attente de sync","busy");return;}
  if(cloudMissingLocal.size){cloudStatusText(cloudMissingLocal.size+" donnée(s) locales à vérifier","busy");return;}
- if(cloudSnapshotReady.size<CLOUD_BUSINESS_COLLECTIONS.length){cloudStatusText("Chargement Cloud…","busy");return;}
+ if(cloudSnapshotReady.size<cloudReadableCollections().length){cloudStatusText("Chargement Cloud…","busy");return;}
  cloudStatusText("Synchronisé","ok");
 }
 
 const CLOUD_MODULE_COLLECTIONS=new Set(["attendanceWeekly","attendanceQR","employees","payroll","purchases","stock","stockMovements","invoices","clients","suppliers","bank","accounting","treasury","planning","situations","technicalFollowup","quality","nonConformities","equipment","vehicles","fuel","cashEntries","employeeAdvances"]);
 const CLOUD_BUSINESS_COLLECTIONS=["projects","quotes","invoices","clientReceipts","requests","editRequests","appro","expenses","purchases","stock","stockMovements","employees","payroll","siteControls","reports","dailyReports","attendanceWeekly","attendanceQR","usageSessions","clients","suppliers","bank","accounting","treasury","planning","situations","technicalFollowup","quality","nonConformities","equipment","vehicles","fuel","cashEntries","employeeAdvances"];
+// A listener is a Firestore query, not a filtered view. Subscribe only where
+// the authenticated role has a matching read rule (and query owner-only data).
+const CLOUD_ROLE_READ={
+ ADMIN:CLOUD_BUSINESS_COLLECTIONS,
+ GESTIONNAIRE:["projects","invoices","clientReceipts","requests","editRequests","appro","expenses","purchases","stock","stockMovements","employees","payroll","reports","dailyReports","attendanceWeekly","attendanceQR","clients","suppliers","cashEntries","employeeAdvances"],
+ CONTROLE:["projects","editRequests","siteControls","reports","dailyReports","attendanceWeekly","attendanceQR","planning","situations","technicalFollowup","quality","nonConformities","equipment","vehicles","fuel"],
+ TECHNICIEN:["projects","editRequests","siteControls","reports","dailyReports","attendanceWeekly","attendanceQR"]
+};
+const CLOUD_ROLE_WRITE={
+ ADMIN:CLOUD_BUSINESS_COLLECTIONS,
+ GESTIONNAIRE:["projects","invoices","clientReceipts","requests","editRequests","appro","expenses","purchases","stock","stockMovements","employees","payroll","reports","dailyReports","attendanceWeekly","attendanceQR","clients","suppliers","employeeAdvances"],
+ CONTROLE:["editRequests","siteControls","reports","dailyReports","attendanceWeekly","attendanceQR","situations","technicalFollowup","quality","nonConformities"],
+ TECHNICIEN:["editRequests","siteControls","reports","dailyReports","attendanceWeekly","attendanceQR"]
+};
+function cloudReadableCollections(){return CLOUD_ROLE_READ[user?.role]||[];}
+function cloudCanWrite(collection){return (CLOUD_ROLE_WRITE[user?.role]||[]).includes(collection);}
+function cloudCanWriteRecord(collection,record){
+ if(!cloudCanWrite(collection))return false;
+ if(user.role!=="ADMIN"&&collection==="dailyReports"&&record.ownerUid&&record.ownerUid!==user.uid)return false;
+ if(user.role!=="ADMIN"&&collection==="editRequests"&&record.requesterUid!==user.uid)return false;
+ return true;
+}
+function cloudVisibleLocalRecord(collection,record){
+ if(user.role==="ADMIN")return true;
+ if(collection==="dailyReports")return record.ownerUid===user.uid;
+ if(collection==="editRequests")return record.requesterUid===user.uid;
+ return true;
+}
+function cloudReadQuery(collection){
+ let query=fbStore.collection(collection);
+ if(collection==="dailyReports"&&user.role!=="ADMIN")query=query.where("ownerUid","==",user.uid);
+ if(collection==="editRequests"&&user.role!=="ADMIN")query=query.where("requesterUid","==",user.uid);
+ return query;
+}
 function cloudCollectionLocalRows(collection){
  if(CLOUD_MODULE_COLLECTIONS.has(collection))return db.modules?.[collection]||[];
  return Array.isArray(db[collection])?db[collection]:[];
@@ -245,6 +281,7 @@ async function createAdminNotification(module,title,detail,entityId){
 }
 async function cloudWriteGeneric(collection,record,notifyTitle=""){
  if(!user||!record?.id)return;
+ if(!cloudCanWriteRecord(collection,record)){cloudWriteErrors.set(collection,"Rôle ou propriétaire non autorisé à modifier ce module.");cloudRefreshStatus();return false;}
  queueCloudWrite(collection,record);
  logUserActivity(notifyTitle||"Enregistrement / modification",collection,record.id,record.project||record.employeeName||"");
  if(!cloudReady||!navigator.onLine||!cloudSnapshotReady.has(collection))return false;
@@ -347,9 +384,9 @@ function scheduleRealtimeRender(collection){
 }
 function startExtendedRealtimeListeners(){
  if(!cloudReady||!user)return;
- CLOUD_BUSINESS_COLLECTIONS.forEach(collection=>{
+ cloudReadableCollections().forEach(collection=>{
   try{
-   cloudListeners.push(fbStore.collection(collection).onSnapshot(s=>{
+   cloudListeners.push(cloudReadQuery(collection).onSnapshot(s=>{
     if(!s.metadata?.fromCache){cloudSnapshotReady.add(collection);cloudListenerErrors.delete(collection);}
     let local=cloudCollectionLocalRows(collection);
     const remote=s.docs.map(d=>({id:d.id,...d.data()}));
@@ -401,7 +438,7 @@ function startExtendedRealtimeListeners(){
     if(cloudSnapshotReady.has(collection)){
      const remoteIds=new Set(remote.map(r=>String(r.id)));
      for(const [key] of cloudMissingLocal)if(key.startsWith(collection+"::"))cloudMissingLocal.delete(key);
-     local.filter(r=>r?.id&&!r.deleted&&!r.cloudSyncedAt&&!remoteIds.has(String(r.id))&&!cloudPendingWrites[cloudPendingKey(collection,r.id)])
+     local.filter(r=>r?.id&&cloudVisibleLocalRecord(collection,r)&&!r.deleted&&!r.cloudSyncedAt&&!remoteIds.has(String(r.id))&&!cloudPendingWrites[cloudPendingKey(collection,r.id)])
       .forEach(r=>cloudMissingLocal.set(cloudPendingKey(collection,r.id),{collection,id:String(r.id)}));
     }
 
@@ -421,7 +458,7 @@ async function cloudAutoSyncAll(reason="auto"){
  for(const entry of Object.values(cloudPendingWrites)){
   if(!cloudSnapshotReady.has(entry.collection))continue;
   const row=cloudCollectionLocalRows(entry.collection).find(r=>String(r.id)===String(entry.id));
-  if(!row||row.__syncConflict)continue;
+  if(!row||row.__syncConflict||!cloudCanWriteRecord(entry.collection,row))continue;
   const key=cloudPendingKey(entry.collection,entry.id),remoteTs=cloudRemoteVersions.get(key),localTs=businessTimestamp(row);
   if(remoteTs!==undefined&&cloudFingerprints.get(key)!==recordFingerprint(row)&&remoteTs>=localTs){row.__syncConflict=true;saveLocalOnly();continue;}
   const writtenFingerprint=recordFingerprint(row);
@@ -434,11 +471,12 @@ async function cloudAutoSyncAll(reason="auto"){
    clearCloudWrite(entry.collection,row,writtenFingerprint);saveLocalOnly();
   }catch(e){cloudState.error=e?.message||String(e);cloudWriteErrors.set(entry.collection,cloudState.error);cloudRefreshStatus();}
  }
- for(const collection of CLOUD_BUSINESS_COLLECTIONS){
+ for(const collection of cloudReadableCollections()){
+  if(!cloudCanWrite(collection))continue;
   if(!cloudSnapshotReady.has(collection))continue;
   const rows=cloudCollectionLocalRows(collection);
   for(const r of rows){
-   if(!r?.id||r.__syncConflict||cloudPendingWrites[cloudPendingKey(collection,r.id)])continue;
+   if(!r?.id||!cloudCanWriteRecord(collection,r)||r.__syncConflict||cloudPendingWrites[cloudPendingKey(collection,r.id)])continue;
    const key=collection+"::"+String(r.id);
    const fp=recordFingerprint(r),remoteFp=cloudFingerprints.get(key);
    if(remoteFp===fp)continue;
@@ -505,7 +543,7 @@ function cloudStatusText(text,kind="normal"){
   if(ls)ls.textContent=cloudState.lastSync?`Dernière sync : ${new Date(cloudState.lastSync).toLocaleTimeString("fr-FR")}`:"";
 }
 function cloudMarkSynced(){
-  if(navigator.onLine&&!cloudListenerErrors.size&&!cloudWriteErrors.size&&!cloudMissingLocal.size&&!Object.keys(cloudPendingWrites).length&&cloudSnapshotReady.size===CLOUD_BUSINESS_COLLECTIONS.length){
+  if(navigator.onLine&&!cloudListenerErrors.size&&!cloudWriteErrors.size&&!cloudMissingLocal.size&&!Object.keys(cloudPendingWrites).length&&cloudSnapshotReady.size===cloudReadableCollections().length){
    cloudState.lastSync=new Date().toISOString();
   }
   cloudRefreshStatus();
@@ -599,6 +637,7 @@ function cloudAttachPhase1Listeners(){
 }
 async function cloudUpsert(collection,record){
   if(!user||!record?.id)return false;
+  if(!cloudCanWriteRecord(collection,record)){cloudWriteErrors.set(collection,"Rôle ou propriétaire non autorisé à modifier ce module.");cloudRefreshStatus();return false;}
   queueCloudWrite(collection,record);
   if(!cloudReady||!navigator.onLine||cloudApplyingSnapshot||!cloudSnapshotReady.has(collection))return false;
   try{
@@ -878,7 +917,7 @@ function requestEditIfRequired(collection,record,proposed,returnTo){
  }
  if(!Object.keys(changes).length){alert("Aucune modification à soumettre.");return true;}
  const actor=effectiveUserIdentity(),now=new Date().toISOString();
- const request={id:"MOD-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),collection,recordId:String(record.id),baseUpdatedAt:record.updatedAt||"",baseFingerprint:recordFingerprint(record),changes,project:record.project||"",owner:record.owner,requester:actor.label||user.username,requesterUid:actor.uid||user.uid||"",requesterRole:user.role,requestedAt:now,updatedAt:now,createdAt:now,status:"En attente"};
+ const request={id:"MOD-"+Date.now()+"-"+Math.random().toString(36).slice(2,7),collection,recordId:String(record.id),baseUpdatedAt:record.updatedAt||"",baseFingerprint:recordFingerprint(record),changes,project:record.project||"",owner:record.owner,requester:actor.label||user.username,requesterUid:user.uid||"",requesterTechnicianId:actor.technicianId||"",requesterRole:user.role,requestedAt:now,updatedAt:now,createdAt:now,status:"En attente"};
  db.editRequests.push(request);audit("Demande de modification","editRequests",request.id,collection+" / "+record.id,null,request);
  saveLocalOnly();cloudWriteGeneric("editRequests",request,"Demande de modification");
  alert("Demande envoyée à l’Admin. La donnée actuelle reste inchangée jusqu’à sa validation.");

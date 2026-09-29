@@ -1,0 +1,162 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function activeUser() { return signedIn() && userDoc().data.active == true; }
+    function roleIs(roleName) { return activeUser() && userDoc().data.role == roleName; }
+    function isAdmin() { return roleIs('ADMIN'); }
+    function isGestionnaire() { return roleIs('GESTIONNAIRE'); }
+    function isControle() { return roleIs('CONTROLE'); }
+    function isTechnicien() { return roleIs('TECHNICIEN'); }
+    function finance() { return isAdmin() || isGestionnaire(); }
+    function terrain() { return isAdmin() || isControle() || isTechnicien(); }
+    function operating() { return isAdmin() || isGestionnaire() || isControle() || isTechnicien(); }
+    function ownsNew() { return request.resource.data.ownerUid == request.auth.uid; }
+    function ownsOld() { return resource.data.ownerUid == request.auth.uid; }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+    match /dailyReports/{reportId} {
+      allow read: if isAdmin() || (activeUser() && ownsOld());
+      allow create: if activeUser() && ownsNew();
+      allow update: if isAdmin() || (activeUser() && ownsOld() && ownsNew());
+      allow delete: if isAdmin();
+    }
+    match /projects/{projectId} {
+      allow read: if activeUser();
+      allow create, update: if finance();
+      allow delete: if isAdmin();
+    }
+    match /purchases/{purchaseId} {
+      allow read, create, update: if finance();
+      allow delete: if isAdmin();
+    }
+    match /expenses/{expenseId} {
+      allow read, create, update: if finance();
+      allow delete: if isAdmin();
+    }
+    match /technicalReports/{reportId} {
+      allow read: if isAdmin() || isControle() || (activeUser() && ownsOld());
+      allow create: if isControle() && ownsNew();
+      allow update: if isAdmin() || (isControle() && ownsOld() && ownsNew());
+      allow delete: if isAdmin();
+    }
+    match /personnel/{employeeId} {
+      allow read: if activeUser();
+      allow create, update, delete: if isAdmin();
+    }
+    match /suppliers/{supplierId} {
+      allow read, create, update: if finance();
+      allow delete: if isAdmin();
+    }
+    match /stock/{stockId} {
+      allow read: if activeUser();
+      allow create, update: if finance();
+      allow delete: if isAdmin();
+    }
+    match /situations/{situationId} {
+      allow read: if terrain();
+      allow create, update: if isAdmin() || isControle();
+      allow delete: if isAdmin();
+    }
+
+    // Devis et comptabilité restent réservés à l'Admin.
+    match /quotes/{id} { allow read, write: if isAdmin(); }
+    match /bank/{id} { allow read, write: if isAdmin(); }
+    match /accounting/{id} { allow read, write: if isAdmin(); }
+    match /treasury/{id} { allow read, write: if isAdmin(); }
+    match /cashEntries/{id} {
+      allow read: if finance();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Factures et encaissements exploités par l'Admin et le Gestionnaire.
+    match /invoices/{id} { allow read, create, update: if finance(); allow delete: if isAdmin(); }
+    match /clientReceipts/{id} { allow read, create, update: if finance(); allow delete: if isAdmin(); }
+    match /requests/{id} { allow read, create, update: if finance(); allow delete: if isAdmin(); }
+    match /appro/{id} { allow read, create, update: if finance(); allow delete: if isAdmin(); }
+    match /editRequests/{id} {
+      allow read: if isAdmin() || (activeUser() && resource.data.requesterUid == request.auth.uid);
+      allow create: if activeUser()
+        && request.resource.data.requesterRole == userDoc().data.role
+        && request.resource.data.requesterUid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+    match /stockMovements/{id} { allow read, create, update: if finance(); allow delete: if isAdmin(); }
+    match /employees/{id} { allow read, create, update: if finance(); allow delete: if isAdmin(); }
+    match /payroll/{id} { allow read, create, update: if finance(); allow delete: if isAdmin(); }
+    match /employeeAdvances/{id} { allow read, create, update: if finance(); allow delete: if isAdmin(); }
+    match /clients/{id} { allow read, create, update: if finance(); allow delete: if isAdmin(); }
+
+    // Données terrain : lecture par les rôles concernés, édition restreinte.
+    match /attendanceWeekly/{id} {
+      allow read: if operating();
+      allow create, update: if operating();
+      allow delete: if isAdmin();
+    }
+    match /attendanceQR/{id} {
+      allow read: if operating();
+      allow create, update: if operating();
+      allow delete: if isAdmin();
+    }
+    match /siteControls/{id} { allow read: if terrain(); allow create, update: if terrain(); allow delete: if isAdmin(); }
+    match /reports/{id} { allow read: if operating(); allow create, update: if operating(); allow delete: if isAdmin(); }
+    match /planning/{id} { allow read: if terrain(); allow create, update: if isAdmin() || isControle(); allow delete: if isAdmin(); }
+    match /technicalFollowup/{id} { allow read: if terrain(); allow create, update: if isAdmin() || isControle(); allow delete: if isAdmin(); }
+    match /quality/{id} { allow read: if terrain(); allow create, update: if isAdmin() || isControle(); allow delete: if isAdmin(); }
+    match /nonConformities/{id} { allow read: if terrain(); allow create, update: if isAdmin() || isControle(); allow delete: if isAdmin(); }
+    match /equipment/{id} { allow read: if terrain(); allow create, update, delete: if isAdmin(); }
+    match /vehicles/{id} { allow read: if terrain(); allow create, update, delete: if isAdmin(); }
+    match /fuel/{id} { allow read: if terrain(); allow create, update, delete: if isAdmin(); }
+    match /usageSessions/{id} { allow read, write: if isAdmin(); }
+
+    // Compte technicien partagé : les mini-identités ne sont pas une authentification séparée.
+    match /technicianMiniProfiles/{id} {
+      allow read: if isAdmin() || isTechnicien();
+      allow create, update: if isAdmin() || isTechnicien();
+      allow delete: if isAdmin();
+    }
+    match /userPresence/{presenceId} {
+      allow read: if isAdmin();
+      allow create, update: if activeUser()
+        && request.resource.data.sharedUid == request.auth.uid
+        && (presenceId == request.auth.uid
+          || (isTechnicien() && presenceId == 'TECH-' + request.resource.data.technicianId));
+      allow delete: if isAdmin();
+    }
+    match /userActivity/{activityId} {
+      allow read: if isAdmin();
+      allow create: if activeUser()
+        && request.resource.data.sharedUid == request.auth.uid
+        && (request.resource.data.uid == request.auth.uid
+          || (isTechnicien() && request.resource.data.uid == 'TECH-' + request.resource.data.technicianId));
+      allow update, delete: if false;
+    }
+    match /notifications/{notificationId} {
+      allow read: if isAdmin() || (activeUser() && resource.data.userUid == request.auth.uid);
+      allow create: if isAdmin() || (activeUser()
+        && request.resource.data.sourceUid == request.auth.uid
+        && request.resource.data.targetRole == 'ADMIN'
+        && request.resource.data.read == false);
+      allow update, delete: if isAdmin();
+    }
+    match /settings/{settingId} { allow read: if activeUser(); allow write: if isAdmin(); }
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if activeUser();
+      allow update, delete: if false;
+    }
+    match /auditLog/{logId} {
+      allow read: if isAdmin();
+      allow create: if activeUser();
+      allow update, delete: if false;
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

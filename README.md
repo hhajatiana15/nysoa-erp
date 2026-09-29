@@ -1,4 +1,10 @@
-# NYSOA — patch cumulatif 4.9.11 (29/09/2026)
+# NYSOA — patch cumulatif 4.9.12, synchronisation par rôle (29/09/2026)
+
+## Correction Firebase par rôle
+
+Ce patch remplace l'écoute aveugle des 34 collections par des listes adaptées aux rôles ADMIN, GESTIONNAIRE, CONTROLE et TECHNICIEN. Les rapports journaliers et demandes de correction des non-Admin sont interrogés avec leur UID dans la requête, conformément aux règles Firestore (« rules are not filters »). Les envois non autorisés ne sont pas tentés en boucle ; ils restent signalés et les données locales ne sont pas effacées. Les règles proposées sont dans `firestore.rules` et couvrent également les collections de présence, activité, mini-profils techniciens, notifications et audit réellement utilisées par `app.js`. La règle de refus par défaut reste en place.
+
+**Limite de confidentialité à traiter séparément :** les documents `projects` contiennent encore des champs financiers dans la même fiche que les champs chantier. Comme les rôles terrain doivent lire ces documents, leurs budgets ne sont pas protégés contre une lecture directe via Firebase, même si l'interface les masque. Une séparation des données financières dans des documents Admin uniquement, avec migration prudente des fiches existantes, reste nécessaire avant de considérer le budget strictement confidentiel. De même, la limite de modification de 24 h est contrôlée dans l'interface mais pas intégralement par ces règles pour tous les anciens documents.
 
 ## Synchronisation Opera ↔ Chrome ↔ téléphone
 
@@ -36,10 +42,11 @@ Les boutons **← Précédent** et **Suivant →** se trouvent avant le choix du
 ## Installation
 
 1. Faire une **Sauvegarde complète Admin** et conserver une copie des fichiers actuels du dépôt GitHub. Ne pas effacer de données Firebase.
-2. Déposer **ensemble** `app.js`, `index.html` et `quote-pdf.js` à la racine du dépôt `nysoa-erp`. Conserver tous les autres fichiers existants (`styles.css`, bibliothèques, images, etc.). Si ces trois fichiers ont été modifiés indépendamment depuis le dernier patch, fusionner ces changements plutôt que les écraser.
-3. Publier GitHub Pages puis recharger la page sur Mac et téléphone. Le paramètre `app.js?v=4.9.11-cloud-reconciliation` force le renouvellement du cache du script.
-4. Tester avec un chantier d'essai dans une session Admin : accepter un devis et vérifier le budget ; ouvrir les encaissements avant puis après validation d'une avance ; facture seule, encaissement seul, paiement affecté à une facture, impression du reçu ; visiter DEVIS → Facturation → Précédent → Suivant en saisissant un brouillon DEVIS. Vérifier les soldes sur les deux appareils. L'accès Firebase authentifié, la synchronisation Cloud et l'impression physique n'ont pas été vérifiés depuis cet environnement.
+2. Dans Firebase Console → **Firestore Database → Règles**, conserver d'abord une copie des règles actuellement publiées. Remplacer le contenu **entier** par `firestore.rules`, puis cliquer **Publier**. Ne pas utiliser la règle générale `allow read, write: if true`.
+3. Déposer **ensemble** `app.js`, `index.html` et `quote-pdf.js` à la racine du dépôt `nysoa-erp`. `firestore.rules` n'est pas à téléverser sur GitHub pour activer les droits. Conserver les autres fichiers existants. Si les trois fichiers web ont été modifiés indépendamment depuis le dernier patch, fusionner ces changements plutôt que les écraser.
+4. Attendre la publication des règles **et** de GitHub Pages, puis recharger la page sur chaque appareil. Le paramètre `app.js?v=4.9.12-role-cloud` force le renouvellement du cache du script. Une seule moitié du déploiement peut encore montrer « permission denied ».
+5. Tester un compte de chaque rôle, puis avec un chantier d'essai : devis accepté → budget, encaissement validé, facture seule, rapport journalier propre au rôle, présence QR et rapport technique. Vérifier l'état Cloud et les soldes dans Opera et Chrome. L'accès Firebase authentifié, les règles effectivement publiées et l'impression physique n'ont pas été vérifiés depuis cet environnement.
 
 ## Contrôles locaux réalisés
 
-`node --check app.js`, `node --check quote-pdf.js`, `node audit_sync_navigateurs.cjs`, `node audit_devis_paiement.cjs`, `node audit_encaissement_direct.cjs`, `node audit_navigation_erp.cjs`, `node audit_devis_navigation.cjs`, `node audit_chantier_devis.cjs`, `node audit_brouillons_clients.cjs` : réussite. Les tests emploient un faux Cloud et un DOM simulé ; ils ne remplacent pas un essai complet dans le site authentifié avec les règles Firebase réelles.
+`node --check app.js`, `node --check quote-pdf.js`, `node audit_roles_cloud.cjs` et tous les `audit_*.cjs` : réussite. Les tests emploient un faux Cloud et un DOM simulé ; ils ne remplacent pas un essai complet dans le site authentifié avec les règles Firebase réelles ni le simulateur de règles Firebase.
