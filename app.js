@@ -397,7 +397,7 @@ function cashTable(){
 
 function dashboardDetail(type){
  let title="",rows=[];
- if(type==="revenue"){title="DÉTAIL DU CHIFFRE D’AFFAIRES";rows=invoiceRows().filter(r=>!currentProjectContext()||String(r.project)===String(currentProjectContext())).map(r=>({a:projectLabel(r.project),b:invoiceDisplayNo(r),c:money(invoiceLegacyAmount(r)),d:r.date||""}));}
+ if(type==="revenue"){title="DÉTAIL DES FACTURES ÉMISES";rows=invoiceRows().filter(r=>!currentProjectContext()||String(r.project)===String(currentProjectContext())).map(r=>({a:projectLabel(r.project),b:invoiceDisplayNo(r),c:money(invoiceLegacyAmount(r)),d:r.date||""}));}
  if(type==="expenses"){title="DÉTAIL DES DÉPENSES RÉELLES";rows=financialExpenseRows(currentProjectContext()).map(r=>({a:projectLabel(r.project),b:r.label||r.category||"",c:money(r.amount),d:r.fundSource||"Admin"}));}
  if(type==="employees"){title="DÉTAIL DES EMPLOYÉS ACTIFS";rows=(db.modules?.employees||[]).filter(e=>!e.deleted&&employeeStatusLabel(e)==="Actif").map(e=>({a:employeeName(e),b:projectLabel(employeeProject(e))||"Non affecté",c:employeeRole(e),d:employeeStatusLabel(e)}));}
  if(type==="projects"){title="DÉTAIL DES CHANTIERS";rows=accessibleProjects().map(p=>({id:p.id,a:projectChantierName(p),b:p.client||"",c:(p.progress||0)+"%",d:p.status||""}));}
@@ -617,6 +617,7 @@ function showLoginMessage(message){
 async function firebaseLogout(){
   stopPresence();
   if(typeof unsavedModuleViews!=="undefined")unsavedModuleViews.clear();
+ if(typeof erpNavigationHistory!=="undefined"){erpNavigationHistory.length=0;erpNavigationIndex=-1;updateErpHistoryButtons();}
   clearInterval(cloudAutoSyncTimer);
   cloudStopListeners();
   try{if(fbAuth)await fbAuth.signOut();}catch(e){}
@@ -1192,10 +1193,10 @@ function kpi(icon,color,title,value,note="",page=""){
   "RAPPORTS TECHNIQUES":"reports","RAPPORTS VALIDÉS":"reports","NON-CONFORMITÉS":"reports",
   "TECHNICIENS ACTIFS":"siteControls","EMPLOYÉS ACTIFS":"employees","POINTAGES DU JOUR":"attendance",
   "DÉPENSES TOTALES":"expenses","APPROVISIONNEMENTS SAISIS":"appro","DEMANDES EN ATTENTE":"appro",
-  "CHIFFRE D’AFFAIRES (TTC)":"invoices"
+  "FACTURATION ÉMISE (TTC)":"invoices"
  };
  const target=page||routes[title]||"";
- const detail=title==="CHIFFRE D’AFFAIRES (TTC)"?"revenue":title==="DÉPENSES TOTALES"?"expenses":title==="DÉPENSES RÉELLES"?"expenses":title==="COÛT RÉEL"?"expenses":title==="EMPLOYÉS ACTIFS"?"employees":(title==="CHANTIERS EN COURS"||title==="NOMBRE DE CHANTIERS")?"projects":"";
+ const detail=title==="FACTURATION ÉMISE (TTC)"?"revenue":title==="DÉPENSES TOTALES"?"expenses":title==="DÉPENSES RÉELLES"?"expenses":title==="COÛT RÉEL"?"expenses":title==="EMPLOYÉS ACTIFS"?"employees":(title==="CHANTIERS EN COURS"||title==="NOMBRE DE CHANTIERS")?"projects":"";
  const action=detail?`dashboardDetail('${detail}')`:(target?`go('${target}')`:"");
  return `<div class="kpi ${action?"kpi-link":""}" ${action?`role="button" tabindex="0" onclick="${action}" onkeydown="if(event.key==='Enter')${action}"`:""}>
  <div class="circle ${color}">${icon}</div><div><small>${title}</small><strong>${value}</strong><span style="font-size:10px;color:#6b7885">${note}</span></div></div>`;
@@ -1318,13 +1319,13 @@ function dashboardFinance(){
  ${kpi("💼","green","BUDGET PROJETS",money(totalBudget),"Prévision chantier")}
  ${kpi("📉","blue","BUDGET RESTANT",money(f.budgetRemaining),"Budget − toutes dépenses")}
  ${kpi("✅","teal","DEVIS VALIDÉS",money(validated),"Valeur contractuelle")}
- ${kpi("🧾","blue","CHIFFRE D’AFFAIRES",money(invoiced),"Factures / tranches émises")}
+ ${kpi("🧾","blue","FACTURATION ÉMISE",money(invoiced),"Factures / tranches émises")}
  ${kpi("💳","green","ENCAISSEMENTS CLIENTS",money(received),"Vola tena voaray")}
  ${kpi("📊","blue","RESTE À PAYER CONTRAT",money(f.contractRemaining),"Contrats − encaissements validés")}
  ${kpi("⏳","orange","CRÉANCES CLIENTS",money(receivable),"Facturé non encaissé")}
  ${kpi("💸","orange","COÛT RÉEL",money(actual),"Dépenses + paie")}
  ${kpi("📌","purple","COÛT ENGAGÉ",money(committed),"Réel + achats engagés non payés")}
- ${kpi("📈","teal","MARGE PROVISOIRE",money(margin),"CA − coût réel")}
+ ${kpi("📈","teal","MARGE PROVISOIRE",money(margin),"Facturé − coût réel")}
  ${kpi("👛","purple","SOLDE CAISSE",money(cashBal),"Entrées réelles − dépenses Gestionnaire")}
  ${kpi("🏦","blue","TRÉSORERIE GÉNÉRALE",money(financeScope().treasury),"Tous clients encaissés − paiements Admin − transferts caisse")}
  ${kpi("📋","blue","À VALIDER",pendingAppro+pendingReceipts,"Appro + encaissements")}
@@ -1529,14 +1530,15 @@ function dashboardCore(){
  <b>☁ Synchronisation automatique :</b> les données sont enregistrées dans le Cloud et mises à jour en temps réel sur les appareils connectés. Aucun fichier à télécharger ou importer.
 </div>
 <div class="kpis">
- ${kpi("📈","green","CHIFFRE D’AFFAIRES (TTC)",money(totalRevenue),"Calculé depuis les factures")}
+ ${kpi("📈","green","FACTURATION ÉMISE (TTC)",money(totalRevenue),"Distincte des encaissements")}
+ ${kpi("💳","teal","ENCAISSEMENTS CLIENTS",money(totalReceived),"Paiements validés réellement reçus")}
  ${kpi("👛","blue","DÉPENSES TOTALES",money(totalDep),"Suivi réel")}
- ${kpi("💰","orange","BÉNÉFICE NET",money(netProfit),"CA moins dépenses")}
+ ${kpi("💰","orange","MARGE PROVISOIRE",money(netProfit),"Facturé moins coûts suivis")}
  ${kpi("🏗","purple","NOMBRE DE CHANTIERS",accessibleProjects().length,"Total enregistré")}
  ${kpi("👥","teal","EMPLOYÉS ACTIFS",activeEmployees,"Effectif enregistré")}
  </div>
  <div class="grid-3">
-  <div class="panel"><h3>CHIFFRE D’AFFAIRES (TTC) PAR MOIS</h3>${monthlyFinanceChart("revenue",ctx)}</div>
+  <div class="panel"><h3>FACTURATION ÉMISE (TTC) PAR MOIS</h3>${monthlyFinanceChart("revenue",ctx)}</div>
   <div class="panel"><h3>DÉPENSES VS BUDGET (PAR MOIS)</h3>${monthlyFinanceChart("expenses",ctx)}</div>
   <div class="panel"><h3>RÉPARTITION DES DÉPENSES</h3>${expenseCategoryChart(ctx)}</div>
  </div>
@@ -2680,15 +2682,24 @@ function clientReceiptsPage(){
  <div class="panel"><h3>FACTURES ET ENCAISSEMENTS CLIENTS</h3>
  <div class="panel-body">
   <button class="btn primary" onclick="clientReceiptForm()">+ Nouvel encaissement</button> ${user.role==="ADMIN"?'<button class="btn secondary" onclick="invoicesPage()">Voir les factures</button>':""}
-  <div class="notice">Pourcentage payé = somme des encaissements validés / montant du contrat client. Le reste à payer contrat est distinct de la créance déjà facturée.</div>
+  <div class="notice">Pourcentage payé = encaissements validés / contrat client. Un paiement global peut être affecté plus tard à une facture ; une facture émise ne signifie pas qu’elle est payée.</div>
  </div>
  <div class="table-wrap"><table><thead><tr><th>Date</th><th>Chantier</th><th>Client</th><th>Facture</th><th>Montant reçu</th><th>% du contrat</th><th>Mode</th><th>Référence</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
- ${rows.length?rows.map(r=>{const base=clientContractAmount(r.project,receiptClientName(r));return `<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(receiptClientName(r))}</td><td>${esc(invoiceRows().find(i=>String(i.id)===String(r.invoiceId))?.invoiceNo||r.invoiceId||"En attente")}</td><td><b>${money(r.amount||0)}</b></td><td>${base?((+r.amount||0)/base*100).toFixed(2)+" %":"—"}</td><td>${esc(r.paymentMode||"")}</td><td>${esc(r.reference||"")}</td><td>${workflowBadge(r.status||"En attente")}</td><td><div class="edit-actions">
- ${r.invoiceId&&invoiceRows().some(i=>String(i.id)===String(r.invoiceId))&&user.role==="ADMIN"?`<button class="btn-xs" onclick="invoiceDetail('${esc(r.invoiceId)}')">Voir / imprimer facture</button>`:""}
+ ${rows.length?rows.map(r=>{const base=clientContractAmount(r.project,receiptClientName(r));return `<tr><td>${esc(r.date||"")}</td><td>${esc(projectLabel(r.project))}</td><td>${esc(receiptClientName(r))}</td><td>${esc(invoiceRows().find(i=>String(i.id)===String(r.invoiceId))?.invoiceNo||r.invoiceId||"Avance non affectée")}</td><td><b>${money(r.amount||0)}</b></td><td>${base?((+r.amount||0)/base*100).toFixed(2)+" %":"—"}</td><td>${esc(r.paymentMode||"")}</td><td>${esc(r.reference||"")}</td><td>${workflowBadge(r.status||"En attente")}</td><td><div class="edit-actions">
+ ${r.status==="Validé"?`<button class="btn-xs" onclick="clientReceiptDetail('${esc(r.id)}')">Voir / imprimer reçu</button>`:""}
+ ${r.invoiceId&&invoiceRows().some(i=>String(i.id)===String(r.invoiceId))&&user.role==="ADMIN"?`<button class="btn-xs" onclick="invoiceDetail('${esc(r.invoiceId)}')">Voir facture</button>`:""}
  ${user.role==="ADMIN"&&r.status==="En attente"?`<button class="btn-xs btn-edit" onclick="validateClientReceipt('${r.id}',true)">Valider</button><button class="btn-xs btn-delete" onclick="validateClientReceipt('${r.id}',false)">Rejeter</button>`:""}
  ${canOpenOwnEdit(r)&&!r.generatedFromInvoice?`<button class="btn-xs" onclick="clientReceiptForm('${r.id}')">${canUserChange(r)?"Modifier":"Demander correction"}</button>`:""}
  </div></td></tr>`;}).join(""):`<tr><td colspan="10">Aucun encaissement.</td></tr>`}
  </tbody></table></div></div>`;
+}
+function clientReceiptDetail(id){
+ const r=receiptRows().find(x=>String(x.id)===String(id)&&x.status==="Validé");
+ if(!r)return alert("Reçu validé introuvable.");
+ const contract=clientContractAmount(r.project,receiptClientName(r));
+ const balance=clientPaymentRows(r.project).find(x=>clientPaymentKey(x.client)===clientPaymentKey(receiptClientName(r)));
+ const invoice=r.invoiceId?invoiceRows().find(x=>String(x.id)===String(r.invoiceId)):null;
+ document.querySelector("#content").innerHTML=`<div class="panel invoice-detail"><div class="panel-body no-print"><button class="btn secondary" onclick="clientReceiptsPage()">← Encaissements</button> <button class="btn primary" onclick="window.print()">Imprimer / PDF</button></div><div class="panel-body"><h2>REÇU D’ENCAISSEMENT</h2><p><b>Entreprise :</b> NYSOA CONSTRUCT</p><p><b>Référence :</b> ${esc(r.reference||r.id)} · <b>Date :</b> ${esc(r.date||"")}</p><p><b>Client :</b> ${esc(receiptClientName(r))}</p><p><b>Chantier :</b> ${esc(projectFullLabel(r.project))}</p><p><b>Montant reçu :</b> ${money(r.amount||0)}</p><p><b>Mode :</b> ${esc(r.paymentMode||"—")}</p><p><b>Facture affectée :</b> ${esc(invoice?invoiceDisplayNo(invoice):"Avance / paiement global non affecté")}</p><p><b>Montant du contrat :</b> ${contract?money(contract):"À renseigner"}</p><p><b>Total encaissé validé :</b> ${money(balance?.received||0)}</p><p><b>Reste à payer sur le contrat :</b> ${contract?money(balance?.remaining||0):"À renseigner"}</p>${r.note?`<p><b>Observation :</b> ${esc(r.note)}</p>`:""}<p>Ce document atteste le paiement reçu. Il ne constitue pas une facture de travaux.</p></div></div>`;
 }
 function clientReceiptForm(id="",projectOverride=""){
  const r=id?receiptRows().find(x=>String(x.id)===String(id)):null;
@@ -2706,7 +2717,7 @@ function clientReceiptForm(id="",projectOverride=""){
  $("#content").innerHTML=`<div class="panel"><h3>${r?"MODIFIER":"NOUVEL"} ENCAISSEMENT CLIENT</h3><form id="fReceipt" data-receipt-id="${esc(r?.id||"")}" data-draft-id="${esc(draftId)}" class="form-grid">
  <label>Date<input name="date" type="date" value="${esc(r?.date||new Date().toISOString().slice(0,10))}" required></label>
  <label>Chantier<select name="project" required onchange="receiptProjectChanged(this.value)"><option value="">Choisir</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(project)===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}</select></label>
- <label>Facture / tranche<select name="invoiceId" onchange="receiptInvoiceChanged(this.value)"><option value="">Créer une facture pour cette avance</option>${inv.map(i=>`<option value="${esc(i.id)}" ${i.id===r?.invoiceId?"selected":""}>${esc(invoiceDisplayNo(i))} — ${money(i.trancheAmount||0)}</option>`).join("")}</select></label>
+ <label>Facture / tranche<select name="invoiceId" onchange="receiptInvoiceChanged(this.value)"><option value="">Paiement global / avance non affectée</option>${inv.map(i=>`<option value="${esc(i.id)}" ${i.id===r?.invoiceId?"selected":""}>${esc(invoiceDisplayNo(i))} — ${money(i.trancheAmount||0)}</option>`).join("")}</select></label>
  <label>Client<input name="client" id="receiptClient" list="receiptClientList" value="${esc(suggestedClient)}" oninput="recalcReceiptPayment()" required><datalist id="receiptClientList">${clientSuggestions.map(name=>`<option value="${esc(name)}"></option>`).join("")}</datalist></label>
  ${canEnterDirectBudget?`<label>Budget direct du chantier / contrat client (Ar)<input name="directBudget" id="receiptDirectBudget" type="number" min="1" step="0.01" oninput="recalcReceiptPayment()" required><small>Admin : montant contractuel sans devis validé. Il sera enregistré sur ce chantier et ce client.</small></label>`:""}
  <label>Avance / montant reçu (Ar)<input name="amount" id="receiptAmount" type="number" min="1" step="0.01" value="${+r?.amount||""}" oninput="recalcReceiptPayment()" required></label>
@@ -2737,10 +2748,9 @@ function clientReceiptForm(id="",projectOverride=""){
   if(amount<=0)return alert("Montant invalide.");
   if(!base)return alert("Renseignez le budget direct du chantier (Admin) ou validez un devis avant d’enregistrer cette avance.");
   if(already+amount>base+0.01)return alert("L’encaissement de ce client dépasse le montant du contrat sur ce chantier.");
-  if(invoice&&invoiceReceiptPaid(invoice.id,r?.id)+amount>invoiceLegacyAmount(invoice)+0.01)return alert("Le total des paiements attribués à cette facture dépasse son montant. Choisissez « Paiement global chantier » pour une avance non attribuée.");
+  if(invoice&&invoiceReceiptPaid(invoice.id,r?.id)+amount>invoiceLegacyAmount(invoice)+0.01)return alert("Le total des paiements attribués à cette facture dépasse son montant. Choisissez « Paiement global / avance non affectée » pour une avance non attribuée.");
   const linkedOldInvoice=r?.invoiceId?invoiceRows().find(i=>String(i.id)===String(r.invoiceId)&&i.generatedFromReceipt===r.id):null;
   if(linkedOldInvoice&&invoiceId&&invoiceId!==linkedOldInvoice.id)return alert("Cette facture est liée à l’encaissement. Modifiez-la depuis la facturation.");
-  if(!invoiceId&&user.role==="ADMIN"&&invoicePaidForProject(project,linkedOldInvoice?.id||"",client)+amount>base+0.01)return alert("Le contrat est déjà facturé. Sélectionnez la facture existante pour enregistrer son règlement.");
   const receiptId=e.target.dataset.draftId;
   const obj={id:receiptId,date:f.get("date"),project,invoiceId:invoiceId||linkedOldInvoice?.id||"",client,amount,paymentPercent:+(amount/base*100).toFixed(4),paymentMode:f.get("paymentMode"),reference:String(f.get("reference")||automaticReference).trim(),note:f.get("note")||"",status:r?.status|| (user.role==="ADMIN"?"Validé":"En attente"),owner:r?.owner||user.username,updatedBy:user.username,updatedAt:now};
   const receiptBefore=r?cloneRecord(r):null;
@@ -2752,15 +2762,9 @@ function clientReceiptForm(id="",projectOverride=""){
    audit("Saisie budget direct depuis encaissement","projects",projectRecord.id,`${client} — ${money(directBudget)}`,before,cloneRecord(projectRecord));
   }
   if(r)Object.assign(r,obj);else{obj.createdAt=now;db.clientReceipts.push(obj);}
-  if(obj.status==="Validé"&&(!invoiceId||linkedOldInvoice)){
-   if(linkedOldInvoice){
-    const old=cloneRecord(linkedOldInvoice);
-    linkedOldInvoice.trancheAmount=amount;linkedOldInvoice.tranchePercent=amount/base*100;linkedOldInvoice.date=obj.date;linkedOldInvoice.quoteAmount=base;linkedOldInvoice.updatedAt=now;
-    audit("Actualisation facture liée","invoices",linkedOldInvoice.id,linkedOldInvoice.invoiceNo,old,cloneRecord(linkedOldInvoice));
-   }else obj.invoiceId=createInvoiceForReceipt(obj,base).id;
-  }
+  if(linkedOldInvoice&&Math.abs((+r.amount||0)-amount)>0.01)return alert("Ancien paiement lié à une facture automatique : corrigez d’abord cette facture historique avec l’Admin.");
   audit(r?"Modification encaissement":"Nouvel encaissement","clientReceipts",obj.id,`${client} — ${money(amount)} — ${obj.reference}`,receiptBefore,cloneRecord(obj));
-  save();if(directBudget)cloudSyncRecord("projects",projectRecord);if(obj.invoiceId&&(!invoiceId||linkedOldInvoice))cloudWriteGeneric("invoices",invoiceRows().find(i=>i.id===obj.invoiceId),"Facture liée à un paiement");clientReceiptsPage();
+  save();if(directBudget)cloudSyncRecord("projects",projectRecord);clientReceiptsPage();
  };
 }
 function recalcReceiptPayment(){
@@ -2797,15 +2801,11 @@ function validateClientReceipt(id,accept){
   const other=sum(receiptRows().filter(x=>x.id!==r.id&&x.status==="Validé"&&String(x.project)===String(r.project)&&clientPaymentKey(receiptClientName(x))===clientPaymentKey(receiptClientName(r))).map(x=>x.amount));
   if(!base||other+(+r.amount||0)>base+0.01)return alert("Validation impossible : montant du contrat introuvable ou total encaissé supérieur au contrat de ce client.");
   if(r.invoiceId){const inv=invoiceRows().find(i=>String(i.id)===String(r.invoiceId));if(!inv||invoiceReceiptPaid(r.invoiceId,r.id)+(+r.amount||0)>invoiceLegacyAmount(inv)+0.01)return alert("Validation impossible : les paiements attribués dépassent le montant de cette facture.");}
-  if(!r.invoiceId){
-   if(invoicePaidForProject(r.project,"",receiptClientName(r))+(+r.amount||0)>base+0.01)return alert("Contrat déjà facturé : rattachez cet encaissement à une facture existante.");
-   r.invoiceId=createInvoiceForReceipt(r,base).id;
-  }
   r.status="Validé";r.validatedAt=new Date().toISOString();r.validatedBy=user.username;
  }else{
   r.status="Rejeté";r.rejectedAt=new Date().toISOString();r.rejectedBy=user.username;
  }
- r.updatedAt=new Date().toISOString();save();if(r.invoiceId&&accept)cloudWriteGeneric("invoices",invoiceRows().find(i=>i.id===r.invoiceId),"Facture liée à un paiement");clientReceiptsPage();
+ r.updatedAt=new Date().toISOString();save();clientReceiptsPage();
 }
 
 function createInvoiceForReceipt(receipt,contract){
@@ -3115,7 +3115,7 @@ async function invoicesPage(){
  const recoverable=cloudStateInvoices.recoverable||0;
 
  $("#content").innerHTML=`${projectContextNotice()}<div class="panel"><h3>FACTURATION PAR CHANTIER</h3>
- <div class="panel-body"><button class="btn primary" onclick="invoiceForm()">+ Nouvelle facture avec paiement</button> <button class="btn secondary" onclick="clientReceiptsPage()">Encaissements / paiements</button>
+ <div class="panel-body"><button class="btn primary" onclick="invoiceForm()">+ Nouvelle facture</button> <button class="btn secondary" onclick="clientReceiptsPage()">Encaissements / paiements</button>
  <button class="btn secondary" onclick="invoiceRecoveryPage()">🛟 Historique / récupération${recoverable?` (${recoverable})`:""}</button>
  ${legacyInvoiceRows().length?`<button class="btn secondary" onclick="legacyInvoiceReviewPage()">⚠ ${legacyInvoiceRows().length} ancienne(s) donnée(s) isolée(s)</button>`:""}
  ${restoredInvoices?`<div class="notice"><b>${restoredInvoices} facture(s) historique(s) récupérée(s) automatiquement.</b></div>`:""}
@@ -3166,9 +3166,8 @@ function invoiceForm(id="",projectOverride=""){
  <label>Total déjà facturé avant cette facture<input id="invoiceAlreadyPaid" value="${invoicePaidForProject(projectId,r?.id||"",r?.client||selectedQuote?.client||"",selectedQuoteId)}" readonly></label>
  <label>Reste à facturer après cette facture<input id="invoiceRemaining" value="0" readonly></label>
  <label>Déjà encaissé du client (validé)<input id="invoiceClientReceived" value="0" readonly></label>
- <label>Reste à payer après ce versement<input id="invoiceClientDue" value="0" readonly></label>
- ${!r?'<label>Mode de paiement reçu<select name="paymentMode"><option>Espèces</option><option>Virement</option><option>Mobile Money</option><option>Chèque</option><option>Autre</option></select></label>':""}
- <div class="notice full">Toute nouvelle facture créée ici enregistre également un encaissement validé du même montant. Les anciennes factures conservent leur historique de paiement.</div>
+ <label>Reste à payer sur le contrat<input id="invoiceClientDue" value="0" readonly></label>
+ <div class="notice full">Émettre une facture ne confirme aucun paiement. Enregistrez séparément l’encaissement réellement reçu, éventuellement rattaché à cette facture.</div>
  <label class="full">Observation<textarea name="note">${esc(r?.note||"")}</textarea></label>
  <div class="form-actions full"><button class="btn primary">Enregistrer</button><button type="button" class="btn secondary" onclick="sessionStorage.removeItem('nysoa_invoice_form_project');invoicesPage()">Annuler</button></div></form></div>`;
  recalcInvoiceForm();
@@ -3198,10 +3197,6 @@ function invoiceForm(id="",projectOverride=""){
   if(r&&alreadyReceivedForInvoice>0&&Math.abs(invoiceLegacyAmount(r)-tranche)>0.01)return alert("Cette facture a déjà un encaissement lié. Son montant ne peut plus être modifié sans corriger le paiement.");
   if(q&&!manualBudget&&Math.abs(projectBudgetAmount(activeProject)-sum(acceptedQuotesForProject(project).map(x=>quoteFinancials(x).ttc)))>0.01)return alert("Budget chantier et devis acceptés ne correspondent pas.");
   if(already+tranche>amount+0.01)return alert("Cette tranche dépasse le reste à facturer pour ce client et ce devis.");
-  if(!r){
-   const paid=sum(receiptRows().filter(rec=>rec.status==="Validé"&&String(rec.project)===String(project)&&clientPaymentKey(receiptClientName(rec))===clientPaymentKey(client)).map(rec=>rec.amount));
-   if(paid+tranche>amount+0.01)return alert("Ce paiement dépasserait le solde du contrat. Rattachez plutôt le règlement à une facture existante.");
-  }
   const before=r?cloneRecord(r):null,actor=effectiveUserIdentity();
   const obj={
    id:r?.id||f.get("recordId")||generateInvoiceInternalId(),
@@ -3212,14 +3207,6 @@ function invoiceForm(id="",projectOverride=""){
    updatedBy:actor.label||actor.username||user.username,updatedAt:new Date().toISOString()
   };
   if(r)Object.assign(r,obj);else{obj.createdAt=new Date().toISOString();db.modules.invoices.push(obj);}
-  if(!r){
-   const receiptId="ENC-FAC-"+obj.id,receipt={id:receiptId,date:obj.date,project,invoiceId:obj.id,client,amount:tranche,
-    paymentPercent:+(tranche/amount*100).toFixed(4),paymentMode:String(f.get("paymentMode")||"Espèces"),
-    reference:"REC-"+String(obj.date||"").replace(/-/g,"")+"-"+obj.id.slice(-8).toUpperCase(),
-    status:"Validé",owner:user.username,generatedFromInvoice:obj.id,createdAt:obj.createdAt,updatedAt:obj.updatedAt};
-   db.clientReceipts.push(receipt);obj.linkedReceiptId=receipt.id;
-   audit("Encaissement lié à facture","clientReceipts",receipt.id,`${client} — ${money(tranche)}`,null,cloneRecord(receipt));
-  }
   audit(r?"Modification facture":"Création facture","invoices",obj.id,`${obj.invoiceNo} — ${client} — ${money(tranche)}`,before,cloneRecord(obj));
   sessionStorage.removeItem("nysoa_invoice_form_project");
   saveLocalOnly();
@@ -3847,6 +3834,31 @@ const originalGo = go;
 // Keep the live editor nodes and their event handlers when the user visits another module.
 // A cached editor is scoped to the signed-in user and stays private on this device.
 const unsavedModuleViews=new Map();
+const erpNavigationHistory=[];
+let erpNavigationIndex=-1,erpHistoryMoving=false;
+function updateErpHistoryButtons(){
+ const back=document.getElementById("erpBackBtn"),forward=document.getElementById("erpForwardBtn");
+ if(back){back.disabled=erpNavigationIndex<=0;back.title=back.disabled?"Aucune page précédente":"Retour à "+erpNavigationHistory[erpNavigationIndex-1];}
+ if(forward){forward.disabled=erpNavigationIndex>=erpNavigationHistory.length-1;forward.title=forward.disabled?"Aucune page suivante":"Aller à "+erpNavigationHistory[erpNavigationIndex+1];}
+}
+function erpHistoryBack(){
+ if(erpNavigationIndex<=0)return;
+ erpHistoryMoving=true;erpNavigationIndex--;
+ try{go(erpNavigationHistory[erpNavigationIndex]);}finally{erpHistoryMoving=false;updateErpHistoryButtons();}
+}
+function erpHistoryForward(){
+ if(erpNavigationIndex>=erpNavigationHistory.length-1)return;
+ erpHistoryMoving=true;erpNavigationIndex++;
+ try{go(erpNavigationHistory[erpNavigationIndex]);}finally{erpHistoryMoving=false;updateErpHistoryButtons();}
+}
+function trackErpNavigation(page){
+ if(erpHistoryMoving||!page||erpNavigationHistory[erpNavigationIndex]===page){updateErpHistoryButtons();return;}
+ erpNavigationHistory.splice(erpNavigationIndex+1);
+ erpNavigationHistory.push(page);
+ if(erpNavigationHistory.length>40)erpNavigationHistory.shift();
+ erpNavigationIndex=erpNavigationHistory.length-1;
+ updateErpHistoryButtons();
+}
 function editableModuleView(content){
  return !!content?.querySelector('form, .quote-editor, .material-table');
 }
@@ -3861,6 +3873,7 @@ go = function(page){
   unsavedModuleViews.set(moduleDraftKey(previous),fragment);
  }
  currentPageForData=page;
+ trackErpNavigation(page);
  const key=moduleDraftKey(page),draft=unsavedModuleViews.get(key);
  if(draft&&content){
   unsavedModuleViews.delete(key);

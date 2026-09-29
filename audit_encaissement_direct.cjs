@@ -45,11 +45,9 @@ assert.equal(run(`db.clientReceipts[0].amount`),10525000);
 assert.equal(run(`clientPaymentRows('P')[0].remaining`),9475000);
 assert.equal(run(`clientPaymentRows('P')[0].percent`),52.625);
 assert.match(run(`db.clientReceipts[0].reference`),/^REC-\d{8}-/);
-assert.equal(run(`db.modules.invoices.length`),1);
-assert.equal(run(`db.modules.invoices[0].trancheAmount`),10525000);
-assert.equal(run(`db.clientReceipts[0].invoiceId===db.modules.invoices[0].id`),true);
-assert.equal(run(`invoiceReceiptPaid(db.modules.invoices[0].id)`),10525000);
-assert.equal(run(`invoicePaidForProject('P')`),10525000);
+assert.equal(run(`db.modules.invoices.length`),0);
+assert.equal(run(`db.clientReceipts[0].invoiceId`),'');
+assert.equal(run(`invoicePaidForProject('P')`),0);
 assert.equal(notices.length,0);
 // A second advance cannot exceed the remaining contract balance.
 run(`clientReceiptForm()`);
@@ -60,7 +58,7 @@ form.fields={date:'2026-09-29',project:'P',invoiceId:'',client:'Mr Jalanesh',amo
 form.onsubmit({preventDefault:noop,target:form});
 assert.equal(run(`db.clientReceipts.length`),1);
 assert.match(notices.at(-1),/dépasse le montant du contrat/);
-// An invoice created from a direct budget creates exactly one linked payment.
+// An invoice from a direct budget must remain unpaid until a separate receipt is recorded.
 run(`db.projects.push({id:'P2',chantier:'HOMEOPHARMA',name:'Finition',client:'Mme Aina',budget:10000000,budgetSource:'manuel'});`);
 run(`invoiceForm('','P2')`);
 const invoiceForm = element('#fInvoice');
@@ -69,8 +67,17 @@ invoiceForm.fields={recordId:'INV-test-direct',invoiceNo:'FAC-2026-1001',date:'2
   quoteAmount:'10000000',invoiceType:'Tranche',trancheAmount:'3000000',paymentMode:'Virement',note:''};
 invoiceForm.onsubmit({preventDefault:noop,target:invoiceForm});
 assert.equal(run(`invoiceRows().filter(i=>i.project==='P2').length`),1);
+assert.equal(run(`receiptRows().filter(r=>r.project==='P2').length`),0);
+assert.equal(run(`clientPaymentRows('P2')[0].remaining`),10000000);
+assert.equal(run(`invoiceReceiptPaid('INV-test-direct')`),0);
+run(`clientReceiptForm('','P2')`);
+const linkedDraft=element('#content').innerHTML.match(/data-draft-id="([^"]+)"/)[1];
+form.dataset.draftId=linkedDraft;
+form.fields={date:'2026-09-29',project:'P2',invoiceId:'INV-test-direct',client:'Mme Aina',amount:'2000000',directBudget:'',paymentMode:'Virement',reference:'',note:''};
+form.onsubmit({preventDefault:noop,target:form});
 assert.equal(run(`receiptRows().filter(r=>r.project==='P2').length`),1);
-assert.equal(run(`clientPaymentRows('P2')[0].remaining`),7000000);
-assert.equal(run(`invoiceReceiptPaid('INV-test-direct')`),3000000);
+assert.equal(run(`invoiceReceiptPaid('INV-test-direct')`),2000000);
+assert.equal(run(`clientPaymentRows('P2')[0].remaining`),8000000);
+assert.equal(run(`invoiceLegacyAmount(invoiceRows().find(i=>i.id==='INV-test-direct'))-invoiceReceiptPaid('INV-test-direct')`),1000000);
 assert.equal(notices.length,1);
-console.log('PASS: encaissement direct → facture, facture directe → encaissement, aucun double compte, reste à payer.');
+console.log('PASS: avance seule sans facture ; facture seule sans paiement ; paiement affecté une seule fois ; soldes exacts.');

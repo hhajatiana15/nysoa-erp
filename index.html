@@ -6,6 +6,14 @@
   <meta name="nysoa-sync-version" content="4.9.2-login-fix">
 <title>ERP NYSOA CONSTRUCT</title>
   <link rel="stylesheet" href="styles.css" />
+  <style>
+    @page nysoaInvoice { size: A4 portrait; margin: 0; }
+    @media print {
+      html:has(.invoice-detail), body:has(.invoice-detail) { width: auto !important; height: auto !important; }
+      body:has(.invoice-detail) #content, body:has(.invoice-detail) #content * { visibility: visible !important; }
+      body:has(.invoice-detail) .invoice-detail { page: nysoaInvoice; }
+    }
+  </style>
 </head>
 <body>
   <div id="login" class="login-screen">
@@ -68,6 +76,10 @@
           <button class="workspace-tab technique-tab" data-workspace="TECHNIQUE">TECHNIQUE</button>
         </div>
         <div class="data-toolbar no-print">
+          <div class="erp-navigation" role="group" aria-label="Historique de navigation ERP">
+            <button id="erpBackBtn" type="button" class="btn secondary" onclick="erpHistoryBack()" disabled title="Page précédente">← Précédent</button>
+            <button id="erpForwardBtn" type="button" class="btn secondary" onclick="erpHistoryForward()" disabled title="Page suivante">Suivant →</button>
+          </div>
           <label class="global-project-scope">🏗 Chantier
             <select id="globalProjectFilter" onchange="setGlobalProjectContext(this.value)">
               <option value="">Tous les chantiers</option>
@@ -101,7 +113,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
   <script src="qrcode.min.js"></script>
   <script src="pdf-lib.min.js"></script>
-  <script src="app.js?v=4.9.8-chantier-devis"></script>
+  <script src="app.js?v=4.9.9-finance-navigation"></script>
   <script src="quote-pdf.js?v=4.9.8-sans-validite"></script>
 </body>
 </html>
