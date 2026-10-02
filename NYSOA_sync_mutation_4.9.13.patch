@@ -1,0 +1,332 @@
+--- a/app.js
++++ b/app.js
+@@ -134,6 +134,8 @@
+  if(CLOUD_MODULE_COLLECTIONS.has(collection)){db.modules=db.modules||{};db.modules[collection]=rows;}
+  else db[collection]=rows;
+  saveLocalOnly();
++ // A snapshot coming from Firestore is a new local baseline, not a local mutation.
++ rememberLocalMutationFingerprints(collection,rows);
+ }
+ let lastMeaningfulActivityAt=0;
+ const REAL_ACTIVITY_WINDOW_MS=5*60*1000;
+@@ -163,7 +165,17 @@
+ }
+ function startPresence(){clearInterval(presenceTimer);lastMeaningfulActivityAt=Date.now();logUserActivity("Connexion ERP","session","","Ouverture d’une session utilisateur");presenceTimer=setInterval(()=>updatePresence("auto"),60000);}
+ function stopPresence(){clearInterval(presenceTimer);presenceTimer=null;if(user){logUserActivity("Déconnexion ERP","session","","Fermeture de session");updatePresence("offline");}}
+-document.addEventListener("visibilitychange",()=>{if(user&&cloudReady)updatePresence("auto");});
++document.addEventListener("visibilitychange",()=>{
++ if(!user||!cloudReady)return;
++ updatePresence("auto");
++ if(document.visibilityState==="visible"&&navigator.onLine){
++  cloudStatusText("Mise à jour Cloud…","busy");
++  setTimeout(async()=>{
++   await flushCloudMutationQueue("retour-ecran");
++   await cloudAutoSyncAll("retour-ecran");
++  },250);
++ }
++});
+ 
+ function adminPresencePage(){
+  if(user.role!=="ADMIN")return alert("Réservé à l’Admin.");
+@@ -201,22 +213,112 @@
+  if(!cloudReady||user?.role==="ADMIN"||!fbStore)return;
+  try{await fbStore.collection("notifications").add({module,title,detail:detail||"",entityId:entityId||"",sourceUid:user.uid,sourceName:user.label||user.username,sourceRole:user.role,targetRole:"ADMIN",read:false,createdAt:new Date().toISOString()});}catch(e){console.warn("notif",e);}
+ }
+-async function cloudWriteGeneric(collection,record,notifyTitle=""){
+- if(!user||!record?.id)return;
+- logUserActivity(notifyTitle||"Enregistrement / modification",collection,record.id,record.project||record.employeeName||"");
+- if(!cloudReady)return;
++const CLOUD_PENDING_MUTATIONS_KEY="nysoa_cloud_pending_mutations_v2";
++const cloudImmediateWrites=new Map();
++
++function loadCloudMutationQueue(){
+  try{
+- const payload=cloudSanitize({...record,cloudSyncedAt:new Date().toISOString()});delete payload.__syncConflict;
+- await fbStore.collection(collection).doc(String(record.id)).set(payload,{merge:true});
+- record.cloudSyncedAt=payload.cloudSyncedAt;
+- const key=collection+"::"+String(record.id);
+- cloudFingerprints.set(key,recordFingerprint(record));cloudRemoteVersions.set(key,businessTimestamp(record));
+- if(notifyTitle&&!record.cloudNotifiedAt&&user.role!=="ADMIN"){
++  const q=JSON.parse(localStorage.getItem(CLOUD_PENDING_MUTATIONS_KEY)||"[]");
++  return Array.isArray(q)?q:[];
++ }catch(_){return [];}
++}
++function saveCloudMutationQueue(queue){
++ try{localStorage.setItem(CLOUD_PENDING_MUTATIONS_KEY,JSON.stringify(queue||[]));}catch(e){console.warn("pending sync storage",e);}
++}
++function cloudMutationKey(collection,id){return collection+"::"+String(id);}
++function queueCloudMutation(collection,record,op="set",error=""){
++ if(!collection||!record?.id)return;
++ const q=loadCloudMutationQueue(),key=cloudMutationKey(collection,record.id),now=Date.now();
++ const payload=op==="set"?cloudSanitize({...record}):null;
++ const item={key,collection,id:String(record.id),op,payload,queuedAt:new Date().toISOString(),attempts:0,nextRetryAt:now,error:String(error?.message||error||"")};
++ const i=q.findIndex(x=>x.key===key);
++ if(i>=0)q[i]={...q[i],...item,attempts:q[i].attempts||0};else q.push(item);
++ saveCloudMutationQueue(q);
++ cloudStatusText(`Synchronisation en attente (${q.length})`,navigator.onLine?"busy":"error");
++}
++function removeQueuedCloudMutation(collection,id){
++ const key=cloudMutationKey(collection,id),q=loadCloudMutationQueue(),next=q.filter(x=>x.key!==key);
++ if(next.length!==q.length)saveCloudMutationQueue(next);
++}
++function pendingCloudMutationCount(){return loadCloudMutationQueue().length;}
++
++async function cloudWriteImmediate(collection,record){
++ if(!user||!record?.id)return false;
++ if(!record.updatedAt)record.updatedAt=new Date().toISOString();
++ if(!record.updatedBy)record.updatedBy=effectiveUserIdentity?.().label||user.username||user.email||"";
++ const key=cloudMutationKey(collection,record.id),fp=recordFingerprint(record);
++ const active=cloudImmediateWrites.get(key);
++ if(active&&active.fp===fp)return active.promise;
++ if(!cloudReady||!fbStore||!navigator.onLine){queueCloudMutation(collection,record,"set","offline");return false;}
++ const promise=(async()=>{
++  try{
++   cloudStatusText("Synchronisation…","busy");
++   const payload=cloudSanitize({...record,cloudSyncedAt:new Date().toISOString()});delete payload.__syncConflict;
++   await fbStore.collection(collection).doc(String(record.id)).set(payload,{merge:true});
++   record.cloudSyncedAt=payload.cloudSyncedAt;
++   removeQueuedCloudMutation(collection,record.id);
++   cloudFingerprints.set(key,recordFingerprint(record));
++   cloudRemoteVersions.set(key,businessTimestamp(record));
++   cloudLocalMutationFingerprints.set(key,recordFingerprint(record));
++   saveLocalOnly();cloudMarkSynced();
++   return true;
++  }catch(e){
++   console.warn("cloud immediate",collection,record.id,e);
++   cloudState.error=e?.message||String(e);
++   queueCloudMutation(collection,record,"set",e);
++   cloudStatusText(navigator.onLine?"Erreur Cloud — donnée conservée":"Hors ligne — donnée conservée","error");
++   return false;
++  }finally{
++   const cur=cloudImmediateWrites.get(key);if(cur?.promise===promise)cloudImmediateWrites.delete(key);
++  }
++ })();
++ cloudImmediateWrites.set(key,{fp,promise});
++ return promise;
++}
++
++async function cloudWriteGeneric(collection,record,notifyTitle="",options={}){
++ if(!user||!record?.id)return false;
++ if(!options?.silent)logUserActivity(notifyTitle||"Enregistrement / modification",collection,record.id,record.project||record.employeeName||"");
++ const ok=await cloudWriteImmediate(collection,record);
++ if(ok&&notifyTitle&&!record.cloudNotifiedAt&&user.role!=="ADMIN"){
+   await createAdminNotification(collection,notifyTitle,`${user.label||user.username} — ${record.project||record.id}`,record.id);
+-  record.cloudNotifiedAt=new Date().toISOString();
++  record.cloudNotifiedAt=new Date().toISOString();saveLocalOnly();
+  }
+- saveLocalOnly();cloudMarkSynced();
+-}catch(e){console.warn("cloud generic",collection,e);}
++ return ok;
++}
++
++async function queueCloudDelete(collection,id,error=""){
++ if(!collection||!id)return;
++ const q=loadCloudMutationQueue(),key=cloudMutationKey(collection,id),now=Date.now();
++ const item={key,collection,id:String(id),op:"delete",payload:null,queuedAt:new Date().toISOString(),attempts:0,nextRetryAt:now,error:String(error?.message||error||"")};
++ const i=q.findIndex(x=>x.key===key);if(i>=0)q[i]={...q[i],...item,attempts:q[i].attempts||0};else q.push(item);
++ saveCloudMutationQueue(q);
++}
++
++async function flushCloudMutationQueue(reason="auto"){
++ if(!cloudReady||!fbStore||!user||!navigator.onLine)return false;
++ let q=loadCloudMutationQueue();if(!q.length)return true;
++ const now=Date.now(),remaining=[];
++ cloudStatusText(`Synchronisation en attente (${q.length})`,"busy");
++ for(const item of q){
++  if((item.nextRetryAt||0)>now){remaining.push(item);continue;}
++  try{
++   const ref=fbStore.collection(item.collection).doc(String(item.id));
++   if(item.op==="delete")await ref.delete();
++   else{
++    const payload=cloudSanitize({...item.payload,cloudSyncedAt:new Date().toISOString()});delete payload.__syncConflict;
++    await ref.set(payload,{merge:true});
++    const rows=cloudCollectionLocalRows(item.collection),local=rows.find(r=>String(r.id)===String(item.id));
++    if(local){local.cloudSyncedAt=payload.cloudSyncedAt;cloudFingerprints.set(item.key,recordFingerprint(local));cloudRemoteVersions.set(item.key,businessTimestamp(local));cloudLocalMutationFingerprints.set(item.key,recordFingerprint(local));}
++   }
++  }catch(e){
++   const attempts=(item.attempts||0)+1;
++   remaining.push({...item,attempts,error:String(e?.message||e),nextRetryAt:Date.now()+Math.min(60000,1000*Math.pow(2,Math.min(attempts,6)))});
++  }
++ }
++ saveCloudMutationQueue(remaining);saveLocalOnly();
++ if(remaining.length)cloudStatusText(`Synchronisation en attente (${remaining.length})`,"error");else cloudMarkSynced();
++ return remaining.length===0;
+ }
+ let cloudRealtimeRenderTimer=null;
+ const cloudFingerprints=new Map();
+@@ -230,6 +332,33 @@
+   return JSON.stringify(x);
+  }catch(e){return String(r?.id||"");}
+ }
++const cloudLocalMutationFingerprints=new Map();
++function rememberLocalMutationFingerprints(collection,rows){
++ (rows||[]).forEach(r=>{if(r?.id)cloudLocalMutationFingerprints.set(cloudMutationKey(collection,r.id),recordFingerprint(r));});
++}
++function primeLocalMutationFingerprints(){
++ if(typeof db==="undefined")return;
++ CLOUD_BUSINESS_COLLECTIONS.forEach(c=>rememberLocalMutationFingerprints(c,cloudCollectionLocalRows(c)));
++}
++function collectDirtyLocalMutations(){
++ const dirty=[],nowIso=new Date().toISOString();
++ CLOUD_BUSINESS_COLLECTIONS.forEach(collection=>{
++  const rows=cloudCollectionLocalRows(collection);
++  (rows||[]).forEach(record=>{
++   if(!record?.id)return;
++   const key=cloudMutationKey(collection,record.id),before=cloudLocalMutationFingerprints.get(key),beforeFp=recordFingerprint(record);
++   if(before===undefined&&!cloudApplyingSnapshot){
++    // Baseline is primed at startup and on every remote snapshot, so an unknown ID here is a real local creation/import.
++    record.updatedAt=record.updatedAt||nowIso;record.updatedBy=record.updatedBy||effectiveUserIdentity?.().label||user?.username||"";dirty.push({collection,record});
++   }else if(before!==beforeFp&&!cloudApplyingSnapshot){
++    // Any business mutation gets a fresh timestamp so it cannot be skipped by timestamp-only sync logic.
++    record.updatedAt=nowIso;record.updatedBy=effectiveUserIdentity?.().label||user?.username||record.updatedBy||"";dirty.push({collection,record});
++   }
++   cloudLocalMutationFingerprints.set(key,recordFingerprint(record));
++  });
++ });
++ return dirty;
++}
+ function businessTimestamp(r){
+  // CRITICAL: cloudSyncedAt is transport metadata, never a business version.
+  // Only real create/update times are allowed to decide which data is newer.
+@@ -352,6 +481,7 @@
+ }
+ async function cloudAutoSyncAll(reason="auto"){
+  if(!cloudReady||!user||!navigator.onLine||cloudApplyingSnapshot)return;
++ await flushCloudMutationQueue(reason);
+  for(const collection of CLOUD_BUSINESS_COLLECTIONS){
+   const rows=cloudCollectionLocalRows(collection);
+   for(const r of rows){
+@@ -386,7 +516,7 @@
+  clearInterval(cloudAutoSyncTimer);
+  // Listeners establish the cloud baseline first. No blind startup push.
+  setTimeout(()=>cloudAutoSyncAll("startup-safe"),3500);
+- cloudAutoSyncTimer=setInterval(()=>cloudAutoSyncAll("timer-safe"),7000);
++ cloudAutoSyncTimer=setInterval(()=>cloudAutoSyncAll("timer-safe"),5000);
+ }
+ 
+ function cashTable(){
+@@ -471,6 +601,7 @@
+     if(remoteTime>=localTime)Object.assign(local,remote);
+   });
+   save();
++  rememberLocalMutationFingerprints(collection,db[collection]);
+   cloudApplyingSnapshot=false;
+   cloudMarkSynced();
+   if(["dashboard","projects","dailyReports"].includes(cloudCurrentPage)){
+@@ -507,50 +638,31 @@
+   );
+ }
+ async function cloudUpsert(collection,record){
+-  if(!cloudReady||!user||cloudApplyingSnapshot||!record?.id)return false;
+-  try{
+-    cloudStatusText("Synchronisation…","busy");
+-    const payload=cloudSanitize(record);
+-    if(collection==="dailyReports"){
+-      payload.ownerUid=payload.ownerUid||user.uid;
+-      payload.ownerEmail=payload.ownerEmail||user.email;
+-    }
+-    payload.cloudSyncedAt=new Date().toISOString();
+-    await fbStore.collection(collection).doc(String(record.id)).set(payload,{merge:true});
+-    record.cloudSyncedAt=payload.cloudSyncedAt;
+-    if(collection==="dailyReports"){
+-      record.ownerUid=payload.ownerUid;
+-      record.ownerEmail=payload.ownerEmail;
+-    }
+-    save();
+-    cloudMarkSynced();
+-    return true;
+-  }catch(err){
+-    console.error("Cloud upsert",collection,err);
+-    cloudState.error=err.message;
+-    cloudStatusText(navigator.onLine?"Erreur cloud":"Hors ligne","error");
+-    return false;
++  if(!user||cloudApplyingSnapshot||!record?.id)return false;
++  if(collection==="dailyReports"){
++    record.ownerUid=record.ownerUid||user.uid;
++    record.ownerEmail=record.ownerEmail||user.email;
+   }
++  return cloudWriteImmediate(collection,record);
+ }
+ async function cloudDelete(collection,id){
+-  if(!cloudReady||!user||user.role!=="ADMIN"||!id)return false;
++  if(!user||user.role!=="ADMIN"||!id)return false;
++  if(!cloudReady||!fbStore||!navigator.onLine){await queueCloudDelete(collection,id,"offline");return false;}
+   try{
+     cloudStatusText("Synchronisation…","busy");
+     await fbStore.collection(collection).doc(String(id)).delete();
+-    cloudMarkSynced();
+-    return true;
++    removeQueuedCloudMutation(collection,id);cloudMarkSynced();return true;
+   }catch(err){
+-    console.error(err);cloudStatusText("Erreur cloud","error");return false;
++    console.error(err);await queueCloudDelete(collection,id,err);cloudStatusText("Erreur Cloud — suppression en attente","error");return false;
+   }
+ }
+ function cloudSyncRecord(collection,record){
+-  if(!record)return;
+-  if(collection==="projects" && !["ADMIN","GESTIONNAIRE"].includes(user?.role||""))return;
++  if(!record||!CLOUD_BUSINESS_COLLECTIONS.includes(collection))return;
+   if(collection==="dailyReports"){
+     record.ownerUid=record.ownerUid||user?.uid||record.ownerUid;
+     record.ownerEmail=record.ownerEmail||user?.email||record.ownerEmail;
+   }
+-  cloudUpsert(collection,record);
++  cloudWriteImmediate(collection,record);
+ }
+ async function cloudSyncPendingPhase1(){
+   if(!cloudReady||!user)return;
+@@ -657,7 +769,14 @@
+     if(msg)msg.textContent="Connexion Firebase indisponible. Vérifiez Internet puis actualisez la page.";
+   }
+ }
+-window.addEventListener("online",()=>{cloudStatusText("Reconnexion…","busy");if(user&&cloudReady){cloudSyncPendingPhase1();cloudAutoSyncAll("reconnexion");cloudStopListeners();startExtendedRealtimeListeners();}});
++window.addEventListener("online",()=>{
++ cloudStatusText("Reconnexion…","busy");
++ if(user&&cloudReady){
++  cloudStopListeners();startExtendedRealtimeListeners();
++  setTimeout(async()=>{await flushCloudMutationQueue("reconnexion");await cloudSyncPendingPhase1();await cloudAutoSyncAll("reconnexion");},350);
++  setTimeout(()=>cloudAutoSyncAll("reconnexion-securite"),2500);
++ }
++});
+ window.addEventListener("offline",()=>cloudStatusText("Hors ligne","error"));
+ 
+ const INIT={
+@@ -686,12 +805,22 @@
+ const $=s=>document.querySelector(s), money=n=>new Intl.NumberFormat("fr-FR").format(+n||0)+" Ar", sum=a=>a.reduce((x,y)=>x+(+y||0),0);
+ const saveLocalOnly=()=>localStorage.setItem("nysoa_stable_vide_db_v1",JSON.stringify(db));
+ let cloudAutoSaveDebounce=null;
+-const save=()=>{saveLocalOnly();if(cloudReady&&user){clearTimeout(cloudAutoSaveDebounce);cloudAutoSaveDebounce=setTimeout(()=>cloudAutoSyncAll("save"),350);}};
++const save=()=>{
++ const dirty=cloudApplyingSnapshot?[]:collectDirtyLocalMutations();
++ saveLocalOnly();
++ if(cloudApplyingSnapshot){primeLocalMutationFingerprints();return;}
++ if(user){
++  // Every permitted business mutation is attempted immediately; failed writes stay in the durable pending queue.
++  dirty.forEach(({collection,record})=>cloudWriteImmediate(collection,record));
++  if(cloudReady){clearTimeout(cloudAutoSaveDebounce);cloudAutoSaveDebounce=setTimeout(()=>cloudAutoSyncAll("save-fallback"),500);}
++ }
++};
+ if(!db.modules) db.modules={};
+ if(!Array.isArray(db.clientReceipts)) db.clientReceipts=[];
+ if(!Array.isArray(db.modules.stockMovements)) db.modules.stockMovements=[];
+ if(!Array.isArray(db.modules.cashEntries)) db.modules.cashEntries=[];
+ if(!Array.isArray(db.modules.employeeAdvances)) db.modules.employeeAdvances=[];
++primeLocalMutationFingerprints();
+ const canEditRecord=(r)=>user.role==="ADMIN" || ((user.role==="GESTIONNAIRE"||user.role==="CONTROLE") && r.owner===user.username && (r.workflow||"Brouillon")!=="Validé");
+ const workflowBadge=(w)=>`<span class="badge ${w==="Validé"?"b-green":w==="À corriger"?"b-orange":"b-blue"}">${w||"Brouillon"}</span>`;
+ 
+@@ -1554,12 +1683,12 @@
+ function deleteSiteControl(id){
+  const r=db.siteControls.find(x=>x.id===id);if(!r||!canChangeSiteControl(r))return;
+  if(!confirm("Supprimer ce contrôle chantier ?"))return;
+- r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=user.username;save();siteControlsPage();
++ r.deleted=true;r.deletedAt=new Date().toISOString();r.deletedBy=user.username;r.updatedAt=r.deletedAt;r.updatedBy=user.username;save();siteControlsPage();
+ }
+ function validateSiteControl(id){
+  if(user.role!=="ADMIN")return;
+  const r=db.siteControls.find(x=>x.id===id);if(!r)return;
+- r.workflow="Validé";r.validatedBy=user.username;r.validatedAt=new Date().toISOString();save();siteControlsPage();
++ r.workflow="Validé";r.validatedBy=user.username;r.validatedAt=new Date().toISOString();r.updatedAt=r.validatedAt;r.updatedBy=user.username;save();siteControlsPage();
+ }
+ function openSitePhoto(id){
+  const r=db.siteControls.find(x=>x.id===id);if(!r?.photo)return;
