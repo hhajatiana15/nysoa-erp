@@ -1674,6 +1674,10 @@ function dashboardCore(){
  let invoices=db.modules.invoices||[];
  let employees=db.modules.employees||[];
  let stock=db.modules.stock||[];
+ // V4.1: diagnostic non destructif — une facture visible ne doit pas passer inaperçue.
+ const invoiceVisibleTotal=invoiceRows().filter(r=>!ctx||String(r.project||"")===String(ctx))
+   .reduce((n,r)=>n+invoiceLegacyAmount(r),0);
+ const invoiceDashboardGap=Math.abs(invoiceVisibleTotal-finances.invoiced)>0.01;
  let totalRevenue=finances.invoiced;
  let totalReceived=finances.received;
  let netProfit=totalRevenue-totalDep;
@@ -1687,6 +1691,7 @@ function dashboardCore(){
  let attendanceToday=sum([...attendanceByEmployee.values()]);
  let chartEmpty=`<div class="empty-state">Aucune donnée disponible pour le moment.</div>`;
  let alertItems=[];
+ if(invoiceDashboardGap)alertItems.push(`Facturation à vérifier : détail ${money(invoiceVisibleTotal)} / tableau de bord ${money(finances.invoiced)}. Contrôler chantier, date et statut des factures avant correction.`);
  if(stock.length){
    let lowStock=stock.filter(r=>!r.deleted&&+(r.values?.[1]||0)<=5).length;
    if(lowStock)alertItems.push(`Stock faible : ${lowStock} article(s)`);

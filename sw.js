@@ -1,5 +1,5 @@
 // NYSOA: network-first for application code to prevent stale GitHub Pages versions.
-const CACHE_NAME = 'nysoa-erp-v4-20261025';
+const CACHE_NAME = 'nysoa-erp-v4-1-20261025';
 const ASSETS = ['./index.html','./app.js','./style.css','./manifest.json','./assets/logo_nysoa_officiel.jpg'];
 self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(ASSETS))); self.skipWaiting(); });
 self.addEventListener('activate', event => { event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('nysoa-erp-') && k !== CACHE_NAME).map(k => caches.delete(k))))); self.clients.claim(); });

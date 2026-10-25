@@ -670,3 +670,13 @@ tbody tr:hover {
 .login-logo{max-width:190px;max-height:140px;object-fit:contain}
 .header-logo{object-fit:contain}
 .badge-logo{object-fit:contain}
+
+/* NYSOA V4.1 — contrastes doux et tableaux lisibles, sans changer les calculs */
+:root { color-scheme: dark; }
+.table-wrap table tbody tr:nth-child(odd) { background: #24374b; }
+.table-wrap table tbody tr:nth-child(even) { background: #1b2c3e; }
+.table-wrap table tbody tr:hover { background: #31516b; box-shadow: inset 4px 0 #13b6cb; }
+.table-wrap table tbody td { border-bottom: 1px solid #415569; }
+.table-wrap table thead th { background: #30465b; color: #f2f7fb; }
+.login-logo { max-width: 190px; max-height: 140px; object-fit: contain; }
+.header-logo { width: 48px; height: 40px; object-fit: contain; background: #fff; border-radius: 5px; padding: 2px; }
