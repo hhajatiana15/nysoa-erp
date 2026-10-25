@@ -7,9 +7,10 @@
   "theme_color": "#1463b8",
   "icons": [
     {
-      "src": "assets/logo_nysoa_construct.png",
-      "sizes": "192x192",
-      "type": "image/png"
+      "src": "assets/logo_nysoa_construct.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
     }
   ]
 }

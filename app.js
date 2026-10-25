@@ -801,7 +801,13 @@ function initFirebaseCloud(){
         cloudSnapshotReady.clear();cloudListenerErrors.clear();cloudWriteErrors.clear();cloudMissingLocal.clear();cloudPendingOwner="";loadCloudPendingWrites();
         sessionStorage.setItem("nysoa_v2_user",JSON.stringify(user));
         cloudLocalUserUpsert();
-        boot();
+        try {
+          boot();
+        } catch (bootError) {
+          console.error("NYSOA: échec du chargement de l’interface après authentification", bootError);
+          showErpStartupError(bootError);
+          return; // Ne pas déconnecter un compte Firebase valide sur une erreur d'interface.
+        }
         startExtendedRealtimeListeners();
         if(user.role!=="TECHNICIEN"||technicianSessionProfile())startPresence();
         startCloudAutoSync();
@@ -1182,41 +1188,10 @@ function projectMetrics(id){
 async function login(u,p){
   try{
     showLoginMessage("Connexion à Firebase…");
-    if(String(u).trim().toLowerCase() === "hhajatiana15@gmail.com"){
-      user = {
-        uid: "ADMIN-OFFICIAL-HAJATIANA",
-        username: "admin",
-        role: "ADMIN",
-        label: "Hajatiana (Admin)",
-        email: "hhajatiana15@gmail.com",
-        assignedProjects: []
-      };
-      sessionStorage.setItem("nysoa_v2_user", JSON.stringify(user));
-      document.getElementById("login")?.classList.add("hidden");
-      document.getElementById("app")?.classList.remove("hidden");
-      boot();
-      return true;
-    }
     await firebaseEmailLogin(u,p);
     return true;
   }catch(err){
     console.error(err);
-    // If referer blocked or any firebase auth error when running locally, allow fallback for official admin email
-    if(String(u).trim().toLowerCase() === "hhajatiana15@gmail.com" || err?.code === "auth/requests-from-referer-null-are-blocked"){
-      user = {
-        uid: "ADMIN-OFFICIAL-HAJATIANA",
-        username: "admin",
-        role: "ADMIN",
-        label: "Hajatiana (Admin)",
-        email: "hhajatiana15@gmail.com",
-        assignedProjects: []
-      };
-      sessionStorage.setItem("nysoa_v2_user", JSON.stringify(user));
-      document.getElementById("login")?.classList.add("hidden");
-      document.getElementById("app")?.classList.remove("hidden");
-      boot();
-      return true;
-    }
     showLoginMessage(err?.code==="auth/invalid-credential"||err?.code==="auth/wrong-password"||err?.code==="auth/user-not-found"
       ?"Adresse e-mail ou mot de passe incorrect."
       :(err?.message||"Connexion impossible."));
@@ -1251,52 +1226,41 @@ async function exportQuotePdf(){
  }catch(err){alert('Impossible d’exporter le PDF : '+(err?.message||err));}
 }
 
+function showErpStartupError(error){
+  const loginEl=document.getElementById("login"),appEl=document.getElementById("app"),content=document.getElementById("content");
+  if(loginEl) loginEl.classList.add("hidden");
+  if(appEl) appEl.classList.remove("hidden");
+  if(content){
+    content.replaceChildren();
+    const panel=document.createElement("div");panel.className="panel";panel.style.padding="24px";
+    const h=document.createElement("h2");h.textContent="Erreur de chargement NYSOA";
+    const explanation=document.createElement("p");explanation.textContent="Votre connexion Firebase a été établie, mais l’interface a rencontré une erreur. Aucune modification des données n’est nécessaire.";
+    const info=document.createElement("pre");info.style.whiteSpace="pre-wrap";info.style.marginTop="12px";
+    info.textContent=String(error?.message||error||"Erreur inconnue");
+    const retry=document.createElement("button");retry.className="btn primary";retry.textContent="Actualiser l’application";retry.style.marginTop="12px";retry.onclick=()=>location.reload();
+    panel.append(h,explanation,info,retry);content.append(panel);
+  }
+}
 function boot(){
  try{migrateProjectChantierFields();}catch(e){console.warn('migration chantier',e);}
- ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();
- if(!user){
-  user = { uid: "DEFAULT-ADMIN", username: "admin", role: "ADMIN", label: "Admin", email: "admin@nysoa.mg", assignedProjects: [] };
-  sessionStorage.setItem("nysoa_v2_user", JSON.stringify(user));
- }
- if(user.role!=="ADMIN"&&(user.role!=="TECHNICIEN"||technicianSessionProfile()))startUsageSession();
- $("#login")?.classList.add("hidden");$("#app")?.classList.remove("hidden");
- const actor=effectiveUserIdentity();
- const label=$("#currentUserLabel"),today=$("#today"),year=$("#exerciseYear"),reset=$("#resetTestDataBtn");
- if(label)label.textContent=actor.label||user.label;
- if(today)today.textContent=new Date().toLocaleDateString("fr-FR");
- if(year)year.textContent=String(new Date().getFullYear());
- if(reset)reset.classList.toggle("hidden",user.role!=="ADMIN");
- renderMenu();
- const obsoleteManualButtons=["sendUpdatesBtn","refreshAdminBtn","publishValidationBtn","importValidationBtn","exportUsageBtn","importUsageBtn","exportDailyReportsBtn","importDailyReportsBtn","cloudMigrateBtn"];
- obsoleteManualButtons.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display="none";});
- const cloudSyncBtn=document.getElementById("cloudSyncBtn");
- if(cloudSyncBtn){cloudSyncBtn.style.display="inline-flex";cloudSyncBtn.title="Synchronisation de secours — le fonctionnement normal est automatique";}
- cloudRefreshStatus();
- if(user.role==="TECHNICIEN"&&!technicianSessionProfile())technicianIdentityGate();
- else if(user.role==="ADMIN"&&adminWorkspace==="FINANCE")go("dashboardFinance");
- else if(user.role==="ADMIN"&&adminWorkspace==="TECHNIQUE")go("dashboardTechnique");
- else go("dashboard");
-}
+ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();if(user.role!=="ADMIN"&&(user.role!=="TECHNICIEN"||technicianSessionProfile()))startUsageSession();$("#login")?.classList.add("hidden");$("#app")?.classList.remove("hidden");const actor=effectiveUserIdentity();const label=$("#currentUserLabel"),today=$("#today"),year=$("#exerciseYear"),reset=$("#resetTestDataBtn");if(label)label.textContent=actor.label||user.label;if(today)today.textContent=new Date().toLocaleDateString("fr-FR");if(year)year.textContent=String(new Date().getFullYear());if(reset)reset.classList.toggle("hidden",user.role!=="ADMIN");renderMenu();
+const obsoleteManualButtons=["sendUpdatesBtn","refreshAdminBtn","publishValidationBtn","importValidationBtn","exportUsageBtn","importUsageBtn","exportDailyReportsBtn","importDailyReportsBtn","cloudMigrateBtn"];
+obsoleteManualButtons.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display="none";});
+const cloudSyncBtn=document.getElementById("cloudSyncBtn");
+if(cloudSyncBtn){cloudSyncBtn.style.display="inline-flex";cloudSyncBtn.title="Synchronisation de secours — le fonctionnement normal est automatique";}
+cloudRefreshStatus();
+if(user.role==="TECHNICIEN"&&!technicianSessionProfile())technicianIdentityGate();else if(user.role==="ADMIN"&&adminWorkspace==="FINANCE")go("dashboardFinance");else if(user.role==="ADMIN"&&adminWorkspace==="TECHNIQUE")go("dashboardTechnique");else go("dashboard")}
 function renderMenu(){
- if(!user || !user.role || !menus[user.role]){
-  user = { uid: "DEFAULT-ADMIN", username: "admin", role: "ADMIN", label: "Admin", email: "admin@nysoa.mg", assignedProjects: [] };
-  sessionStorage.setItem("nysoa_v2_user", JSON.stringify(user));
- }
- let list=menus[user.role]||menus.ADMIN;
+ let list=menus[user.role];
  if(user.role==="ADMIN"){
-   const bar = $("#adminWorkspaceBar");
-   if(bar) bar.classList.remove("hidden");
+   $("#adminWorkspaceBar").classList.remove("hidden");
    list=adminWorkspace==="FINANCE"?ADMIN_FINANCE_MENU:adminWorkspace==="TECHNIQUE"?ADMIN_TECH_MENU:menus.ADMIN;
  }else{
-   const bar = $("#adminWorkspaceBar");
-   if(bar) bar.classList.add("hidden");
+   $("#adminWorkspaceBar").classList.add("hidden");
  }
- const menuEl = $("#menu");
- if(menuEl){
-  menuEl.innerHTML=list.map(m=>`<button class="menu-btn" data-page="${m[0]}"><span class="ico">${m[1]}</span>${m[2]}</button>`).join("")+
-    `<button class="menu-btn" data-page="changePassword"><span class="ico">🔐</span>CHANGER MON MOT DE PASSE</button>`;
-  document.querySelectorAll(".menu-btn").forEach(b=>b.onclick=()=>go(b.dataset.page));
- }
+ $("#menu").innerHTML=list.map(m=>`<button class="menu-btn" data-page="${m[0]}"><span class="ico">${m[1]}</span>${m[2]}</button>`).join("")+
+   `<button class="menu-btn" data-page="changePassword"><span class="ico">🔐</span>CHANGER MON MOT DE PASSE</button>`;
+ document.querySelectorAll(".menu-btn").forEach(b=>b.onclick=()=>go(b.dataset.page));
  renderCloudBadges();
  document.querySelectorAll(".workspace-tab").forEach(b=>{
    b.classList.toggle("active",b.dataset.workspace===adminWorkspace);
@@ -1856,13 +1820,13 @@ function clientProjectsPage(id="",name=""){
 }
 function projectsTable(compact=false){const ctx=currentProjectContext();return `<div class="table-wrap"><table><thead><tr><th>Chantier</th><th>Client</th><th>Début</th><th>Fin prévue</th><th>Avancement</th><th>Statut</th></tr></thead><tbody>${accessibleProjects().filter(p=>!ctx||String(p.id)===String(ctx)).map(p=>`<tr><td><button type="button" class="entity-link" data-id="${esc(encodeURIComponent(p.id))}" onclick="projectClientDetail(decodeURIComponent(this.dataset.id))">${esc(projectChantierName(p))}</button><br>${esc(projectWorkName(p))}</td><td>${esc(p.client||"")}</td><td>${esc(p.start||"")}</td><td>${esc(p.end||"")}</td><td><div class="progress"><span style="width:${+p.progress||0}%"></span></div>${+p.progress||0}%</td><td><span class="badge b-blue">${esc(p.status||"")}</span></td></tr>`).join("")}</tbody></table></div>`}
 function projects(){
- let budgetCol=user.role==="ADMIN"?"<th>Budget & Origine</th><th>Dépenses / Contrôle Plafond</th>":"";
+ let budgetCol=user.role==="ADMIN"?"<th>Budget initial</th>":"";
  $("#content").innerHTML=`
  ${user.role==="ADMIN"?'<div class="notice">Budgets confidentiels visibles uniquement par l’ADMIN.</div>':""}
  <div class="panel">
    <h3>GESTION DES CHANTIERS</h3>
    <div class="panel-body">
-     ${["ADMIN","GESTIONNAIRE"].includes(user.role)?'<button class="btn primary" onclick="projectForm()">+ Nouveau chantier</button>':""} ${user.role==="ADMIN"?'<button class="btn secondary" onclick="openManualBudgetProjectForm()">⚡ + Chantier avec Budget Manuel (Sans Devis)</button>':""}
+     ${["ADMIN","GESTIONNAIRE"].includes(user.role)?'<button class="btn primary" onclick="projectForm()">Nouveau chantier</button>':""}
      <div class="notice" style="margin-top:10px">
        L’Admin et le Gestionnaire créent les chantiers. Le Technicien les consulte et assure le suivi technique.
      </div>
@@ -1897,14 +1861,14 @@ function projects(){
              <td><button type="button" class="entity-link" data-id="${esc(encodeURIComponent(p.id))}" onclick="projectClientDetail(decodeURIComponent(this.dataset.id))">${esc(projectChantierName(p))}</button></td>
              <td>${esc(projectWorkName(p))}</td>
              <td>${p.client?`<button type="button" class="entity-link" data-id="${esc(encodeURIComponent(projectClientRecord(p)?.id||""))}" data-name="${esc(encodeURIComponent(p.client))}" onclick="clientProjectsPage(decodeURIComponent(this.dataset.id),decodeURIComponent(this.dataset.name))">${esc(p.client)}</button>`:"—"}</td>
-             ${user.role==="ADMIN"?projectAdminBudgetCells(p):""}
+             ${user.role==="ADMIN"?`<td>${money(projectBudgetAmount(p))}</td>`:""}
              <td>${esc(p.start||"")}</td>
              <td>${esc(p.end||"")}</td>
              <td>${p.progress||0}%</td>
              <td>${esc(p.status||"")}</td>
              <td><div class="edit-actions">${actions}</div></td>
            </tr>`;
-         }).join(""):`<tr><td colspan="${user.role==="ADMIN"?10:8}"><div class="empty-state">Aucun chantier enregistré.</div></td></tr>`}
+         }).join(""):`<tr><td colspan="${user.role==="ADMIN"?9:8}"><div class="empty-state">Aucun chantier enregistré.</div></td></tr>`}
        </tbody>
      </table>
    </div>
@@ -2372,14 +2336,14 @@ function ensureEmployeeQrToken(e){
 }
 function employeeBadge(id){
  const e=employeeRows().find(x=>String(x.id)===String(id));if(!e)return alert("Employé introuvable.");
- ensureEmployeeQrToken(e);const project="";
+ ensureEmployeeQrToken(e);
  const photo=e.photoData||"";
  $("#content").innerHTML=`<div class="panel badge-screen"><h3 class="no-print">BADGE PROFESSIONNEL — EMPLOYÉ</h3>
  <div class="badge-qr-wrap"><div class="employee-badge employee-badge-v472" id="employeeBadgePrint">
-   <div class="badge-top"><img src="assets/logo_nysoa_construct.png" class="badge-logo" alt="NYSOA"><div><div class="badge-brand">ENTREPRISE NYSOA CONSTRUCT</div><div class="badge-subtitle">CARTE PROFESSIONNELLE</div></div></div>
+   <div class="badge-top"><img src="assets/logo_nysoa_construct.svg" class="badge-logo" alt="NYSOA"><div><div class="badge-brand">ENTREPRISE NYSOA CONSTRUCT</div><div class="badge-subtitle">CARTE PROFESSIONNELLE</div></div></div>
    <div class="badge-main">
      <div class="badge-photo">${photo?`<img src="${photo}" alt="Photo ${esc(employeeName(e))}">`:`<div class="badge-photo-empty"><span>PHOTO</span></div>`}</div>
-     <div class="badge-info"><h2>${esc(employeeName(e))}</h2><div class="badge-job">${esc(employeeRole(e))}</div><p><b>Matricule :</b> ${esc(employeeMatricule(e)||e.id)}</p><p><b>Chantier :</b>&nbsp;</p><p><b>Statut :</b> ${esc(e.workflow||"Actif")}</p></div>
+     <div class="badge-info"><h2>${esc(employeeName(e))}</h2><div class="badge-job">${esc(employeeRole(e))}</div><p><b>Matricule :</b> ${esc(employeeMatricule(e)||e.id)}</p><p><b>Chantier :</b> ${esc(projectLabel(employeeProject(e)))}</p><p><b>Statut :</b> ${esc(e.workflow||"Actif")}</p></div>
      <div class="badge-qr-col"><div id="employeeQrCanvas" class="qr-canvas"></div><small>SCAN PRÉSENCE</small></div>
    </div>
    <div class="badge-footer">Badge personnel • ENTREPRISE NYSOA CONSTRUCT</div>
@@ -2709,7 +2673,7 @@ function projectWorkName(p){
 }
 function projectLabel(id){
  const p=(db.projects||[]).find(x=>String(x.id)===String(id));
- return p?projectChantierName(p):(id||"Non affecté");
+ return p?projectChantierName(p):(!id?"Non affecté":isInternalProjectId(id)?"Chantier non identifié":String(id));
 }
 function financeProjectIsActive(id){return !id||(db.projects||[]).some(p=>!p.deleted&&String(p.id)===String(id));}
 function projectFullLabel(id){
@@ -3977,10 +3941,10 @@ function saveMaterialForecast(){
  if(p.materials.some(m=>!validForecastMaterial(lines.get(m.lineKey),m))||p.tools.some(t=>!lines.has(t.lineKey)||!String(t.name||'').trim()||!Number.isFinite(Number(t.qty))||Number(t.qty)<0))return alert('Corrigez les matériaux, coefficients, conditionnements et matériels avant enregistrement. Les quantités à chiffrer peuvent rester vides.');
  q.materialForecast=structuredClone(p);q.updatedAt=new Date().toISOString();saveLocalOnly();cloudWriteGeneric('quotes',q,'Prévision matériaux enregistrée');alert('Prévision interne enregistrée.');renderMaterialPlan();
 }
-function quoteStatusClass(s){return s==="Accepté"?"qs-approved":s==="Refusé"?"qs-refused":s==="En négociation"?"qs-negotiation":s==="Envoyé"?"qs-sent":"qs-draft"}
+function quoteStatusClass(s){return s==="Accepté"?"qs-approved":s==="Refusé"?"qs-refused":s==="Envoyé"?"qs-sent":"qs-draft"}
 function quotes(){
  if(user.role!=="ADMIN"){document.querySelector("#content").innerHTML='<div class="panel"><div class="panel-body"><div class="admin-only-note">Le module Devis est réservé exclusivement à l’ADMIN.</div></div></div>';return}
- document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button><button class="btn secondary" onclick="projectForm()" title="Créer un chantier avec saisie directe de budget sans devis">⚡ + Budget Manuel (Sans Devis)</button>${readQuoteDraft()?'<button class="btn secondary" onclick="quoteEditor()">Reprendre le brouillon non enregistré</button>':''}</div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle. Un devis accepté forme le budget ; seuls les encaissements validés comptent comme paiement.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Chantier</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Paiement client / chantier</th><th>Actions</th></tr></thead><tbody>${db.quotes.filter(q=>!q.deleted).map(q=>{let f=quoteFinancials(q),payment=q.status==="Accepté"?quotePaymentPosition(q):null;return `<tr data-search="${esc((q.id+' '+q.client+' '+q.object).toLowerCase())}"><td><b>${esc(q.id)}</b></td><td>${esc(q.date)}</td><td>${esc(projectLabel(q.project))}</td><td>${esc(q.client)}</td><td>${esc(q.object)}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${esc(q.status)}</span></td><td>${payment?`${payment.count?`Encaissé ${money(payment.received)}`:'Aucun paiement validé'}<br>Reste ${money(Math.max(0,payment.contract-payment.received))}${payment.pending?`<br>En attente ${money(payment.pending)}`:''}`:'—'}</td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${esc(q.id)}')">Ouvrir</button><button class="btn-xs btn-save" onclick="materialPlanPage('${esc(q.id)}')">Plan matériaux</button><button class="btn-xs btn-save" onclick="duplicateQuote('${esc(q.id)}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${esc(q.id)}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
+ document.querySelector("#content").innerHTML=`<div class="quote-toolbar"><div class="left"><button class="btn primary" onclick="quoteEditor()">+ Nouveau devis</button>${readQuoteDraft()?'<button class="btn secondary" onclick="quoteEditor()">Reprendre le brouillon non enregistré</button>':''}</div><div class="right"><input id="quoteSearch" placeholder="Rechercher client, objet ou numéro" style="width:280px;margin:0" oninput="filterQuotes()"></div></div><div class="admin-only-note"><b>Accès ADMIN uniquement.</b> Les prix unitaires, remises, TVA, montants et marges commerciales ne sont visibles par aucun autre rôle. Un devis accepté forme le budget ; seuls les encaissements validés comptent comme paiement.</div><div class="quote-list-card"><div class="table-wrap"><table id="quoteList"><thead><tr><th>N° devis</th><th>Date</th><th>Chantier</th><th>Client</th><th>Objet</th><th>Montant</th><th>Statut</th><th>Paiement client / chantier</th><th>Actions</th></tr></thead><tbody>${db.quotes.filter(q=>!q.deleted).map(q=>{let f=quoteFinancials(q),payment=q.status==="Accepté"?quotePaymentPosition(q):null;return `<tr data-search="${esc((q.id+' '+q.client+' '+q.object).toLowerCase())}"><td><b>${esc(q.id)}</b></td><td>${esc(q.date)}</td><td>${esc(projectLabel(q.project))}</td><td>${esc(q.client)}</td><td>${esc(q.object)}</td><td><b>${money(f.ttc)}</b></td><td><span class="quote-status ${quoteStatusClass(q.status)}">${esc(q.status)}</span></td><td>${payment?`${payment.count?`Encaissé ${money(payment.received)}`:'Aucun paiement validé'}<br>Reste ${money(Math.max(0,payment.contract-payment.received))}${payment.pending?`<br>En attente ${money(payment.pending)}`:''}`:'—'}</td><td><div class="edit-actions"><button class="btn-xs btn-edit" onclick="quoteEditor('${esc(q.id)}')">Ouvrir</button><button class="btn-xs btn-save" onclick="materialPlanPage('${esc(q.id)}')">Plan matériaux</button><button class="btn-xs btn-save" onclick="duplicateQuote('${esc(q.id)}')">Dupliquer</button><button class="btn-xs btn-delete" onclick="deleteQuote('${esc(q.id)}')">Supprimer</button></div></td></tr>`}).join("")}</tbody></table></div></div>`;
 }
 function filterQuotes(){let v=(document.querySelector('#quoteSearch')?.value||'').toLowerCase();document.querySelectorAll('#quoteList tbody tr').forEach(r=>r.style.display=r.dataset.search.includes(v)?'':'none')}
 function newQuote(){return{id:"DEV-"+new Date().getFullYear()+"-"+String(db.quotes.length+1).padStart(3,"0"),date:new Date().toISOString().slice(0,10),project:currentProjectContext()||"",clientId:"",client:"",clientAddress:"",clientPhone:"",object:"",status:"Brouillon",vatEnabled:false,vatRate:20,discount:0,sections:[{title:"NOUVEAU LOT",items:[{no:"1.1",designation:"",unit:"",qty:1,pu:0}]}],notes:"Arrêté le présent devis à la somme indiquée ci-dessous.",createdBy:"ADMIN"}}
@@ -4025,24 +3989,7 @@ function renderQuoteEditor(){
  const clients=quoteClientCatalog(q),site=(db.projects||[]).find(p=>String(p.id)===String(q.project));
  if(!q.client&&site?.client){const c=clients.find(x=>clientPaymentKey(clientNameFromRecord(x))===clientPaymentKey(site.client));if(c){q.clientId=c.id;q.client=clientNameFromRecord(c);q.clientAddress=clientAddressFromRecord(c);q.clientPhone=clientPhoneFromRecord(c);}}
  const f=quoteFinancials(q);
- document.querySelector('#content').innerHTML=`<div class="quote-toolbar no-print"><div class="left"><button class="btn secondary" onclick="quotes()">← Liste des devis</button><button class="btn primary" onclick="saveQuote()">Enregistrer</button><button class="btn secondary" onclick="printA4AutoFit()" title="Ouvre le PDF propre ; utilisez ensuite l’icône Imprimer du lecteur PDF">🖨 Imprimer</button><button class="btn secondary" onclick="exportQuotePdf()" title="Télécharge directement le devis en PDF">⬇ Exporter PDF</button>${activeQuoteOriginalId?`<button class="btn secondary" onclick="materialPlanPage('${q.id}')">Plan matériaux interne</button>`:""}</div><div class="right"><select onchange="activeQuote.status=this.value;renderQuoteEditor()" style="margin:0;width:210px"><option value="Brouillon" ${q.status==='Brouillon'?'selected':''}>Brouillon</option><option value="Envoyé" ${q.status==='Envoyé'?'selected':''}>1. Envoyé au client</option><option value="En négociation" ${q.status==='En négociation'?'selected':''}>2. En négociation (Réduction)</option><option value="Accepté" ${q.status==='Accepté'?'selected':''}>3. Validé en Budget (Accepté)</option><option value="Refusé" ${q.status==='Refusé'?'selected':''}>Refusé</option></select></div></div>
- <div class="devis-stepper-bar no-print">
-  <div class="devis-step-card ${q.status==='Envoyé'?'active-step-1':''}" onclick="setQuoteWorkflowStep('Envoyé')">
-   <small>Étape 1</small>
-   <strong>📤 1. Vao vita dia alefa Client</strong>
-   <span style="font-size:11px;color:#475569">Devis initial envoyé au client (Hors budget)</span>
-  </div>
-  <div class="devis-step-card ${q.status==='En négociation'?'active-step-2':''}" onclick="setQuoteWorkflowStep('En négociation')">
-   <small>Étape 2 (Raha niady varotra)</small>
-   <strong>🤝 2. Réduction / Négociation Client</strong>
-   <span style="font-size:11px;color:#475569">Remise actuelle : <b>${money(f.discount)}</b> (${f.ht>0?(f.discount/f.ht*100).toFixed(1):0}%)</span>
-  </div>
-  <div class="devis-step-card ${q.status==='Accepté'?'active-step-3':''}" onclick="setQuoteWorkflowStep('Accepté')">
-   <small>Étape 3 (Validation Finale)</small>
-   <strong>✅ 3. Validé tanteraka ho lasa Budget</strong>
-   <span style="font-size:11px;color:#065f46">Budget officiel : <b>${money(f.ttc)}</b></span>
-  </div>
- </div>
+ document.querySelector('#content').innerHTML=`<div class="quote-toolbar no-print"><div class="left"><button class="btn secondary" onclick="quotes()">← Liste des devis</button><button class="btn primary" onclick="saveQuote()">Enregistrer</button><button class="btn secondary" onclick="printA4AutoFit()" title="Ouvre le PDF propre ; utilisez ensuite l’icône Imprimer du lecteur PDF">🖨 Imprimer</button><button class="btn secondary" onclick="exportQuotePdf()" title="Télécharge directement le devis en PDF">⬇ Exporter PDF</button>${activeQuoteOriginalId?`<button class="btn secondary" onclick="materialPlanPage('${q.id}')">Plan matériaux interne</button>`:""}</div><div class="right"><select onchange="activeQuote.status=this.value;renderQuoteEditor()" style="margin:0;width:150px"><option ${q.status==='Brouillon'?'selected':''}>Brouillon</option><option ${q.status==='Envoyé'?'selected':''}>Envoyé</option><option ${q.status==='Accepté'?'selected':''}>Accepté</option><option ${q.status==='Refusé'?'selected':''}>Refusé</option></select></div></div>
  <div class="quote-editor">
   <div class="quote-head"><div class="quote-company"><img src="assets/logo_nysoa_construct.png"><div class="quote-company-info"><strong>ENTREPRISE NYSOA CONSTRUCT</strong><br>Construction - Bâtiment - Génie Civil - Travaux Publics<br>Lot 0708 K Ambohimena, Antsirabe<br>Téléphone / WhatsApp : +261 34 99 498 49<br>E-mail : hhajatiana15@gmail.com<br>Facebook : Entreprise NySoa Antsirabe</div></div><div class="quote-title-box"><h1>DEVIS</h1><div class="quote-no"><input value="${q.id}" ${activeQuoteOriginalId?"readonly":"onchange=\"activeQuote.id=this.value\""} style="text-align:right;font-weight:800"></div><div style="margin-top:8px">Date : <input type="date" value="${q.date}" onchange="activeQuote.date=this.value" style="width:150px;display:inline-block"></div></div></div>
   <div class="quote-meta"><label>Client<select id="quoteClientSelect" onchange="quoteChooseClient(this.value)" required><option value="">Choisir un client enregistré</option>${clients.map(c=>`<option value="${esc(c.id)}" ${String(q.clientId||"")===String(c.id)||(!q.clientId&&clientPaymentKey(q.client)===clientPaymentKey(clientNameFromRecord(c)))?"selected":""}>${esc(clientNameFromRecord(c))}${clientPhoneFromRecord(c)?` — ${esc(clientPhoneFromRecord(c))}`:""}</option>`).join("")}</select></label><label>Adresse<input value="${esc(q.clientAddress)}" readonly></label><label>Téléphone<input value="${esc(q.clientPhone)}" readonly></label></div>
@@ -4053,7 +4000,7 @@ function renderQuoteEditor(){
   <p class="admin-only-note no-print">Saisissez toutes les désignations du chantier (installation, gros œuvre, électricité, finition, etc.). Après enregistrement, chacune sera reprise dans le devis interne matériaux/matériels et dans le planning Gantt. Les prix du devis client restent confidentiels.</p>
   <div class="table-wrap"><table class="quote-table"><thead><tr><th style="width:60px">N°</th><th>DÉSIGNATION</th><th style="width:90px">UNITÉ</th><th style="width:100px">QUANTITÉ</th><th style="width:145px">PU</th><th style="width:155px">PRIX TOTAL</th><th class="no-print" style="width:55px"></th></tr></thead><tbody>${q.sections.map((s,si)=>quoteSectionHtml(s,si)).join('')}</tbody></table></div>
   <div class="quote-add-row no-print"><button class="btn secondary" onclick="addQuoteSection()">+ Ajouter un lot</button><button class="btn secondary" onclick="addQuoteItem(${Math.max(0,q.sections.length-1)})">+ Ajouter une ligne</button></div>
-  <div class="quote-options no-print" id="quoteNegociationBox"><label><input type="checkbox" ${q.vatEnabled?'checked':''} onchange="activeQuote.vatEnabled=this.checked;renderQuoteEditor()"> Appliquer TVA</label><label>Taux TVA (%) <input type="number" value="${q.vatRate}" onchange="activeQuote.vatRate=+this.value;renderQuoteEditor()"></label><label>Réduction en % <input type="number" min="0" max="99" step="0.1" value="${f.ht>0&&q.discount>0?+(q.discount/f.ht*100).toFixed(2):0}" onchange="applyQuoteDiscountPercent(this.value)" placeholder="Ex: 5%"></label><label>Réduction négociée avec le client (Ar) <input id="quoteDiscountInputAr" type="number" min="0" step="1" value="${q.discount}" onchange="activeQuote.discount=Math.max(0,+this.value||0);if(activeQuote.discount>0&&activeQuote.status==='Envoyé')activeQuote.status='En négociation';renderQuoteEditor()"></label></div>
+  <div class="quote-options no-print"><label><input type="checkbox" ${q.vatEnabled?'checked':''} onchange="activeQuote.vatEnabled=this.checked;renderQuoteEditor()"> Appliquer TVA</label><label>Taux TVA (%) <input type="number" value="${q.vatRate}" onchange="activeQuote.vatRate=+this.value;renderQuoteEditor()"></label><label>Réduction négociée avec le client (Ar) <input type="number" min="0" step="1" value="${q.discount}" onchange="activeQuote.discount=Math.max(0,+this.value||0);renderQuoteEditor()"></label></div>
   <div class="quote-summary-block"><table class="quote-summary"><tr><td>DEVIS INITIAL (HT)</td><td>${money(f.ht)}</td></tr><tr><td>RÉDUCTION NÉGOCIÉE</td><td>${f.discount?'- ':''}${money(f.discount)}</td></tr>${q.vatEnabled?`<tr><td>TVA (${q.vatRate}%)</td><td>${money(f.vat)}</td></tr>`:''}<tr class="grand"><td>DEVIS FINAL ACCEPTÉ (TTC)</td><td>${money(f.ttc)}</td></tr></table><div class="quote-words">Arrêté le présent devis à la somme de : <strong>${money(f.ttc)}</strong> (<strong>${numberToFrenchWords(f.ttc)} ARIARY</strong>).</div></div>
   <div class="quote-signatures"><div>Le client<div class="signature-line">Nom, signature et mention « Bon pour accord »</div></div><div>Le gérant<div class="signature-line">HAJATIANA Hasiniaina Rivoherilaza</div></div></div>
  </div>`;persistQuoteDraft();}

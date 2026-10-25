@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>ENTREPRISE NYSOA CONSTRUCT - ERP BTP</title>
+  <title>NYSOA CONSTRUCT - ERP BTP</title>
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20261025-2">
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
@@ -14,26 +14,19 @@
   <script src="https://unpkg.com/html5-qrcode"></script>
 </head>
 <body>
-  <!-- Ecran de Connexion Ofisialy -->
+  <!-- Ecran de Connexion avec Logo officiel -->
   <div id="login" class="login-screen">
     <div class="login-card">
-      <img src="assets/logo_nysoa_construct.png" alt="Logo NYSOA CONSTRUCT" class="login-logo">
+      <img src="assets/logo_nysoa_construct.svg" alt="Logo NYSOA" class="login-logo" onerror="this.src='assets/logo_nysoa_construct.svg'">
       <h2>ENTREPRISE NYSOA CONSTRUCT</h2>
-      <p>ERP BTP &amp; Génie Civil — Antsirabe, Madagascar</p>
+      <p>ERP BTP - Authentification &amp; Accès Sécurisé</p>
       <form id="loginForm">
         <label>E-mail<input type="email" id="loginUser" required placeholder="hhajatiana15@gmail.com"></label>
         <label>Mot de passe<input type="password" id="loginPass" required></label>
         <label class="show-password-option"><input type="checkbox" id="showLoginPass"> Afficher le mot de passe</label>
         <button type="submit" class="btn primary full">Se connecter</button>
         <p id="loginMsg" class="error-msg"></p>
-        <div class="quick-test-accounts">
-          <small><b>Fidirana haingana (Mode Démo) :</b></small><br>
-          <button type="button" class="btn-xs" onclick="simulateLocalLogin('ADMIN')">Admin</button>
-          <button type="button" class="btn-xs" onclick="simulateLocalLogin('GESTIONNAIRE')">Gestionnaire</button>
-          <button type="button" class="btn-xs" onclick="simulateLocalLogin('CONTROLE')">Contrôle</button>
-          <button type="button" class="btn-xs" onclick="simulateLocalLogin('TECHNICIEN')">Technicien</button>
-        </div>
-      </form>
+</form>
     </div>
   </div>
 
@@ -42,14 +35,14 @@
     <header class="app-header">
       <div class="header-left">
         <div class="logo-container">
-          <img src="assets/logo_nysoa_construct.png" alt="Logo" class="header-logo">
+          <img src="assets/logo_nysoa_construct.svg" alt="Logo" class="header-logo" onerror="this.src='assets/logo_nysoa_construct.svg'">
           <div class="brand-title">NYSOA <b>CONSTRUCT</b> <small>ERP BTP</small></div>
         </div>
         <select id="globalProjectFilter" onchange="setGlobalProjectContext(this.value)"></select>
       </div>
       <div class="header-right">
         <span id="currentUserLabel">Utilisateur</span>
-        <span id="cloudStatus" class="cloud-status">En ligne</span>
+        <span id="cloudStatus" class="cloud-status">Initialisation…</span>
         <span id="cloudLastSync" class="cloud-time"></span>
         <button id="cloudSyncBtn" class="btn-xs" onclick="cloudSyncNow()" title="Synchroniser">🔄 Sync</button>
         <button id="logoutBtn" class="btn-logout" title="Déconnexion">⏻</button>
@@ -76,7 +69,6 @@
   </div>
 
   <script src="sw-register.js"></script>
-  <script src="app.js"></script>
-  <script src="test-suite.js"></script>
+  <script src="app.js?v=20261025-2"></script>
 </body>
 </html>
