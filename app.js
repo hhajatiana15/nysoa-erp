@@ -1253,24 +1253,50 @@ async function exportQuotePdf(){
 
 function boot(){
  try{migrateProjectChantierFields();}catch(e){console.warn('migration chantier',e);}
-ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();if(user.role!=="ADMIN"&&(user.role!=="TECHNICIEN"||technicianSessionProfile()))startUsageSession();$("#login")?.classList.add("hidden");$("#app")?.classList.remove("hidden");const actor=effectiveUserIdentity();const label=$("#currentUserLabel"),today=$("#today"),year=$("#exerciseYear"),reset=$("#resetTestDataBtn");if(label)label.textContent=actor.label||user.label;if(today)today.textContent=new Date().toLocaleDateString("fr-FR");if(year)year.textContent=String(new Date().getFullYear());if(reset)reset.classList.toggle("hidden",user.role!=="ADMIN");renderMenu();
-const obsoleteManualButtons=["sendUpdatesBtn","refreshAdminBtn","publishValidationBtn","importValidationBtn","exportUsageBtn","importUsageBtn","exportDailyReportsBtn","importDailyReportsBtn","cloudMigrateBtn"];
-obsoleteManualButtons.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display="none";});
-const cloudSyncBtn=document.getElementById("cloudSyncBtn");
-if(cloudSyncBtn){cloudSyncBtn.style.display="inline-flex";cloudSyncBtn.title="Synchronisation de secours — le fonctionnement normal est automatique";}
-cloudRefreshStatus();
-if(user.role==="TECHNICIEN"&&!technicianSessionProfile())technicianIdentityGate();else if(user.role==="ADMIN"&&adminWorkspace==="FINANCE")go("dashboardFinance");else if(user.role==="ADMIN"&&adminWorkspace==="TECHNIQUE")go("dashboardTechnique");else go("dashboard")}
+ ensureSecurityData();quarantineLegacyInvoices();touchCurrentUser();
+ if(!user){
+  user = { uid: "DEFAULT-ADMIN", username: "admin", role: "ADMIN", label: "Admin", email: "admin@nysoa.mg", assignedProjects: [] };
+  sessionStorage.setItem("nysoa_v2_user", JSON.stringify(user));
+ }
+ if(user.role!=="ADMIN"&&(user.role!=="TECHNICIEN"||technicianSessionProfile()))startUsageSession();
+ $("#login")?.classList.add("hidden");$("#app")?.classList.remove("hidden");
+ const actor=effectiveUserIdentity();
+ const label=$("#currentUserLabel"),today=$("#today"),year=$("#exerciseYear"),reset=$("#resetTestDataBtn");
+ if(label)label.textContent=actor.label||user.label;
+ if(today)today.textContent=new Date().toLocaleDateString("fr-FR");
+ if(year)year.textContent=String(new Date().getFullYear());
+ if(reset)reset.classList.toggle("hidden",user.role!=="ADMIN");
+ renderMenu();
+ const obsoleteManualButtons=["sendUpdatesBtn","refreshAdminBtn","publishValidationBtn","importValidationBtn","exportUsageBtn","importUsageBtn","exportDailyReportsBtn","importDailyReportsBtn","cloudMigrateBtn"];
+ obsoleteManualButtons.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display="none";});
+ const cloudSyncBtn=document.getElementById("cloudSyncBtn");
+ if(cloudSyncBtn){cloudSyncBtn.style.display="inline-flex";cloudSyncBtn.title="Synchronisation de secours — le fonctionnement normal est automatique";}
+ cloudRefreshStatus();
+ if(user.role==="TECHNICIEN"&&!technicianSessionProfile())technicianIdentityGate();
+ else if(user.role==="ADMIN"&&adminWorkspace==="FINANCE")go("dashboardFinance");
+ else if(user.role==="ADMIN"&&adminWorkspace==="TECHNIQUE")go("dashboardTechnique");
+ else go("dashboard");
+}
 function renderMenu(){
- let list=menus[user.role];
+ if(!user || !user.role || !menus[user.role]){
+  user = { uid: "DEFAULT-ADMIN", username: "admin", role: "ADMIN", label: "Admin", email: "admin@nysoa.mg", assignedProjects: [] };
+  sessionStorage.setItem("nysoa_v2_user", JSON.stringify(user));
+ }
+ let list=menus[user.role]||menus.ADMIN;
  if(user.role==="ADMIN"){
-   $("#adminWorkspaceBar").classList.remove("hidden");
+   const bar = $("#adminWorkspaceBar");
+   if(bar) bar.classList.remove("hidden");
    list=adminWorkspace==="FINANCE"?ADMIN_FINANCE_MENU:adminWorkspace==="TECHNIQUE"?ADMIN_TECH_MENU:menus.ADMIN;
  }else{
-   $("#adminWorkspaceBar").classList.add("hidden");
+   const bar = $("#adminWorkspaceBar");
+   if(bar) bar.classList.add("hidden");
  }
- $("#menu").innerHTML=list.map(m=>`<button class="menu-btn" data-page="${m[0]}"><span class="ico">${m[1]}</span>${m[2]}</button>`).join("")+
-   `<button class="menu-btn" data-page="changePassword"><span class="ico">🔐</span>CHANGER MON MOT DE PASSE</button>`;
- document.querySelectorAll(".menu-btn").forEach(b=>b.onclick=()=>go(b.dataset.page));
+ const menuEl = $("#menu");
+ if(menuEl){
+  menuEl.innerHTML=list.map(m=>`<button class="menu-btn" data-page="${m[0]}"><span class="ico">${m[1]}</span>${m[2]}</button>`).join("")+
+    `<button class="menu-btn" data-page="changePassword"><span class="ico">🔐</span>CHANGER MON MOT DE PASSE</button>`;
+  document.querySelectorAll(".menu-btn").forEach(b=>b.onclick=()=>go(b.dataset.page));
+ }
  renderCloudBadges();
  document.querySelectorAll(".workspace-tab").forEach(b=>{
    b.classList.toggle("active",b.dataset.workspace===adminWorkspace);
