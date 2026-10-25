@@ -244,7 +244,7 @@ async function logUserActivity(action,moduleName="",reference="",details=""){
  db.userActivityLog=Array.isArray(db.userActivityLog)?db.userActivityLog:[];db.userActivityLog.unshift(rec);if(db.userActivityLog.length>5000)db.userActivityLog.length=5000;saveLocalOnly();
  if(cloudReady&&fbStore&&rec.uid){try{await Promise.all([fbStore.collection("userActivity").doc(rec.id).set(cloudSanitize(rec)),updatePresence("active")]);}catch(e){console.warn("activity",e);}}
 }
-function startPresence(){clearInterval(presenceTimer);lastMeaningfulActivityAt=Date.now();logUserActivity("Connexion ERP","session","","Ouverture d’une session utilisateur");presenceTimer=setInterval(()=>updatePresence("auto"),60000);}
+function startPresence(){clearInterval(presenceTimer);lastMeaningfulActivityAt=Date.now();logUserActivity("Connexion ERP","session","","Ouverture d’une session utilisateur");presenceTimer=setInterval(()=>updatePresence("auto"),30000);}
 function stopPresence(){clearInterval(presenceTimer);presenceTimer=null;if(user){logUserActivity("Déconnexion ERP","session","","Fermeture de session");updatePresence("offline");}}
 document.addEventListener("visibilitychange",()=>{if(user&&cloudReady)updatePresence("auto");});
 
@@ -253,7 +253,7 @@ function adminPresencePage(){
  $("#content").innerHTML=`<div class="panel"><h3>ÉTAT RÉEL DES UTILISATEURS ERP</h3><div class="panel-body"><div class="notice">ACTIF = une action métier réelle a été effectuée dans les 5 dernières minutes. Un ERP simplement laissé ouvert reste INACTIF.</div><button class="btn secondary" onclick="adminLoginHistory()">Historique des connexions</button><div id="presenceRows">Chargement…</div></div></div>`;
  fbStore.collection("userPresence").onSnapshot(snap=>{
   const now=Date.now(),rows=snap.docs.map(d=>d.data()).sort((a,b)=>String(a.displayName||a.email).localeCompare(String(b.displayName||b.email)));
-  const html=rows.map(r=>{const act=Date.parse(r.lastActivityAt||0)||0,mins=act?Math.floor(Math.max(0,now-act)/60000):null;let st=r.status==="offline"?"offline":(act&&now-act<=REAL_ACTIVITY_WINDOW_MS?"active":"inactive");let label=st==="active"?"ACTIF — travail détecté":st==="inactive"?`INACTIF${mins!==null?` — dernière action il y a ${mins} min`:""}`:"DÉCONNECTÉ";return `<button class="presence-row presence-click" onclick="userActivityHistory('${esc(r.uid||"")}','${esc(r.displayName||r.email||"")}')"><span class="presence-dot presence-${st==='active'?'online':st}"></span><div><b>${esc(r.displayName||r.email)}</b><small>${esc(r.role||"")} — ${label}</small><small>Dernière action : ${esc(r.currentPage||"dashboard")} ${r.lastActivityAt?"— "+new Date(r.lastActivityAt).toLocaleString("fr-FR"):""}</small></div><span>Historique ›</span></button>`;}).join("");
+  const html=rows.map(r=>{const act=Date.parse(r.lastActivityAt||0)||0,mins=act?Math.floor(Math.max(0,now-act)/60000):null;const seen=Date.parse(r.lastSeen||0)||0;let st=r.status==="offline"||!seen||now-seen>90000?"offline":(act&&now-act<=REAL_ACTIVITY_WINDOW_MS?"active":"inactive");let label=st==="active"?"ACTIF — travail détecté":st==="inactive"?`INACTIF${mins!==null?` — dernière action il y a ${mins} min`:""}`:"DÉCONNECTÉ";return `<button class="presence-row presence-click" onclick="userActivityHistory('${esc(r.uid||"")}','${esc(r.displayName||r.email||"")}')"><span class="presence-dot presence-${st==='active'?'online':st}"></span><div><b>${esc(r.displayName||r.email)}</b><small>${esc(r.role||"")} — ${label}</small><small>Dernière action : ${esc(r.currentPage||"dashboard")} ${r.lastActivityAt?"— "+new Date(r.lastActivityAt).toLocaleString("fr-FR"):""}</small></div><span>Historique ›</span></button>`;}).join("");
   const el=document.getElementById("presenceRows");if(el)el.innerHTML=html||"Aucune activité enregistrée.";
  });
 }
@@ -514,7 +514,7 @@ function startCloudAutoSync(){
  clearInterval(cloudAutoSyncTimer);
  // Listeners establish the cloud baseline first. No blind startup push.
  setTimeout(()=>cloudAutoSyncAll("startup-safe"),3500);
- cloudAutoSyncTimer=setInterval(()=>cloudAutoSyncAll("timer-safe"),7000);
+ cloudAutoSyncTimer=setInterval(()=>cloudAutoSyncAll("timer-safe"),60000);
 }
 
 function cashTable(){
@@ -2203,7 +2203,7 @@ function mondayOf(dateStr){
  return d.toISOString().slice(0,10);
 }
 function addDays(dateStr,n){const d=new Date(dateStr+"T12:00:00");d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);}
-function employeeStatusLabel(e){return (e.workflow==="Inactif"||e.active===false)?"Passif":"Actif";}
+function employeeStatusLabel(e){return (e.workflow==="Inactif"||e.active===false)?"Passif":(e.active===true||e.workflow==="Actif")?"Actif":"À confirmer";}
 
 function weeklyAttendanceRecord(weekStart){
  db.modules.attendanceWeekly=Array.isArray(db.modules.attendanceWeekly)?db.modules.attendanceWeekly:[];
@@ -2340,7 +2340,7 @@ function employeeBadge(id){
  const photo=e.photoData||"";
  $("#content").innerHTML=`<div class="panel badge-screen"><h3 class="no-print">BADGE PROFESSIONNEL — EMPLOYÉ</h3>
  <div class="badge-qr-wrap"><div class="employee-badge employee-badge-v472" id="employeeBadgePrint">
-   <div class="badge-top"><img src="assets/logo_nysoa_construct.svg" class="badge-logo" alt="NYSOA"><div><div class="badge-brand">ENTREPRISE NYSOA CONSTRUCT</div><div class="badge-subtitle">CARTE PROFESSIONNELLE</div></div></div>
+   <div class="badge-top"><img src="assets/logo_nysoa_officiel.jpg" class="badge-logo" alt="NYSOA"><div><div class="badge-brand">ENTREPRISE NYSOA CONSTRUCT</div><div class="badge-subtitle">CARTE PROFESSIONNELLE</div></div></div>
    <div class="badge-main">
      <div class="badge-photo">${photo?`<img src="${photo}" alt="Photo ${esc(employeeName(e))}">`:`<div class="badge-photo-empty"><span>PHOTO</span></div>`}</div>
      <div class="badge-info"><h2>${esc(employeeName(e))}</h2><div class="badge-job">${esc(employeeRole(e))}</div><p><b>Matricule :</b> ${esc(employeeMatricule(e)||e.id)}</p><p><b>Chantier :</b> ${esc(projectLabel(employeeProject(e)))}</p><p><b>Statut :</b> ${esc(e.workflow||"Actif")}</p></div>
@@ -2387,7 +2387,7 @@ async function processBadgeScan(code){
  const project=document.getElementById("qrProject")?.value;if(!project)return alert("Choisissez le chantier où le badge est scanné. Ce chantier sera affecté automatiquement au pointage du jour.");
  const parts=code.split("|");if(parts.length!==3||parts[0]!=="NYSOA-EMP")return showQrResult("Badge QR invalide.",false);
  const [,id,token]=parts,e=employeeRows().find(x=>String(x.id)===String(id));
- if(!e||!e.qrToken||String(e.qrToken)!==String(token)||e.workflow==="Inactif")return showQrResult("Badge inconnu, expiré ou employé inactif.",false);
+ if(!e||!e.qrToken||String(e.qrToken)!==String(token)||e.workflow==="Inactif"||e.active===false)return showQrResult("Badge inconnu, expiré ou employé inactif.",false);
  const now=new Date(),date=now.toISOString().slice(0,10),same=qrAttendanceRows().filter(r=>r.employeeId===e.id&&r.project===project&&r.date===date).sort((a,b)=>String(b.timestamp).localeCompare(String(a.timestamp)));
  const last=same[0];if(last&&now-new Date(last.timestamp)<30000)return showQrResult(`Double scan ignoré — ${employeeName(e)}.`,false);
  const direction=last?.direction==="Entrée"?"Sortie":"Entrée";
@@ -3991,7 +3991,7 @@ function renderQuoteEditor(){
  const f=quoteFinancials(q);
  document.querySelector('#content').innerHTML=`<div class="quote-toolbar no-print"><div class="left"><button class="btn secondary" onclick="quotes()">← Liste des devis</button><button class="btn primary" onclick="saveQuote()">Enregistrer</button><button class="btn secondary" onclick="printA4AutoFit()" title="Ouvre le PDF propre ; utilisez ensuite l’icône Imprimer du lecteur PDF">🖨 Imprimer</button><button class="btn secondary" onclick="exportQuotePdf()" title="Télécharge directement le devis en PDF">⬇ Exporter PDF</button>${activeQuoteOriginalId?`<button class="btn secondary" onclick="materialPlanPage('${q.id}')">Plan matériaux interne</button>`:""}</div><div class="right"><select onchange="activeQuote.status=this.value;renderQuoteEditor()" style="margin:0;width:150px"><option ${q.status==='Brouillon'?'selected':''}>Brouillon</option><option ${q.status==='Envoyé'?'selected':''}>Envoyé</option><option ${q.status==='Accepté'?'selected':''}>Accepté</option><option ${q.status==='Refusé'?'selected':''}>Refusé</option></select></div></div>
  <div class="quote-editor">
-  <div class="quote-head"><div class="quote-company"><img src="assets/logo_nysoa_construct.png"><div class="quote-company-info"><strong>ENTREPRISE NYSOA CONSTRUCT</strong><br>Construction - Bâtiment - Génie Civil - Travaux Publics<br>Lot 0708 K Ambohimena, Antsirabe<br>Téléphone / WhatsApp : +261 34 99 498 49<br>E-mail : hhajatiana15@gmail.com<br>Facebook : Entreprise NySoa Antsirabe</div></div><div class="quote-title-box"><h1>DEVIS</h1><div class="quote-no"><input value="${q.id}" ${activeQuoteOriginalId?"readonly":"onchange=\"activeQuote.id=this.value\""} style="text-align:right;font-weight:800"></div><div style="margin-top:8px">Date : <input type="date" value="${q.date}" onchange="activeQuote.date=this.value" style="width:150px;display:inline-block"></div></div></div>
+  <div class="quote-head"><div class="quote-company"><img src="assets/logo_nysoa_officiel.jpg"><div class="quote-company-info"><strong>ENTREPRISE NYSOA CONSTRUCT</strong><br>Construction - Bâtiment - Génie Civil - Travaux Publics<br>Lot 0708 K Ambohimena, Antsirabe<br>Téléphone / WhatsApp : +261 34 99 498 49<br>E-mail : hhajatiana15@gmail.com<br>Facebook : Entreprise NySoa Antsirabe</div></div><div class="quote-title-box"><h1>DEVIS</h1><div class="quote-no"><input value="${q.id}" ${activeQuoteOriginalId?"readonly":"onchange=\"activeQuote.id=this.value\""} style="text-align:right;font-weight:800"></div><div style="margin-top:8px">Date : <input type="date" value="${q.date}" onchange="activeQuote.date=this.value" style="width:150px;display:inline-block"></div></div></div>
   <div class="quote-meta"><label>Client<select id="quoteClientSelect" onchange="quoteChooseClient(this.value)" required><option value="">Choisir un client enregistré</option>${clients.map(c=>`<option value="${esc(c.id)}" ${String(q.clientId||"")===String(c.id)||(!q.clientId&&clientPaymentKey(q.client)===clientPaymentKey(clientNameFromRecord(c)))?"selected":""}>${esc(clientNameFromRecord(c))}${clientPhoneFromRecord(c)?` — ${esc(clientPhoneFromRecord(c))}`:""}</option>`).join("")}</select></label><label>Adresse<input value="${esc(q.clientAddress)}" readonly></label><label>Téléphone<input value="${esc(q.clientPhone)}" readonly></label></div>
   <div class="quote-object"><label>Chantier<select onchange="quoteChooseProject(this.value)"><option value="">Choisir un chantier</option>${(db.projects||[]).filter(p=>!p.deleted).map(p=>`<option value="${esc(p.id)}" ${String(q.project||"")===String(p.id)?"selected":""}>${esc(projectChantierName(p))}</option>`).join("")}<option value="__new__">+ Saisir un nouveau chantier…</option></select></label><div id="quoteNewProject" class="no-print" hidden><label>Nouveau chantier / lieu<input id="quoteNewProjectName" placeholder="Saisir le nom du chantier" maxlength="120" onkeydown="if(event.key==='Enter'){event.preventDefault();quoteCreateProject()}"></label><button type="button" class="btn secondary" onclick="quoteCreateProject()">Ajouter ce chantier</button></div></div>
   <div class="quote-object"><label>Objet du devis<input value="${esc(q.object)}" onchange="activeQuote.object=this.value"></label></div>
@@ -4351,6 +4351,7 @@ window.addEventListener("storage",e=>{
 
 const USAGE_IDLE_LIMIT_MS=5*60*1000;
 let lastUsageActivity=Date.now();
+let lastUsageTickAt=Date.now();
 function currentUsageSession(){
  const id=sessionStorage.getItem("nysoa_usage_session_id");
  return id?(db.usageSessions||[]).find(x=>x.id===id):null;
@@ -4371,14 +4372,19 @@ function startUsageSession(){
  };
  db.usageSessions.unshift(s);
  sessionStorage.setItem("nysoa_usage_session_id",s.id);
- lastUsageActivity=Date.now();save();
+ lastUsageActivity=Date.now();lastUsageTickAt=Date.now();save();
 }
 function recordUsageTick(){
  if(!user||user.role==="ADMIN")return;
  let s=currentUsageSession();if(!s){startUsageSession();s=currentUsageSession();}if(!s)return;
  const now=Date.now();
- if(now-lastUsageActivity<=USAGE_IDLE_LIMIT_MS)s.activeSeconds=(s.activeSeconds||0)+60;
- else s.idleSeconds=(s.idleSeconds||0)+60;
+ // Count actual elapsed time, not a fixed 60 seconds per timer invocation.
+ // Cap long sleeps/background throttling to avoid fictitious work time.
+ const elapsed=Math.max(0,Math.min(60000,now-lastUsageTickAt));
+ const activeMs=Math.max(0,Math.min(elapsed,USAGE_IDLE_LIMIT_MS-(lastUsageTickAt-lastUsageActivity)));
+ s.activeSeconds=(Number(s.activeSeconds)||0)+activeMs/1000;
+ s.idleSeconds=(Number(s.idleSeconds)||0)+(elapsed-activeMs)/1000;
+ lastUsageTickAt=now;
  s.lastSeenAt=new Date().toISOString();save();
 }
 function closeUsageSession(reason="Fermeture"){
@@ -5113,3 +5119,22 @@ function showGenericHistory(page,id){
  const rows=record.history||[];
  $("#content").innerHTML=`<div class="panel"><h3>HISTORIQUE — ${esc(id)}</h3><div class="panel-body"><button class="btn secondary" onclick="generic('${page}')">Retour</button></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Utilisateur</th><th>Action</th><th>Détails</th></tr></thead><tbody>${rows.length?rows.map(h=>`<tr><td>${new Date(h.date).toLocaleString("fr-FR")}</td><td>${esc(h.user)}</td><td>${esc(h.action)}</td><td>${esc(h.details||"")}</td></tr>`).join(""):`<tr><td colspan="4">Aucun historique.</td></tr>`}</tbody></table></div></div>`;
 }
+
+/* V3 diagnostic read-only : ne modifie jamais Firebase ni le cache local. */
+window.nysoaDiagnosticLocalCloud = function(){
+ const missing=[...cloudMissingLocal.values()];
+ const counts={};
+ for(const item of missing)counts[item.collection]=(counts[item.collection]||0)+1;
+ const result={nombreLocalNonRetrouve:missing.length,parCollection:counts,
+  enAttenteEnvoi:Object.keys(cloudPendingWrites).length,
+  erreursLecture:[...cloudListenerErrors.keys()],erreursEcriture:[...cloudWriteErrors.keys()],
+  collectionsChargees:cloudSnapshotReady.size,collectionsAttendues:cloudReadableCollections().length,
+  employes:(db.modules?.employees||[]).filter(e=>!e.deleted).reduce((acc,e)=>{
+    const status=employeeStatusLabel(e);acc[status]=(acc[status]||0)+1;
+    if(e.active===undefined&&(!e.workflow||e.workflow!=="Inactif"))acc.sansStatutExplicite++;
+    return acc;
+  },{Actif:0,Passif:0,sansStatutExplicite:0})};
+ console.table(Object.entries(counts).map(([collection,total])=>({collection,total})));
+ console.info('NYSOA diagnostic lecture seule',result);
+ return result;
+};

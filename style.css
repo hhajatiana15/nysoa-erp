@@ -650,3 +650,23 @@ tbody tr:hover {
   .content-area { padding: 16px; }
   .app-header { padding: 0 16px; }
 }
+
+/* NYSOA V3 — tableaux plus lisibles, sans modifier la logique métier */
+.table-wrap table thead th {background:#202d42;color:#d7e7f7;border-bottom:1px solid #52667e;}
+.table-wrap table tbody tr:nth-child(odd) {background:rgba(57,82,115,.23);}
+.table-wrap table tbody tr:nth-child(even) {background:rgba(29,42,64,.42);}
+.table-wrap table tbody tr:hover {background:rgba(42,120,166,.28);box-shadow:inset 3px 0 0 #38bdf8;}
+.table-wrap table tbody td {border-bottom:1px solid rgba(145,174,208,.16);line-height:1.5;}
+.table-wrap table tbody tr:focus-within {outline:2px solid rgba(56,189,248,.5);outline-offset:-2px;}
+@media(max-width:700px){.table-wrap table tbody td{padding:11px 12px;}}
+
+/* NYSOA V4 — Dark Professional, cyan/orange and readable zebra rows */
+:root{--bg-app:#111a28;--bg-sidebar:#142031;--bg-sidebar-nav:#101927;--bg-card:#1b293b;--bg-card-hover:#233448;--bg-input:#152338;--border-color:#33465c;--border-highlight:#455d78;--neon-pink:#04adc6;--neon-purple:#4c91b2;--neon-blue:#04adc6;--neon-cyan:#04adc6;--neon-orange:#f47721;--text-secondary:#afc1d2;--text-muted:#91a8bd}
+.table-wrap table thead th{background:#26394f;color:#edf6fc;border-bottom:2px solid #47718b}
+.table-wrap table tbody tr:nth-child(odd){background:#203147}
+.table-wrap table tbody tr:nth-child(even){background:#19283b}
+.table-wrap table tbody tr:hover{background:#294762;box-shadow:inset 3px 0 0 #04adc6}
+.table-wrap table tbody td{border-bottom:1px solid #3a4d61;padding-top:12px;padding-bottom:12px}
+.login-logo{max-width:190px;max-height:140px;object-fit:contain}
+.header-logo{object-fit:contain}
+.badge-logo{object-fit:contain}
