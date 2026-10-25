@@ -637,3 +637,78 @@ tbody tr:hover {
   .content-area { padding: 16px; }
   .app-header { padding: 0 16px; }
 }
+
+
+/* ==========================================================================
+   WORKFLOW DEVIS 3 ÉTAPES & JAUGES PLAFOND BUDGET CHANTIER (INTÉGRATION)
+   ========================================================================== */
+.devis-stepper-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.devis-step-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.devis-step-card:hover {
+  border-color: var(--primary-light);
+  background: var(--surface-alt);
+}
+.devis-step-card.active-step-1 {
+  border: 2px solid var(--primary-light);
+  background: var(--primary-subtle);
+}
+.devis-step-card.active-step-2 {
+  border: 2px solid var(--accent);
+  background: var(--accent-subtle);
+}
+.devis-step-card.active-step-3 {
+  border: 2px solid var(--success);
+  background: var(--success-subtle);
+}
+.devis-step-card small {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.devis-step-card strong {
+  font-size: 13px;
+  color: var(--text-main);
+}
+.qs-negotiation {
+  background: var(--accent-subtle);
+  color: #92400e;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-weight: 700;
+  font-size: 11px;
+}
+.budget-gauge-wrap {
+  min-width: 150px;
+}
+.budget-gauge-track {
+  width: 100%;
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 4px 0;
+}
+.budget-gauge-bar {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.budget-gauge-ok { background: var(--success); }
+.budget-gauge-warn { background: var(--warning); }
+.budget-gauge-over { background: var(--danger); }
