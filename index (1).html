@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ERP-Nysoa | Pilotage Financier & Budgets Chantiers</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen font-sans">
+
+  <!-- Top Bar -->
+  <header class="bg-slate-900 text-white shadow-lg sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-lg bg-amber-500 flex items-center justify-center text-slate-900 font-extrabold text-xl">
+          N
+        </div>
+        <div>
+          <h1 class="text-lg font-bold tracking-wide">ERP-NYSOA CONSTRUCT</h1>
+          <p class="text-xs text-slate-400">Redressement Financier : Devis, Budgets, Dépenses & Alertes Plafond</p>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <span id="firebaseStatusBadge" class="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-900/60 text-emerald-300 border border-emerald-600">
+          <i class="fa-solid fa-database mr-1"></i> Mode Local + Sync Firebase Ready
+        </span>
+        <button onclick="exportDataJSON()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold border border-slate-700">
+          <i class="fa-solid fa-download mr-1"></i> Exporter JSON
+        </button>
+        <button onclick="resetDemoData()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-red-900/60 text-xs font-semibold border border-slate-700 text-slate-300">
+          <i class="fa-solid fa-rotate-left mr-1"></i> Réinitialiser Démo
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 py-6 space-y-6">
+
+    <!-- KPI Global Santé Financière -->
+    <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+        <div class="flex justify-between items-center text-xs font-bold uppercase text-slate-400">
+          <span>Chiffre d'Affaires Validé</span>
+          <i class="fa-solid fa-file-invoice-dollar text-blue-600 text-base"></i>
+        </div>
+        <div id="kpiTotalFacturable" class="text-2xl font-extrabold text-slate-900 mt-2">0 Ar</div>
+        <div id="kpiResteARecouvrer" class="text-xs text-amber-600 font-medium mt-1">Reste à encaisser : 0 Ar</div>
+      </div>
+
+      <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+        <div class="flex justify-between items-center text-xs font-bold uppercase text-slate-400">
+          <span>Plafond Dépenses Autorisé</span>
+          <i class="fa-solid fa-shield-halved text-sky-600 text-base"></i>
+        </div>
+        <div id="kpiTotalPlafond" class="text-2xl font-extrabold text-sky-700 mt-2">0 Ar</div>
+        <div class="text-xs text-slate-500 mt-1">Somme des budgets matériaux + M.O</div>
+      </div>
+
+      <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+        <div class="flex justify-between items-center text-xs font-bold uppercase text-slate-400">
+          <span>Dépenses Réelles (Caisse + Pointage)</span>
+          <i class="fa-solid fa-cart-flatbed text-amber-600 text-base"></i>
+        </div>
+        <div id="kpiTotalDepenses" class="text-2xl font-extrabold text-slate-900 mt-2">0 Ar</div>
+        <div id="kpiBudgetRestant" class="text-xs text-emerald-600 font-medium mt-1">Disponible : 0 Ar</div>
+      </div>
+
+      <div class="bg-slate-900 text-white p-4 rounded-xl shadow-sm border border-slate-800">
+        <div class="flex justify-between items-center text-xs font-bold uppercase text-slate-400">
+          <span>Marge Réelle Actuelle</span>
+          <i class="fa-solid fa-chart-line text-emerald-400 text-base"></i>
+        </div>
+        <div id="kpiMargeReelle" class="text-2xl font-extrabold text-emerald-400 mt-2">0 Ar</div>
+        <div id="kpiReserveNysoa" class="text-xs text-slate-300 mt-1">Réserve sécurité (10%) : 0 Ar</div>
+      </div>
+    </section>
+
+    <!-- Navigation Tabs -->
+    <div class="flex flex-wrap gap-2 border-b border-slate-300 pb-2">
+      <button id="navBtn-dashboard" onclick="switchView('dashboard')" class="px-4 py-2.5 rounded-lg text-sm font-bold bg-blue-600 text-white shadow">
+        <i class="fa-solid fa-gauge-high mr-1.5"></i> 1. Suivi Chantiers, Dépenses & Alertes
+      </button>
+      <button id="navBtn-devis" onclick="switchView('devis')" class="px-4 py-2.5 rounded-lg text-sm font-bold bg-white text-slate-700 hover:bg-slate-200 border border-slate-300">
+        <i class="fa-solid fa-file-signature mr-1.5"></i> 2. Validation Devis (3 Étapes)
+      </button>
+      <button id="navBtn-manuel" onclick="switchView('manuel')" class="px-4 py-2.5 rounded-lg text-sm font-bold bg-white text-slate-700 hover:bg-slate-200 border border-slate-300">
+        <i class="fa-solid fa-bolt mr-1.5"></i> 3. Saisie Budget Manuel (Sans Devis)
+      </button>
+    </div>
+
+    <!-- ========================================================================= -->
+    <!-- VIEW 1: SUIVI CHANTIERS, DEPENSES, POINTAGE & ALERTES PLAFOND            -->
+    <!-- ========================================================================= -->
+    <section id="view-dashboard" class="space-y-6">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <!-- Liste des Chantiers Actifs avec Jauges Budget -->
+        <div class="lg:col-span-2 space-y-4">
+          <div class="flex justify-between items-center">
+            <h2 class="text-lg font-bold text-slate-800">
+              <i class="fa-solid fa-helmet-safety text-amber-500 mr-1.5"></i> Budgets Chantiers Actifs & Contrôle Plafond
+            </h2>
+            <span class="text-xs text-slate-500">Seuil alerte : Orange ≥ 80% | Rouge > 100%</span>
+          </div>
+
+          <div id="chantiersContainer" class="space-y-4">
+            <!-- Injecté par app.js -->
+          </div>
+        </div>
+
+        <!-- Formulaire d'imputation : Dépense Caisse / Pointage / Encaissement Client -->
+        <div class="space-y-6">
+          <!-- Bloc Saisie Dépense ou Pointage -->
+          <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+            <h3 class="font-bold text-slate-800 text-base mb-1 flex items-center gap-2">
+              <i class="fa-solid fa-money-bill-transfer text-red-600"></i>
+              Saisir une Dépense ou Pointage
+            </h3>
+            <p class="text-xs text-slate-500 mb-4">Vérifie automatiquement le plafond du chantier avant décaissement.</p>
+
+            <form id="formDepense" onsubmit="ajouterDepenseChantier(event)" class="space-y-3">
+              <div>
+                <label class="block text-xs font-bold uppercase text-slate-600">Chantier concerné *</label>
+                <select id="depChantierSelect" onchange="verifierPreAlerteDepense()" required class="w-full mt-1 p-2.5 border border-slate-300 rounded-lg text-sm font-semibold bg-slate-50">
+                </select>
+              </div>
+
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-xs font-bold uppercase text-slate-600">Catégorie *</label>
+                  <select id="depCategorie" onchange="verifierPreAlerteDepense()" class="w-full mt-1 p-2.5 border border-slate-300 rounded-lg text-sm bg-white">
+                    <option value="MATERIAUX">Matériaux / Quincaillerie</option>
+                    <option value="POINTAGE_MO">Pointage Main-d'œuvre</option>
+                    <option value="TRANSPORT">Transport / Carburant</option>
+                    <option value="SOUS_TRAITANCE">Sous-traitance</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-xs font-bold uppercase text-slate-600">Montant (Ar) *</label>
+                  <input id="depMontant" type="number" min="1" required oninput="verifierPreAlerteDepense()" placeholder="Ex: 250000" class="w-full mt-1 p-2.5 border border-slate-300 rounded-lg text-sm font-bold text-red-700" />
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold uppercase text-slate-600">Motif / Détail (Fournisseur, Pointage équipe...)*</label>
+                <input id="depMotif" type="text" required placeholder="Ex: Achat 10 sacs ciment / Pointage maçons" class="w-full mt-1 p-2.5 border border-slate-300 rounded-lg text-sm" />
+              </div>
+
+              <!-- Alerte temps réel avant validation de la dépense -->
+              <div id="preAlerteDepenseBox" class="hidden p-3 rounded-lg text-xs font-medium"></div>
+
+              <button type="submit" class="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg text-sm shadow transition">
+                <i class="fa-solid fa-plus-circle mr-1"></i> Imputer la dépense sur le Budget
+              </button>
+            </form>
+          </div>
+
+          <!-- Bloc Encaissement Client (Acompte / Décompte) -->
+          <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+            <h3 class="font-bold text-slate-800 text-base mb-1 flex items-center gap-2">
+              <i class="fa-solid fa-hand-holding-dollar text-emerald-600"></i>
+              Encaisser un Paiement Client (Acompte)
+            </h3>
+            <p class="text-xs text-slate-500 mb-4">Suivi des acomptes et du reste à recouvrer par chantier.</p>
+
+            <form id="formEncaissement" onsubmit="ajouterEncaissementClient(event)" class="space-y-3">
+              <div>
+                <label class="block text-xs font-bold uppercase text-slate-600">Chantier *</label>
+                <select id="encChantierSelect" required class="w-full mt-1 p-2 border border-slate-300 rounded-lg text-sm font-semibold bg-slate-50">
+                </select>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-xs font-bold uppercase text-slate-600">Montant reçu (Ar) *</label>
+                  <input id="encMontant" type="number" min="1" required placeholder="Ex: 3000000" class="w-full mt-1 p-2 border border-slate-300 rounded-lg text-sm font-bold text-emerald-700" />
+                </div>
+                <div>
+                  <label class="block text-xs font-bold uppercase text-slate-600">Type paiement</label>
+                  <select id="encType" class="w-full mt-1 p-2 border border-slate-300 rounded-lg text-sm bg-white">
+                    <option value="ACOMPTE">Acompte démarrage</option>
+                    <option value="AVANCEMENT">Décompte avancement</option>
+                    <option value="SOLDE">Solde final</option>
+                  </select>
+                </div>
+              </div>
+              <button type="submit" class="w-full py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-sm shadow transition">
+                <i class="fa-solid fa-check mr-1"></i> Enregistrer l'encaissement
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- Journal des opérations récentes -->
+      <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+        <h3 class="font-bold text-slate-800 text-base mb-3">
+          <i class="fa-solid fa-clock-rotate-left text-slate-500 mr-1.5"></i> Historique des Dépenses, Pointages & Encaissements
+        </h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="border-b border-slate-200 text-xs uppercase text-slate-500 bg-slate-50">
+                <th class="py-2.5 px-3">Date</th>
+                <th class="py-2.5 px-3">Chantier</th>
+                <th class="py-2.5 px-3">Type / Catégorie</th>
+                <th class="py-2.5 px-3">Libellé / Motif</th>
+                <th class="py-2.5 px-3 text-right">Montant</th>
+              </tr>
+            </thead>
+            <tbody id="journalTableBody" class="divide-y divide-slate-100">
+              <!-- Injecté par app.js -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================================================================= -->
+    <!-- VIEW 2: WORKFLOW VALIDATION DEVIS (3 ETAPES)                              -->
+    <!-- ========================================================================= -->
+    <section id="view-devis" class="hidden bg-white rounded-xl shadow-sm p-6 border border-slate-200 space-y-6">
+      <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-200 pb-4">
+        <div>
+          <span class="px-3 py-1 text-xs font-bold rounded-full bg-blue-100 text-blue-800">WORKFLOW 3 ÉTAPES</span>
+          <h2 class="text-xl font-bold text-slate-800 mt-1">Validation Devis & Conversion en Budget Chantier</h2>
+          <p class="text-sm text-slate-500">1. Envoyé au Client &rarr; 2. Négociation & Réduction &rarr; 3. Validé en Budget Officiel</p>
+        </div>
+        <span id="badgeStatutDevis" class="px-4 py-1.5 text-xs font-extrabold rounded-full bg-blue-100 text-blue-800">
+          ÉTAPE 1 : ENVOYÉ AU CLIENT
+        </span>
+      </div>
+
+      <!-- Stepper visuel -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div id="stepCard1" class="p-3 rounded-lg border-2 border-blue-600 bg-blue-50/40">
+          <div class="text-xs font-bold text-blue-700 uppercase">Étape 1</div>
+          <div class="font-bold text-slate-800 text-sm">Devis Créé & Envoyé au Client</div>
+          <div class="text-xs text-slate-500 mt-0.5">En attente de retour client (Pas encore dans le budget).</div>
+        </div>
+        <div id="stepCard2" class="p-3 rounded-lg border border-slate-200 bg-slate-50">
+          <div class="text-xs font-bold text-amber-600 uppercase">Étape 2 (Optionnel)</div>
+          <div class="font-bold text-slate-800 text-sm">Négociation & Réduction</div>
+          <div class="text-xs text-slate-500 mt-0.5">Calcul d'impact sur la marge sans toucher au plafond dépenses.</div>
+        </div>
+        <div id="stepCard3" class="p-3 rounded-lg border border-slate-200 bg-slate-50">
+          <div class="text-xs font-bold text-emerald-700 uppercase">Étape 3</div>
+          <div class="font-bold text-slate-800 text-sm">Validation Finale en Budget</div>
+          <div class="text-xs text-slate-500 mt-0.5">Verrouille le devis et active le suivi des dépenses.</div>
+        </div>
+      </div>
+
+      <!-- Infos Devis -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label class="block text-xs font-bold uppercase text-slate-600">Référence Devis *</label>
+          <input id="devReference" type="text" value="DEV-2026-108" class="w-full mt-1 p-2.5 border rounded-lg font-semibold" />
+        </div>
+        <div>
+          <label class="block text-xs font-bold uppercase text-slate-600">Nom du Chantier / Projet *</label>
+          <input id="devNomChantier" type="text" value="Réfection Carrelage & Plafond - Projet Jalanesh" class="w-full mt-1 p-2.5 border rounded-lg font-semibold" />
+        </div>
+        <div>
+          <label class="block text-xs font-bold uppercase text-slate-600">Client *</label>
+          <input id="devNomClient" type="text" value="Projet Jalanesh" class="w-full mt-1 p-2.5 border rounded-lg font-semibold" />
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- Colonne 1 : chiffrage initial -->
+        <div class="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-4">
+          <h3 class="font-bold text-slate-800 text-sm uppercase tracking-wide">1. Chiffrage Initial & Plafond Dépenses</h3>
+          <div>
+            <label class="block text-sm font-medium text-slate-700">Montant Initial du Devis envoyé au Client (Ar) *</label>
+            <input id="devMontantInitial" type="number" value="18500000" oninput="calculerDevisTempsReel()" class="w-full mt-1 p-2.5 border rounded-lg font-extrabold text-lg text-slate-900 bg-white" />
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-bold uppercase text-slate-600">Plafond Matériaux (Ar) *</label>
+              <input id="devCoutMat" type="number" value="9200000" oninput="calculerDevisTempsReel()" class="w-full mt-1 p-2 border rounded-lg font-semibold bg-white" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold uppercase text-slate-600">Plafond Main-d'œuvre (Ar) *</label>
+              <input id="devCoutMo" type="number" value="3800000" oninput="calculerDevisTempsReel()" class="w-full mt-1 p-2 border rounded-lg font-semibold bg-white" />
+            </div>
+          </div>
+          <p class="text-xs text-slate-500">
+            <i class="fa-solid fa-lock mr-1"></i> La somme Matériaux + Main-d'œuvre formera le <strong>Plafond Dépenses Chantier</strong> strict.
+          </p>
+        </div>
+
+        <!-- Colonne 2 : Négociation / Réduction -->
+        <div class="p-4 rounded-xl border border-amber-300 bg-amber-50/40 space-y-4">
+          <div class="flex justify-between items-center">
+            <h3 class="font-bold text-slate-800 text-sm uppercase tracking-wide">2. Négociation Client (Réduction)</h3>
+            <label class="inline-flex items-center gap-2 text-sm font-semibold text-amber-900 cursor-pointer">
+              <input id="devCheckReduction" type="checkbox" onchange="toggleNegociationDevis()" class="w-4 h-4 rounded text-amber-600" />
+              <span>Appliquer une remise</span>
+            </label>
+          </div>
+
+          <div id="devBoxReduction" class="space-y-3 opacity-50 pointer-events-none">
+            <div class="grid grid-cols-3 gap-2">
+              <div>
+                <label class="block text-xs font-bold uppercase text-slate-600">Mode</label>
+                <select id="devTypeReduction" onchange="calculerDevisTempsReel()" class="w-full mt-1 p-2.5 border rounded-lg bg-white text-sm font-semibold">
+                  <option value="MONTANT">Ariary (Ar)</option>
+                  <option value="POURCENTAGE">Pourcentage (%)</option>
+                </select>
+              </div>
+              <div class="col-span-2">
+                <label class="block text-xs font-bold uppercase text-slate-600">Valeur de la réduction</label>
+                <input id="devValeurReduction" type="number" value="0" min="0" oninput="calculerDevisTempsReel()" class="w-full mt-1 p-2.5 border rounded-lg bg-white font-extrabold text-amber-700" />
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs font-bold uppercase text-slate-600">Note / Accord négociation</label>
+              <input id="devMotifReduction" type="text" placeholder="Ex: Remise commerciale accordée après discussion..." class="w-full mt-1 p-2 border rounded-lg bg-white text-sm" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Synthèse avant transformation en Budget -->
+      <div class="bg-slate-900 text-white p-5 rounded-xl">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <span class="text-xs text-slate-400 uppercase">Remise accordée</span>
+            <div id="devResumeRemise" class="text-lg font-bold text-amber-400 mt-0.5">- 0 Ar</div>
+          </div>
+          <div>
+            <span class="text-xs text-slate-400 uppercase">Net Final à Facturer Client</span>
+            <div id="devResumeNetClient" class="text-xl font-extrabold text-white mt-0.5">18 500 000 Ar</div>
+          </div>
+          <div>
+            <span class="text-xs text-slate-400 uppercase">Plafond Dépenses Chantier</span>
+            <div id="devResumePlafond" class="text-lg font-bold text-sky-400 mt-0.5">13 000 000 Ar</div>
+          </div>
+          <div>
+            <span class="text-xs text-slate-400 uppercase">Marge Prévisionnelle Nysoa</span>
+            <div id="devResumeMarge" class="text-xl font-extrabold text-emerald-400 mt-0.5">5 500 000 Ar (29.7%)</div>
+          </div>
+        </div>
+
+        <div id="devAlerteMargeFaible" class="hidden mt-4 p-3 rounded-lg bg-red-900/70 border border-red-500 text-xs text-red-100">
+          <i class="fa-solid fa-triangle-exclamation mr-1"></i>
+          <strong>ALERTE RENTABILITÉ :</strong> Avec cette réduction, la marge nette descend sous le seuil de sécurité de 15% ! Le plafond des dépenses reste inchangé.
+        </div>
+      </div>
+
+      <!-- Boutons Workflow 3 étapes -->
+      <div class="flex flex-wrap justify-end gap-3 pt-2">
+        <button type="button" onclick="setEtapeDevis(1)" class="px-4 py-2.5 rounded-lg border border-slate-300 text-sm font-semibold hover:bg-slate-100">
+          1. Marquer "Envoyé au Client"
+        </button>
+        <button type="button" onclick="setEtapeDevis(2)" class="px-4 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold">
+          2. Enregistrer Négociation
+        </button>
+        <button type="button" onclick="validerDevisEtActiverBudget()" class="px-6 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold shadow-md">
+          <i class="fa-solid fa-check-double mr-1.5"></i> 3. Valider & Transformer en Budget Actif
+        </button>
+      </div>
+    </section>
+
+    <!-- ========================================================================= -->
+    <!-- VIEW 3: SAISIE BUDGET MANUEL (SANS DEVIS)                                 -->
+    <!-- ========================================================================= -->
+    <section id="view-manuel" class="hidden bg-white rounded-xl shadow-sm p-6 border border-slate-200 space-y-6">
+      <div class="border-b border-slate-200 pb-4">
+        <span class="px-3 py-1 text-xs font-bold rounded-full bg-purple-100 text-purple-800">INTERVENTION DIRECTE / SANS DEVIS</span>
+        <h2 class="text-xl font-bold text-slate-800 mt-1">Création Manuelle d'un Budget Chantier</h2>
+        <p class="text-sm text-slate-500">Pour les travaux urgents, dépannages ou forfaits convenus sans passer par un devis détaillé.</p>
+      </div>
+
+      <form id="formBudgetManuel" onsubmit="creerBudgetManuelDirect(event)" class="space-y-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div class="space-y-4">
+            <div>
+              <label class="block text-xs font-bold uppercase text-slate-600">Nom du Chantier / Intervention *</label>
+              <input id="manNomChantier" type="text" required placeholder="Ex: Maintenance Plomberie & Serrures - Appartement" class="w-full mt-1 p-2.5 border rounded-lg font-semibold" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold uppercase text-slate-600">Client *</label>
+              <input id="manNomClient" type="text" required placeholder="Ex: TS HERMAN / Client Direct" class="w-full mt-1 p-2.5 border rounded-lg font-semibold" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold uppercase text-slate-600">Montant Forfaitaire convenu avec le Client (Ar) *</label>
+              <input id="manMontantClient" type="number" value="1800000" min="0" required oninput="calculerManuelTempsReel()" class="w-full mt-1 p-2.5 border rounded-lg font-extrabold text-lg text-blue-700" />
+            </div>
+          </div>
+
+          <div class="p-5 bg-slate-50 rounded-xl border border-slate-200 space-y-4">
+            <h3 class="font-bold text-slate-800 text-sm uppercase">Définition Manuelle du Plafond de Dépenses</h3>
+            <div>
+              <label class="block text-xs font-bold uppercase text-slate-600">Budget Matériaux & Pièces (Ar) *</label>
+              <input id="manCoutMat" type="number" value="750000" min="0" required oninput="calculerManuelTempsReel()" class="w-full mt-1 p-2.5 border rounded-lg bg-white font-semibold" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold uppercase text-slate-600">Budget Main-d'œuvre & Déplacement (Ar) *</label>
+              <input id="manCoutMo" type="number" value="400000" min="0" required oninput="calculerManuelTempsReel()" class="w-full mt-1 p-2.5 border rounded-lg bg-white font-semibold" />
+            </div>
+
+            <div class="pt-3 border-t border-slate-200 flex justify-between items-center">
+              <span class="text-sm font-bold text-slate-700">Plafond Total Dépenses :</span>
+              <span id="manResumePlafond" class="text-lg font-extrabold text-sky-700">1 150 000 Ar</span>
+            </div>
+            <div class="flex justify-between items-center">
+              <span class="text-sm font-bold text-slate-700">Marge Nette Prévue :</span>
+              <span id="manResumeMarge" class="text-lg font-extrabold text-emerald-600">650 000 Ar (36.1%)</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex justify-end">
+          <button type="submit" class="px-6 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold text-sm shadow-md">
+            <i class="fa-solid fa-bolt mr-1.5"></i> Activer ce Budget Manuel dans le Suivi Chantier
+          </button>
+        </div>
+      </form>
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
